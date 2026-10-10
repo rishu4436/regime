@@ -9,7 +9,7 @@ from backend.mocks import generate_candles
 
 def approx_list(a, b, tol=1e-9):
     assert len(a) == len(b)
-    for x, y in zip(a, b):
+    for x, y in zip(a, b, strict=True):
         if y is None:
             assert x is None
         else:
@@ -33,7 +33,7 @@ def test_ema_matches_pandas_after_seed():
     ours = ind.ema(closes, n)
     seed = sum(closes[:n]) / n
     ref = pd.Series([seed] + closes[n:]).ewm(span=n, adjust=False).mean().tolist()
-    approx_list(ours[n - 1:], ref, 1e-9)
+    approx_list(ours[n - 1 :], ref, 1e-9)
 
 
 def test_rsi_wilder_hand_computed():
@@ -75,7 +75,7 @@ def test_macd_true_nine_period_signal():
     assert line[first_line - 1] is None and line[first_line] is not None
     seed_idx = first_line + 8
     assert sig[seed_idx - 1] is None
-    assert sig[seed_idx] == pytest.approx(sum(line[first_line:seed_idx + 1]) / 9)
+    assert sig[seed_idx] == pytest.approx(sum(line[first_line : seed_idx + 1]) / 9)
     for i in range(seed_idx + 1, len(closes)):
         assert sig[i] == pytest.approx(0.2 * line[i] + 0.8 * sig[i - 1])  # alpha = 2/(9+1)
         assert hist[i] == pytest.approx(line[i] - sig[i])
