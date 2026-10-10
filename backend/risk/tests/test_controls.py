@@ -27,12 +27,25 @@ def test_pause_resume(clock):
 def test_emergency_stop_requires_explicit_reset(clock):
     rm = DefaultRiskManager(clock=clock)
     s = rm.emergency_stop("wallet drained?")
-    assert s.emergency_stopped and s.paused and "EMERGENCY" in s.reason
+    assert s.emergency_stopped and not s.paused and "EMERGENCY" in s.reason  # paused untouched
     s = rm.resume()
-    assert s.emergency_stopped and not s.paused and "reset_emergency_stop" in s.reason
+    assert s.emergency_stopped and not s.paused and "reset_emergency_stop" in s.reason  # resume never clears it
     s = rm.reset_emergency_stop()
-    assert not s.emergency_stopped and s.paused
+    assert not s.emergency_stopped and not s.paused and "trading allowed" in s.reason
+
+
+def test_reset_emergency_stop_leaves_paused_as_is(clock):
+    rm = DefaultRiskManager(clock=clock)
+    rm.pause("maintenance")
+    rm.emergency_stop()
+    s = rm.reset_emergency_stop()
+    assert not s.emergency_stopped and s.paused and "still paused" in s.reason
     assert not rm.resume().paused
+
+
+def test_reset_emergency_stop_is_interface_method():
+    from backend.contracts.interfaces import RiskManager as P
+    assert "reset_emergency_stop" in dir(P)
 
 
 def test_confirmation_mode_toggle(clock):

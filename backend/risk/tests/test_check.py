@@ -236,3 +236,14 @@ def test_strategy_sell_needs_confirmation_but_risk_exit_does_not(rm):
 
 def test_timestamps_from_clock(rm, clock):
     assert rm.check(buy(), make_portfolio(), ctl()).timestamp == clock()
+
+
+def test_sell_targets_position_id(rm):
+    a, b = pos(qty=10, entry=100), pos(qty=5, entry=100)
+    p = make_portfolio(cash=8500, positions=[a, b])
+    v = rm.check(sell(price=100, position_id=b.id), p, ctl())
+    assert v.approved and v.adjusted_notional == pytest.approx(500)
+    v = rm.check(sell(price=100), p, ctl())
+    assert v.adjusted_notional == pytest.approx(1500)
+    v = rm.check(sell(price=100, position_id="gone"), p, ctl())
+    assert not v.approved and "nothing to sell" in v.reasons[0]
