@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import threading
 from datetime import datetime
-from typing import Callable, Mapping, Optional
+from typing import Callable, Optional
 
 from backend.contracts import (
     Action,
@@ -15,10 +15,8 @@ from backend.contracts import (
     Candle,
     ControlState,
     ExitReason,
-    ExitRules,
     Portfolio,
     Position,
-    PositionRiskRules,
     RiskCheck,
     RiskVerdict,
     Signal,
@@ -29,30 +27,24 @@ from backend.contracts import (
 from .config import RiskConfig, SymbolRiskRules
 from .exits import Bar, ExitLevels, compute_levels, evaluate_bar, max_loss_level
 
-RISK_EXIT_TAG = "risk_exit"  # placed in Signal.conditions_met of every SELL produced by check_exits
+# Exit reasons produced by the risk layer itself (protective exits that never wait for user confirmation).
+RISK_EXIT_REASONS = frozenset({ExitReason.STOP_LOSS, ExitReason.TAKE_PROFIT, ExitReason.TRAILING_STOP,
+                               ExitReason.MAX_LOSS, ExitReason.EMERGENCY_STOP})
 
 
 def _fmt(x: float) -> str:
     return f"{x:,.2f}"
 
 
-def exit_reason_of(signal: Signal) -> Optional[ExitReason]:
-    """ExitReason of a SELL produced by ``check_exits`` (None for any other signal)."""
-    if RISK_EXIT_TAG not in signal.conditions_met:
-        return None
-    for c in signal.conditions_met:
-        if c in ExitReason.__members__:
-            return ExitReason(c)
-    return None
-
-
 def is_risk_exit(signal: Signal) -> bool:
-    return signal.action == Action.SELL and RISK_EXIT_TAG in signal.conditions_met
+    """True for a protective SELL as produced by ``check_exits`` (exit_reason in RISK_EXIT_REASONS)."""
+    return signal.action == Action.SELL and signal.exit_reason in RISK_EXIT_REASONS
 
 
 class DefaultRiskManager:
-    """Risk gate + exit enforcement + global controls. Thread-safe; keeps only control state and trailing
-    high-water marks in memory (everything else is read from the Portfolio passed in)."""
+    """Risk gate + exit enforcement + global controls. Thread-safe. The only in-memory state is the ControlState
+    (and config); positions, trailing high-water marks (Position.highest_price), cooldowns and PnL are read from the
+    Portfolio passed in, which is never mutated."""
 
     def __init__(
         self,
@@ -63,7 +55,6 @@ class DefaultRiskManager:
         self._clock = clock
         self._config = config or RiskConfig()
         self._control = control or ControlState(updated_at=clock())
-        self._hwm: dict[str, float] = {}
         self._lock = threading.RLock()
 
     # ------------------------------------------------------------------ configuration
@@ -111,13 +102,17 @@ class DefaultRiskManager:
             return self._update(paused=False, reason="Resumed")
 
     def emergency_stop(self, reason: str = "") -> ControlState:
-        return self._update(emergency_stopped=True, paused=True,
+        """Sets emergency_stopped=True (``paused`` untouched): every BUY is blocked and check_exits closes all positions."""
+        return self._update(emergency_stopped=True,
                             reason=f"EMERGENCY STOP: {reason}" if reason else "EMERGENCY STOP by user")
 
     def reset_emergency_stop(self) -> ControlState:
-        """Explicit, separate action to leave emergency stop. Leaves the agent PAUSED; call resume() to trade."""
-        return self._update(emergency_stopped=False, paused=True,
-                            reason="Emergency stop reset - agent stays paused until resume()")
+        """Explicit user action: clears emergency_stopped and leaves ``paused`` unchanged."""
+        with self._lock:
+            paused = self._control.paused
+            return self._update(emergency_stopped=False, reason=(
+                "Emergency stop reset - agent is still paused, call resume() to trade" if paused
+                else "Emergency stop reset - trading allowed"))
 
     def set_confirmation_mode(self, enabled: bool) -> ControlState:
         return self._update(confirmation_mode=bool(enabled),
@@ -155,19 +150,17 @@ class DefaultRiskManager:
         return portfolio.equity if portfolio.equity > 0 else 0.0
 
     @staticmethod
-    def _pos_key(p: Position) -> str:
-        return f"{p.symbol}|{p.opened_at.isoformat()}|{p.avg_entry_price}"
-
-    def _hwm_for(self, p: Position) -> float:
-        return max(self._hwm.get(self._pos_key(p), 0.0), p.highest_price or 0.0, p.avg_entry_price)
+    def _hwm_for(p: Position) -> float:
+        """High-water mark from PRIOR bars only: Position.highest_price as given (the app raises it from bar.high
+        after check_exits), never below the entry price."""
+        return max(p.highest_price or 0.0, p.avg_entry_price)
 
     def exit_levels(self, position: Position, portfolio: Portfolio | None = None) -> ExitLevels:
         """Stop / target / trailing / max-loss levels currently in force for a position (for the UI)."""
         prules, erules, _ = self._config.rules_for(position.symbol)
         capital = portfolio.starting_capital if portfolio else 0.0
-        with self._lock:
-            hwm = self._hwm_for(position)
-        return compute_levels(position, erules, hwm, max_loss_level(position, prules.max_loss_per_trade_pct, capital))
+        return compute_levels(position, erules, self._hwm_for(position),
+                              max_loss_level(position, prules.max_loss_per_trade_pct, capital))
 
     # ------------------------------------------------------------------ check
     def check(self, signal: Signal, portfolio: Portfolio, control: ControlState) -> RiskVerdict:
@@ -306,11 +299,13 @@ class DefaultRiskManager:
         else:
             checks.append(RiskCheck(name="paused", passed=True, detail=(
                 "Agent is paused - protective exits still allowed" if ctl.paused else "Agent is running")))
-        held = [p for p in portfolio.positions if p.symbol == signal.symbol]
+        held = [p for p in portfolio.positions if p.symbol == signal.symbol
+                and (signal.position_id is None or p.id == signal.position_id)]
         value = sum(self._position_value(p, signal.price) for p in held)
+        target = f"position {signal.position_id} ({signal.symbol})" if signal.position_id else signal.symbol
         checks.append(RiskCheck(name="open_position", passed=bool(held), detail=(
-            f"Holding {sum(p.quantity for p in held):g} {signal.symbol} worth {_fmt(value)} USDT" if held
-            else f"No open position in {signal.symbol} - nothing to sell")))
+            f"Holding {sum(p.quantity for p in held):g} {signal.symbol} worth {_fmt(value)} USDT in {target}" if held
+            else f"No open {target} - nothing to sell")))
         notional = 0.0
         if held:
             notional = min(signal.proposed_notional, value) if signal.proposed_notional > 0 else value
@@ -347,57 +342,53 @@ class DefaultRiskManager:
                            requires_confirmation=requires_confirmation, timestamp=self._clock())
 
     # ------------------------------------------------------------------ exits
-    def check_exits(self, portfolio: Portfolio, prices: dict[str, float]) -> list[Signal]:
-        """Contract entry point: last prices only (degenerate bars, open=high=low=close=price)."""
-        return self._exits(portfolio, {s: Bar.from_price(p) for s, p in prices.items() if p and p > 0}, {})
+    def check_exits(
+        self, portfolio: Portfolio, prices: dict[str, float], bars: Optional[dict[str, Candle]] = None
+    ) -> list[Signal]:
+        """SL / TP / trailing / max-loss / emergency enforcement -> SELL signals (one per position).
 
-    def check_exits_candles(self, portfolio: Portfolio, candles: Mapping[str, Candle]) -> list[Signal]:
-        """Intrabar version: uses each symbol's latest closed candle (high/low/open). Preferred by the trading loop."""
-        return self._exits(portfolio, {s: Bar.from_candle(c) for s, c in candles.items()},
-                           {s: c.timestamp for s, c in candles.items()})
-
-    def _exits(self, portfolio: Portfolio, bars: dict[str, Bar], times: dict[str, datetime]) -> list[Signal]:
+        ``bars`` (symbol -> latest closed bar) enables the intrabar rules (low/high hit tests, SL wins if both hit,
+        fill at the level or at the open on a gap). Symbols without a bar fall back to ``prices`` (degenerate bar,
+        open=high=low=close=price), then to ``Position.current_price``. The portfolio is never mutated."""
+        bars = bars or {}
         out: list[Signal] = []
         with self._lock:
             ctl = self._control
-            live_keys = set()
-            for p in portfolio.positions:
-                key = self._pos_key(p)
-                live_keys.add(key)
-                bar = bars.get(p.symbol)
-                if bar is None and p.current_price:
-                    bar = Bar.from_price(p.current_price)
-                ts = times.get(p.symbol, self._clock())
-                if ctl.emergency_stopped:
-                    price = bar.close if bar else (p.current_price or p.avg_entry_price)
-                    pnl = (price - p.avg_entry_price) / p.avg_entry_price * 100.0
-                    out.append(self._exit_signal(p, ExitReason.EMERGENCY_STOP, price, ts,
-                                                 f"EMERGENCY_STOP: closing {p.symbol} at market (~{price:.4f}, PnL {pnl:+.2f}%)"
-                                                 + (f" - {ctl.reason}" if ctl.reason else "")))
-                    continue
-                if bar is None:
-                    continue
-                prules, erules, _ = self._config.rules_for(p.symbol)
-                levels = compute_levels(p, erules, self._hwm_for(p),
-                                        max_loss_level(p, prules.max_loss_per_trade_pct, portfolio.starting_capital))
-                decision, new_hwm = evaluate_bar(levels, bar)
-                if decision is None:
-                    self._hwm[key] = new_hwm
-                else:
-                    self._hwm.pop(key, None)
-                    live_keys.discard(key)
-                    out.append(self._exit_signal(p, decision.reason, decision.fill_price, ts, decision.detail))
-            for k in list(self._hwm):
-                if k not in live_keys:
-                    del self._hwm[k]
+            cfg = self._config
+        for p in portfolio.positions:
+            candle = bars.get(p.symbol)
+            if candle is not None:
+                bar, ts = Bar.from_candle(candle), candle.timestamp
+            else:
+                px = prices.get(p.symbol) or p.current_price
+                bar, ts = (Bar.from_price(px) if px and px > 0 else None), self._clock()
+            if ctl.emergency_stopped:
+                price = bar.close if bar else (p.current_price or p.avg_entry_price)
+                pnl = (price - p.avg_entry_price) / p.avg_entry_price * 100.0
+                out.append(self._exit_signal(p, ExitReason.EMERGENCY_STOP, price, ts,
+                                             f"EMERGENCY_STOP: closing {p.symbol} at market (~{price:.4f}, PnL {pnl:+.2f}%)"
+                                             + (f" - {ctl.reason}" if ctl.reason else "")))
+                continue
+            if bar is None:
+                continue
+            prules, erules, _ = cfg.rules_for(p.symbol)
+            levels = compute_levels(p, erules, self._hwm_for(p),
+                                    max_loss_level(p, prules.max_loss_per_trade_pct, portfolio.starting_capital))
+            decision, _ = evaluate_bar(levels, bar)
+            if decision is not None:
+                out.append(self._exit_signal(p, decision.reason, decision.fill_price, ts, decision.detail))
         return out
+
+    def check_exits_candles(self, portfolio: Portfolio, candles: dict[str, Candle]) -> list[Signal]:
+        """Deprecated alias of ``check_exits(portfolio, {}, bars=candles)``."""
+        return self.check_exits(portfolio, {}, bars=dict(candles))
 
     @staticmethod
     def _exit_signal(p: Position, reason: ExitReason, price: float, ts: datetime, detail: str) -> Signal:
         source = AgentMode.MANUAL if p.strategy.upper().startswith("MANUAL") else AgentMode.AUTO
         return Signal(symbol=p.symbol, action=Action.SELL, source=source, strategy=p.strategy, reason=detail,
-                      conditions_met=[RISK_EXIT_TAG, reason.value], price=price,
+                      conditions_met=[reason.value], price=price, exit_reason=reason, position_id=p.id,
                       proposed_notional=round(p.quantity * price, 8), timestamp=ts)
 
 
-__all__ = ["DefaultRiskManager", "RISK_EXIT_TAG", "exit_reason_of", "is_risk_exit", "PositionRiskRules", "ExitRules"]
+__all__ = ["DefaultRiskManager", "RISK_EXIT_REASONS", "is_risk_exit"]

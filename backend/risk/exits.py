@@ -1,12 +1,15 @@
 """Pure exit-rule evaluation for one position on one bar (no state, no I/O).
 
-Exit semantics agreed with Bot 2's ``backtest_manual`` (keep both in sync):
+Implements the intrabar rules of the ``ExitRules`` docstring (contract v0.2, reference/README.md item 12), shared with
+Bot 2's ``backtest_manual`` (keep both in sync):
 
 1. Stop loss and take profit are checked against the bar's LOW / HIGH. If a stop and the take profit are both hit in
    the same bar, the stop wins (we cannot know the intrabar order, so we assume the worst).
 2. Trailing stop: the bar's LOW is checked against the trail level computed from the high-water mark of the PREVIOUS
-   bars (``hwm_prev * (1 - pct/100)``); only if the position survives is the high-water mark raised with this bar's HIGH.
-   The first trail level is ``entry * (1 - pct/100)`` (high-water mark starts at the entry price).
+   bars (``hwm_prev * (1 - pct/100)``, ``hwm_prev = max(Position.highest_price, entry)`` as given), so a bar's own high
+   never tightens its own stop. The app raises ``Position.highest_price`` from ``bar.high`` AFTER check_exits;
+   ``evaluate_bar`` returns that new high-water mark for convenience but nothing here stores it.
+   The first trail level is ``entry * (1 - pct/100)``.
 3. Exits fill at the stop / target level, not at the close. If the bar OPENS beyond the level (gap down through a stop,
    gap up through the target) the fill is the open.
 
