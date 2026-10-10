@@ -25,3 +25,28 @@ mirror `reference/full_strategy_builder_simulation.html`.
 - Works against the SIM backend (`uvicorn backend.app.main:app`), with a mock-data fallback when the backend is down.
 - Dev: `npm run dev` (proxy `/api` and `/ws` to `http://localhost:8000`, configured in `vite.config.ts`).
 - No edits outside `/frontend`. Contract changes go through the coordinator.
+
+## Running the UI (Bot 1)
+
+```bash
+cd frontend && npm install
+npm run dev                                   # http://localhost:5173, in-browser mock API (default)
+VITE_API_MODE=http npm run dev                # talk to the backend via the dev proxy (/api, /ws -> :8000)
+VITE_API_MODE=http VITE_API_URL=http://localhost:8000 npm run build   # static build against a given backend
+```
+
+### Mock vs real API
+All network access goes through `src/api/` behind one typed interface (`ApiClient` in `src/api/types.ts`, types from
+the generated `src/contracts.ts`):
+
+- `src/api/mock.ts` (**`VITE_API_MODE=mock`, default**): runs entirely in the browser. Seeded mock candles per token
+  (NVDAon mild uptrend, TSLAx high volatility, AAPLB sideways), a live bar loop every 3 s with `Decision`s and reasons,
+  confirmation flow, pause/resume, emergency stop, manual override, and client-side backtests (`src/lib/strategy.ts`,
+  simulator semantics plus the backend's intrabar exit rules: SL/TP vs bar low/high with SL first, trailing stop vs the
+  previous bar's level, gap fills at the open, rolling 20-bar volume average). The Auto Mode regime detector and
+  (regime, style) → preset map in `src/lib/auto.ts` are **indicative only**; the real ones are Bot 2's.
+- `src/api/http.ts` (**`VITE_API_MODE=http`**): Bot 6's FastAPI REST + WebSocket (`/ws` `Event` stream, auto-reconnect).
+  Base URL from `VITE_API_URL` (empty = same origin). Endpoint paths follow `backend/app/README.md`; if the published
+  API differs, only this file changes.
+
+Charts use TradingView `lightweight-charts` (candlesticks with trade markers, equity area); font is Inter (bundled via `@fontsource-variable/inter`).
