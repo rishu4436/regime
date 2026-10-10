@@ -4,6 +4,7 @@ Every function takes a plain sequence of floats (oldest first) and returns a lis
 index ``i`` only depends on inputs ``0..i`` (no look-ahead). Warm-up slots are ``None``. Callers must test
 ``value is None`` - never truthiness - because 0.0 is a perfectly valid indicator value (e.g. a MACD line).
 """
+
 from __future__ import annotations
 
 import math
@@ -41,7 +42,7 @@ def ema(values: Sequence[float], period: int) -> Series:
             out.append(None)
             continue
         if prev is None:
-            prev = sum(values[i - period + 1: i + 1]) / period
+            prev = sum(values[i - period + 1 : i + 1]) / period
         else:
             prev = v * k + prev * (1 - k)
         out.append(prev)
@@ -119,17 +120,15 @@ def rsi_simulator(values: Sequence[float], period: int = 14) -> Series:
     return out
 
 
-def macd(
-    values: Sequence[float], fast: int = 12, slow: int = 26, signal: int = 9
-) -> tuple[Series, Series, Series]:
+def macd(values: Sequence[float], fast: int = 12, slow: int = 26, signal: int = 9) -> tuple[Series, Series, Series]:
     """MACD line = EMA(fast) - EMA(slow); signal = true EMA(signal) of the line (alpha = 2/(signal+1)), seeded
     with the SMA of the first ``signal`` line values; histogram = line - signal. Returns (line, signal, hist)."""
     if fast >= slow:
         raise ValueError("MACD fast period must be < slow period")
     ef, es = ema(values, fast), ema(values, slow)
-    line: Series = [None if (a is None or b is None) else a - b for a, b in zip(ef, es)]
+    line: Series = [None if (a is None or b is None) else a - b for a, b in zip(ef, es, strict=True)]
     sig = _ema_optional(line, signal)
-    hist: Series = [None if (a is None or b is None) else a - b for a, b in zip(line, sig)]
+    hist: Series = [None if (a is None or b is None) else a - b for a, b in zip(line, sig, strict=True)]
     return line, sig, hist
 
 
@@ -144,7 +143,7 @@ def bollinger(values: Sequence[float], period: int = 20, std_dev: float = 2.0) -
             lower.append(None)
             upper.append(None)
             continue
-        window = values[i - period + 1: i + 1]
+        window = values[i - period + 1 : i + 1]
         sd = math.sqrt(sum((x - m) ** 2 for x in window) / period)
         lower.append(m - std_dev * sd)
         upper.append(m + std_dev * sd)
