@@ -5,9 +5,7 @@ from __future__ import annotations
 import threading
 from datetime import datetime
 
-from backend.contracts import EquityPoint, Portfolio
-
-from .models import PerformanceSummary
+from backend.contracts import EquityPoint, PerformanceSummary, Portfolio
 
 
 class PerformanceTracker:

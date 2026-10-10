@@ -6,9 +6,7 @@ from collections import deque
 from datetime import datetime
 from typing import Optional
 
-from backend.contracts import ControlState, Decision, ExecutionResult, OrderStatus
-
-from .models import Alert, AlertLevel
+from backend.contracts import Alert, AlertLevel, ControlState, Decision, ExecutionResult, OrderStatus
 
 CONSECUTIVE_LOSS_ALERT = 3
 

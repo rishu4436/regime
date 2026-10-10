@@ -187,7 +187,7 @@ class FallbackStrategyEngine:
         if open_pos:
             r = _strategy_exit_on_close(strategy, x, i)
             if r is not None:
-                return Signal(action=Action.SELL, reason=f"{r.value}: strategy exit on close", conditions_met=[f"exit:{r.value}"], **base)
+                return Signal(action=Action.SELL, reason=f"{r.value}: strategy exit on close", exit_reason=r, **base)
         if len(open_pos) >= strategy.risk.max_open_positions:
             return Signal(action=Action.STAY_OUT, reason=f"max open positions ({strategy.risk.max_open_positions}) reached", **base)
         since = portfolio.bars_since_exit.get(sym)
@@ -221,7 +221,7 @@ class FallbackStrategyEngine:
         n = len(c)
         if p == PresetName.TREND_FOLLOWING and holding and e20[-1] and price < e20[-1]:
             return Signal(action=Action.SELL, strategy=p.value, preset=p, reason="trend lost: close < EMA20",
-                          conditions_met=["exit:TREND_LOST"], **base)
+                          conditions_met=["trend_lost"], **base)
         if p == PresetName.DCA:
             go, why = n % DCA_EVERY_BARS[config.style] == 0, f"DCA every {DCA_EVERY_BARS[config.style]} bars"
         elif p == PresetName.SMART_DCA:
@@ -382,7 +382,7 @@ class FallbackRiskManager:
             if hit:
                 out.append(Signal(symbol=pos.symbol, action=Action.SELL, source=AgentMode.MANUAL if pos.strategy.startswith("MANUAL:") else AgentMode.AUTO,
                                   strategy=pos.strategy, reason=f"{hit.reason.value} hit at {hit.price:.6g}",
-                                  conditions_met=[f"exit:{hit.reason.value}"], price=hit.price,
+                                  exit_reason=hit.reason, position_id=pos.id, price=hit.price,
                                   proposed_notional=round(pos.quantity * hit.price, 8),
                                   timestamp=bar.timestamp if bar else utc_now()))
         return out
@@ -394,10 +394,14 @@ class FallbackRiskManager:
         return self._set(paused=True, reason=reason or "paused by user")
 
     def resume(self) -> ControlState:
-        return self._set(paused=False, emergency_stopped=False, reason=None)
+        """Clears `paused` only; an emergency stop stays until reset_emergency_stop() (contract v0.2)."""
+        return self._set(paused=False, reason=self._control.reason if self._control.emergency_stopped else None)
 
     def emergency_stop(self, reason: str = "") -> ControlState:
-        return self._set(emergency_stopped=True, paused=True, reason=reason or "emergency stop")
+        return self._set(emergency_stopped=True, reason=reason or "emergency stop")
+
+    def reset_emergency_stop(self) -> ControlState:
+        return self._set(emergency_stopped=False, reason=None if not self._control.paused else self._control.reason)
 
     def set_confirmation_mode(self, enabled: bool) -> ControlState:
         return self._set(confirmation_mode=enabled)

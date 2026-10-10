@@ -6,7 +6,6 @@ timer (`/api/loop/start`) or on demand (`/api/loop/tick`, used by the e2e tests)
 """
 from __future__ import annotations
 
-import inspect
 import threading
 import time
 from collections import deque
@@ -19,7 +18,8 @@ from backend.contracts import (
     ExitReason, ExitRules, ManualStrategy, OrderRequest, OrderSide, OrderStatus, Regime, RiskVerdict, Signal,
     StatusSnapshot, Timeframe, TradingMode, utc_now,
 )
-from backend.monitoring import AlertLevel, AlertManager, EventLog, PerformanceTracker
+from backend.contracts import AlertLevel
+from backend.monitoring import AlertManager, EventLog, PerformanceTracker
 
 from .events import EventBus
 from .exits import check_protective_exit, exit_reason_of, trailing_level
@@ -35,15 +35,8 @@ class AgentStateError(RuntimeError):
 
 
 def call_check_exits(risk: Any, portfolio, prices: dict[str, float], bars: dict[str, Candle]) -> list[Signal]:
-    """RiskManager.check_exits with the bar OHLC when the implementation accepts it (proposed contract param `bars`)."""
-    fn = risk.check_exits
-    try:
-        params = inspect.signature(fn).parameters
-    except (TypeError, ValueError):
-        params = {}
-    if "bars" in params or any(p.kind == p.VAR_KEYWORD for p in params.values()):
-        return list(fn(portfolio, prices, bars=bars))
-    return list(fn(portfolio, prices))
+    """The loop's exit path: RiskManager.check_exits with the latest bar OHLC (contract v0.2 `bars`)."""
+    return list(risk.check_exits(portfolio, prices, bars=bars))
 
 
 @dataclass
@@ -236,6 +229,8 @@ class TradingLoop:
 
     def _match_lot(self, sig: Signal, bar: Candle, used: set[int]) -> Optional[Lot]:
         lots = [l for l in self.book.lots_for(sig.symbol) if id(l) not in used]
+        if sig.position_id:
+            return next((l for l in lots if l.position.id == sig.position_id), None)
         if len(lots) <= 1:
             return lots[0] if lots else None
         want = exit_reason_of(sig)
@@ -370,7 +365,7 @@ class TradingLoop:
             px = self.book.prices.get(symbol) or self.c.exchange.get_price(symbol)
             sig = Signal(symbol=symbol, action=Action.SELL, source=self.agent_mode or AgentMode.MANUAL,
                          strategy=lots[0].position.strategy, reason=f"{reason.value} close requested", price=px,
-                         conditions_met=[f"exit:{reason.value}"], timestamp=self._now())
+                         exit_reason=reason, timestamp=self._now())
             d = self._exit(lots, sig, reason, self.current_regime, None)
             self.bus.publish(EventType.STATUS, self.status())
             return d
@@ -383,6 +378,10 @@ class TradingLoop:
     def resume(self) -> ControlState:
         with self.lock:
             return self._control_changed(self.c.risk.resume())
+
+    def reset_emergency_stop(self) -> ControlState:
+        with self.lock:
+            return self._control_changed(self.c.risk.reset_emergency_stop())
 
     def set_confirmation_mode(self, enabled: bool) -> ControlState:
         with self.lock:

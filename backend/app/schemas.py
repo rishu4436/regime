@@ -1,39 +1,15 @@
-"""Request/response shapes that are not (yet) contract models. Proposed as contract additions in API.md."""
+"""App-only request/response bodies. SystemInfo / LoopState / BacktestRequest / Alert / PerformanceSummary live in backend.contracts (v0.2)."""
 from __future__ import annotations
 
-from typing import Literal, Optional, Union
+from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field  # noqa: F401
 
-from backend.contracts import AgentMode, AutoConfig, DEFAULT_INITIAL_CAPITAL, ManualStrategy, TradingMode
+from backend.contracts import AutoConfig, ManualStrategy
 
 
 class _M(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
-
-class SystemInfo(_M):
-    trading_mode: TradingMode
-    live_enabled: bool
-    contracts_version: str
-    sim_seed: Optional[int] = None
-    components: dict[str, str]
-
-
-class LoopState(_M):
-    running: bool
-    interval_seconds: float
-    ticks: int
-    agent_mode: Optional[AgentMode] = None
-    active_symbol: Optional[str] = None
-    active_strategy: Optional[str] = None
-    replay_finished: bool = False
-
-
-class BacktestRequest(_M):
-    strategy: ManualStrategy
-    initial_capital: float = Field(default=DEFAULT_INITIAL_CAPITAL, gt=0)
-    limit: int = Field(default=500, ge=61, le=5000)
 
 
 class ManualActivateRequest(_M):

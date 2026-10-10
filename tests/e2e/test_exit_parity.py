@@ -7,7 +7,6 @@ Runs for the app fallbacks always and for the real Bot 2 + Bot 3 classes once bo
 """
 from __future__ import annotations
 
-import inspect
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -18,18 +17,11 @@ from backend.contracts import (
     Action, Candle, ExecutionPath, ExecutionResult, ExitReason, ManualStrategy, OrderSide, OrderStatus, Regime,
     SIM_WARMUP_BARS, TradingMode,
 )
-from backend.app.exits import exit_reason_of
 from backend.mocks import generate_candles
 
 from .helpers import engine_risk_impls
 
 PROTECTIVE = {ExitReason.STOP_LOSS, ExitReason.TAKE_PROFIT, ExitReason.TRAILING_STOP}
-
-
-def _require_bars(risk) -> None:
-    params = inspect.signature(risk.check_exits).parameters
-    if "bars" not in params and not any(p.kind == p.VAR_KEYWORD for p in params.values()):
-        pytest.skip("RiskManager.check_exits has no `bars` param yet (proposed contract change) - cannot see OHLC")
 
 
 def live_exit(risk, strategy: ManualStrategy, candles: list[Candle], entry_idx: int, entry_price: float, qty: float):
@@ -40,14 +32,16 @@ def live_exit(risk, strategy: ManualStrategy, candles: list[Candle], entry_idx: 
     fill = ExecutionResult(client_order_id="t", symbol=sym, side=OrderSide.BUY, status=OrderStatus.FILLED,
                            path=ExecutionPath.SWAP, mode=TradingMode.SIM, filled_quantity=qty, avg_price=entry_price,
                            notional=qty * entry_price)
-    book.open_lot(fill, qty * entry_price, f"MANUAL:{strategy.name}", strategy.exit, candles[entry_idx].timestamp)
+    pos = book.open_lot(fill, qty * entry_price, f"MANUAL:{strategy.name}", strategy.exit, candles[entry_idx].timestamp)
     for j in range(entry_idx + 1, len(candles)):
         bar = candles[j]
         book.on_bar(sym, bar, bar.timestamp)
         sigs = [s for s in call_check_exits(risk, book.portfolio(), {sym: bar.close}, {sym: bar}) if s.action == Action.SELL]
         if sigs:
             s = sigs[0]
-            return j, exit_reason_of(s), s.price
+            assert s.exit_reason is not None, "check_exits SELL must carry Signal.exit_reason (contract v0.2)"
+            assert s.position_id in (None, pos.id), "Signal.position_id must target the open Position"
+            return j, s.exit_reason, s.price
         book.raise_highs(sym, bar.high)
     return None
 
@@ -69,7 +63,6 @@ def _strategy(**exit_kw) -> ManualStrategy:
 @pytest.mark.parametrize("regime,seed", [(Regime.HIGH_VOLATILITY, 1), (Regime.SIDEWAYS, 2), (Regime.MILD_UPTREND, 3), (Regime.DOWNTREND, 4)])
 @pytest.mark.parametrize("trailing", [False, True], ids=["no-trail", "trail"])
 def test_backtest_and_live_exits_agree_on_seeded_candles(engine, risk, regime, seed, trailing):
-    _require_bars(risk)
     candles = generate_candles(regime, n=400, seed=seed, start_price=140.0)
     strat = _strategy(take_profit_pct=3.0, stop_loss_pct=2.0,
                       trailing_stop={"enabled": trailing, "pct": 1.5})
@@ -153,7 +146,6 @@ def test_exit_fixture_cases(engine, risk, case):
     assert idx[t.entry_time] == E and t.entry_price == pytest.approx(100.0)
     assert (idx[t.exit_time], t.exit_reason) == (want_bar, want_reason)
     assert t.exit_price == pytest.approx(want_px, rel=1e-9)
-    _require_bars(risk)
     got = live_exit(risk, strat, candles, E, t.entry_price, t.quantity)
     assert got is not None
     assert (got[0], got[1]) == (want_bar, want_reason)

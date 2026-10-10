@@ -5,14 +5,15 @@ All bodies are JSON. Every model name below is a contract model from `backend/co
 (TypeScript: `frontend/src/contracts.ts`). Timestamps are ISO-8601 UTC. Errors: `{"detail": "..."}` with
 4xx status (`404` unknown id/symbol, `409` invalid state such as "no active agent", `422` validation error).
 
-Types that are **not (yet) in the contracts** are marked *(app)* and defined in `backend/app/schemas.py`;
-they are proposed as contract additions (see bottom).
+Contract version **0.2.0**. `SystemInfo`, `LoopState`, `BacktestRequest`, `Alert` (+ `AlertLevel`) and
+`PerformanceSummary` are contract models (in `contracts.ts`). Small request bodies (`{reason}`, `{text}`, ...) are
+app-only and defined in `backend/app/schemas.py`.
 
 ## System
 | Method | Path | Body | Response |
 |---|---|---|---|
 | GET | `/health` | – | `{status, contracts_version, trading_mode}` |
-| GET | `/api/system` | – | `SystemInfo` *(app)*: `{trading_mode, live_enabled, contracts_version, sim_seed, components: {engine, risk, exchange, explainer}}` (`components.*` = class name, or `"fallback:<name>"` while a bot's module is still a stub) |
+| GET | `/api/system` | – | `SystemInfo`: `{trading_mode, live_enabled, contracts_version, sim_seed, components: {engine, risk, exchange, explainer}}` (`components.*` = class name, or `"fallback:<name>"` while a bot's module is still a stub) |
 
 ## Market data
 | Method | Path | Body | Response |
@@ -32,7 +33,7 @@ they are proposed as contract additions (see bottom).
 | PUT | `/api/strategies/{id}` | `ManualStrategy` | `ManualStrategy` (`version` += 1) |
 | DELETE | `/api/strategies/{id}` | – | `{deleted: id}` |
 | POST | `/api/strategies/validate` | any JSON | `ManualStrategy` (normalised) or 422 |
-| POST | `/api/backtest` | `BacktestRequest` *(app)*: `{strategy: ManualStrategy, initial_capital?: 10000, limit?: 500}` | `BacktestResult` |
+| POST | `/api/backtest` | `BacktestRequest`: `{strategy: ManualStrategy, initial_capital?: 10000, limit?: 500}` | `BacktestResult` |
 
 ## Agent activation & loop
 | Method | Path | Body | Response |
@@ -40,7 +41,7 @@ they are proposed as contract additions (see bottom).
 | POST | `/api/manual/activate` | `{strategy_id}` or `{strategy: ManualStrategy}` | `StatusSnapshot` |
 | POST | `/api/auto/activate` | `AutoConfig` | `StatusSnapshot` |
 | POST | `/api/agent/deactivate` | – | `StatusSnapshot` |
-| GET | `/api/loop` | – | `LoopState` *(app)*: `{running, interval_seconds, ticks, agent_mode, active_symbol, active_strategy, replay_finished}` |
+| GET | `/api/loop` | – | `LoopState`: `{running, interval_seconds, ticks, agent_mode, active_symbol, active_strategy, replay_finished}` |
 | POST | `/api/loop/start` | `{interval_seconds?: 5}` | `LoopState` |
 | POST | `/api/loop/stop` | – | `LoopState` |
 | POST | `/api/loop/tick` | – | `Decision[]` (runs exactly one cycle now: exits first, then entry) |
@@ -65,17 +66,23 @@ Only one agent (one manual strategy **or** one auto config) is active at a time.
 |---|---|---|---|
 | GET | `/api/control` | – | `ControlState` |
 | POST | `/api/control/pause` | `{reason?}` | `ControlState` |
-| POST | `/api/control/resume` | – | `ControlState` (also clears an emergency stop) |
-| POST | `/api/control/emergency-stop` | `{reason?, flatten?: false}` | `ControlState` (`flatten=true` also closes all positions) |
+| POST | `/api/control/resume` | – | `ControlState` (clears `paused` only; does **not** clear an emergency stop) |
+| POST | `/api/control/emergency-stop` | `{reason?, flatten?: false}` | `ControlState` (sets `emergency_stopped`; rejects pending confirmations; `flatten=true` also closes all positions) |
+| POST | `/api/control/reset-emergency-stop` | – | `ControlState` (clears `emergency_stopped`; leaves `paused` unchanged) |
 | POST | `/api/control/confirmation-mode` | `{enabled: bool}` | `ControlState` |
 
 Protective exits (SL / TP / trailing / emergency flatten) execute without confirmation; entries obey confirmation mode.
+While `emergency_stopped` every cycle is STAY_OUT (protective exits still run) until `reset-emergency-stop`.
+
+Exit decisions: `Decision.signal.exit_reason` (`ExitReason`) says why a position was closed, `Decision.signal.position_id`
+which `Position.id` it closed, and `Decision.signal.price` the intended fill (SL/TP level or gap open). Every
+`Position` in `Portfolio.positions` has a stable `id`; there can be several lots per symbol.
 
 ## Monitoring
 | Method | Path | Body | Response |
 |---|---|---|---|
-| GET | `/api/alerts?limit=50` | – | `Alert[]` *(app)*: `{id, level: INFO\|WARNING\|CRITICAL, code, message, symbol?, timestamp}` |
-| GET | `/api/performance` | – | `PerformanceSummary` *(app)*: `{starting_capital, equity, realized_pnl, unrealized_pnl, total_return_pct, max_drawdown_pct, win_rate_pct, num_trades, wins, losses, consecutive_losses, equity_curve: EquityPoint[]}` (equity marked to market every tick → drawdown not understated) |
+| GET | `/api/alerts?limit=50` | – | `Alert[]`: `{id, level: INFO\|WARNING\|CRITICAL, code, message, symbol?, timestamp}` |
+| GET | `/api/performance` | – | `PerformanceSummary`: `{starting_capital, equity, realized_pnl, unrealized_pnl, total_return_pct, max_drawdown_pct, win_rate_pct, num_trades, wins, losses, consecutive_losses, equity_curve: EquityPoint[]}` (equity marked to market every tick → drawdown not understated) |
 
 Alert codes: `EMERGENCY_STOP`, `PAUSED`, `CONSECUTIVE_LOSSES` (≥3), `DAILY_LOSS` , `QUOTE_EXPIRED`, `EXECUTION_FAILED`,
 `RISK_BLOCKED`, `LIVE_MODE`, `COMPONENT_FALLBACK`, `REPLAY_FINISHED` (SIM replay hit the last bar), `TICK_FAILED`.
@@ -107,6 +114,6 @@ Client → server (optional): `{"type": "ping"}` → server replies with a `STAT
 `BINANCE_API_KEY` / `BINANCE_API_SECRET` are set). The mode is fixed per process and reported in
 `/api/system`, `ControlState.trading_mode` and every `Decision.mode`.
 
-## Proposed contract additions (pending coordinator)
-`Alert`, `PerformanceSummary`, `SystemInfo`, `LoopState`, `BacktestRequest` (shapes above);
-`Signal.exit_reason: ExitReason | None`; `RiskManager.check_exits(..., bars: dict[str, Candle] | None = None)`.
+## Changelog
+- v0.2 (contracts 0.2.0): app types moved into the contracts; `POST /api/control/reset-emergency-stop` added and
+  `resume` no longer clears an emergency stop; exits expose `Signal.exit_reason` / `Signal.position_id`; `Position.id`.

@@ -16,16 +16,16 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.contracts import (
-    CONTRACTS_VERSION, AutoConfig, BacktestResult, Candle, ControlState, Decision, Event, EventType, ManualStrategy,
-    Portfolio, RegimeAnalysis, StatusSnapshot, StrategySelection, Timeframe, TokenInfo, TraderStyle, PresetName,
+    CONTRACTS_VERSION, Alert, AlertLevel, AutoConfig, BacktestRequest, BacktestResult, Candle, ControlState, Decision, Event, EventType, ManualStrategy,
+    LoopState, PerformanceSummary, Portfolio, RegimeAnalysis, SystemInfo, StatusSnapshot, StrategySelection, Timeframe, TokenInfo, TraderStyle, PresetName,
 )
-from backend.monitoring import Alert, AlertLevel, EventLog, PerformanceSummary
+from backend.monitoring import EventLog
 
 from .events import EventBus
 from .loop import AgentStateError, TradingLoop
 from .schemas import (
-    AskRequest, BacktestRequest, ConfirmationModeRequest, EmergencyStopRequest, LoopStartRequest, LoopState,
-    ManualActivateRequest, ParseRequest, ParseResponse, ReasonRequest, SystemInfo,
+    AskRequest, ConfirmationModeRequest, EmergencyStopRequest, LoopStartRequest, ManualActivateRequest, ParseRequest,
+    ParseResponse, ReasonRequest,
 )
 from .settings import Settings
 from .store import StrategyStore
@@ -231,6 +231,10 @@ def create_app(settings: Optional[Settings] = None, components: Optional[Compone
     @app.post("/api/control/resume", response_model=ControlState)
     def resume() -> ControlState:
         return L.resume()
+
+    @app.post("/api/control/reset-emergency-stop", response_model=ControlState)
+    def reset_emergency_stop() -> ControlState:
+        return L.reset_emergency_stop()
 
     @app.post("/api/control/emergency-stop", response_model=ControlState)
     def emergency_stop(req: Optional[EmergencyStopRequest] = None) -> ControlState:

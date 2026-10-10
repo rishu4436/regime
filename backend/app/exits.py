@@ -71,18 +71,10 @@ def check_protective_exit(
 
 
 def exit_reason_of(signal) -> Optional[ExitReason]:
-    """Best-effort extraction of the exit reason from a SELL Signal until the contract has `Signal.exit_reason`.
-    Order: `signal.exit_reason` attribute, a `exit:<REASON>` tag in conditions_met, an ExitReason name in conditions_met,
-    then an ExitReason name / simulator label in the reason text."""
-    val = getattr(signal, "exit_reason", None)
-    if val:
-        return ExitReason(val)
-    for c in signal.conditions_met or []:
-        name = c.split(":", 1)[1] if c.lower().startswith("exit:") else c
-        try:
-            return ExitReason(name.strip().upper())
-        except ValueError:
-            continue
+    """Exit reason of a SELL Signal: `Signal.exit_reason` (contract v0.2); if an implementation leaves it empty,
+    fall back to an ExitReason name in the reason text (for logging only)."""
+    if signal.exit_reason is not None:
+        return ExitReason(signal.exit_reason)
     text = (signal.reason or "").upper().replace("-", "_")
     for r in ExitReason:
         if r.value in text or r.value.replace("_", " ") in text:

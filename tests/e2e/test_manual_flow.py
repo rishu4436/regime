@@ -130,7 +130,7 @@ def test_pause_blocks_entries_but_protective_exits_still_run():
     assert again is not None
 
 
-def test_emergency_stop_flattens_and_blocks_until_resume():
+def test_emergency_stop_flattens_and_blocks_until_reset():
     c = make_client()
     c.post("/api/manual/activate", json={"strategy": trading_strategy(activation="AUTO_EXECUTE").model_dump(mode="json")})
     assert tick_until(c, lambda d: d["action"] == "BUY")[0] is not None
@@ -143,8 +143,14 @@ def test_emergency_stop_flattens_and_blocks_until_resume():
     for _ in range(30):
         for d in c.post("/api/loop/tick").json():
             assert d["action"] == "STAY_OUT"
-    c.post("/api/control/resume")
-    assert c.get("/api/control").json()["emergency_stopped"] is False
+    # resume() clears pause only; the emergency stop needs the explicit reset (contract v0.2)
+    assert c.post("/api/control/resume").json()["emergency_stopped"] is True
+    for _ in range(5):
+        for d in c.post("/api/loop/tick").json():
+            assert d["action"] == "STAY_OUT"
+    ctrl = c.post("/api/control/reset-emergency-stop").json()
+    assert ctrl["emergency_stopped"] is False and ctrl["paused"] is False
+    assert tick_until(c, lambda d: d["action"] == "BUY")[0] is not None
 
 
 def test_manual_close_override_and_errors():
