@@ -30,3 +30,22 @@ exchange client and must never place orders.
 - Unit tests live in this directory's `tests/` and pass with `pytest` from the repo root; the whole suite stays green.
 - Works fully in **SIM** mode with `backend.mocks` (no network, no API keys).
 - No edits outside the owned directory. Contract changes go through the coordinator (see CONTRIBUTING.md).
+
+## Implementation (Bot 5)
+
+| File | What |
+|---|---|
+| `explainer.py` | `DefaultExplainer(client=None, *, use_llm=None)` — the `Explainer`. Tries Grok, falls back to templates on any error. `last_source` = `"grok"` / `"template"`, `last_error` for logs. |
+| `client.py` | `GrokClient` / `GrokConfig` — OpenAI-compatible `POST {XAI_BASE_URL}/chat/completions` via httpx; all failures → `LLMError`. Key never logged/repr'd. |
+| `prompts.py` | Prompt builders; facts are passed only as contract-model JSON; system prompt forbids claiming/placing trades. |
+| `templates.py` | Deterministic offline text for explanations, summaries and Q&A (Q&A refuses trade requests). |
+| `parser.py` | `keyword_parse` (deterministic NL → `ManualStrategy`/`AutoConfig`) and `validate_llm_strategy` (extract JSON → prune unknown keys → drop invalid fields → validate against the contract). |
+
+**Env:** `XAI_API_KEY` (enables Grok; unset → templates), `XAI_MODEL` (default `grok-4.7`, per docs.x.ai model guide),
+`XAI_BASE_URL` (default `https://api.x.ai/v1`), `XAI_TIMEOUT_S` (default `20`), `LLM_DISABLED=1` (force templates).
+
+**Safety:** no imports of exchange/risk/app/engine code (enforced by a static test); parsed strategies always use
+`activation=CONFIRMATION` unless the user's own text explicitly asks for auto-execution; LLM-supplied `id`/`created_at`/`version` are ignored.
+
+**NL parsing:** Grok replies `{"kind": "manual"|"auto", "strategy": {...}}`; invalid/unrepairable output falls back to `keyword_parse`.
+Listing entry conditions (e.g. "RSI below 30 and above the 200 SMA") enables only those; unspecified text → simulator defaults.
