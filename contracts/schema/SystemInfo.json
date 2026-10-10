@@ -1,0 +1,55 @@
+{
+  "$defs": {
+    "TradingMode": {
+      "description": "Execution environment. SIM = mocks/offline, PAPER = real market data + simulated fills, LIVE = real money.",
+      "enum": [
+        "SIM",
+        "PAPER",
+        "LIVE"
+      ],
+      "title": "TradingMode",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "components": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Components",
+      "type": "object"
+    },
+    "contracts_version": {
+      "title": "Contracts Version",
+      "type": "string"
+    },
+    "live_enabled": {
+      "title": "Live Enabled",
+      "type": "boolean"
+    },
+    "sim_seed": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Sim Seed"
+    },
+    "trading_mode": {
+      "$ref": "#/$defs/TradingMode"
+    }
+  },
+  "required": [
+    "trading_mode",
+    "live_enabled",
+    "contracts_version",
+    "components"
+  ],
+  "title": "SystemInfo",
+  "type": "object"
+}

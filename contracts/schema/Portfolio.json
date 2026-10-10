@@ -2,6 +2,7 @@
   "$defs": {
     "Position": {
       "additionalProperties": false,
+      "description": "An open position. `highest_price` is maintained by backend/app: after RiskManager.check_exits runs for a bar,\nthe app sets highest_price = max(highest_price or avg_entry_price, bar.high) for every still-open position.",
       "properties": {
         "avg_entry_price": {
           "exclusiveMinimum": 0,
@@ -30,8 +31,12 @@
             }
           ],
           "default": null,
-          "description": "High-water mark since entry (trailing stop)",
+          "description": "High-water mark since entry (trailing stop); updated by the app from bar.high AFTER check_exits",
           "title": "Highest Price"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
         },
         "opened_at": {
           "format": "date-time",

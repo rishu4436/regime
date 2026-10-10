@@ -27,6 +27,60 @@
       "title": "AgentMode",
       "type": "string"
     },
+    "Alert": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "description": "EMERGENCY_STOP, PAUSED, CONSECUTIVE_LOSSES, DAILY_LOSS, QUOTE_EXPIRED, EXECUTION_FAILED, RISK_BLOCKED, LIVE_MODE, COMPONENT_FALLBACK",
+          "title": "Code",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "level": {
+          "$ref": "#/$defs/AlertLevel"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "symbol": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Symbol"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        }
+      },
+      "required": [
+        "level",
+        "code",
+        "message"
+      ],
+      "title": "Alert",
+      "type": "object"
+    },
+    "AlertLevel": {
+      "enum": [
+        "INFO",
+        "WARNING",
+        "CRITICAL"
+      ],
+      "title": "AlertLevel",
+      "type": "string"
+    },
     "AutoConfig": {
       "additionalProperties": false,
       "properties": {
@@ -66,6 +120,32 @@
         "capital"
       ],
       "title": "AutoConfig",
+      "type": "object"
+    },
+    "BacktestRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "initial_capital": {
+          "default": 10000.0,
+          "exclusiveMinimum": 0,
+          "title": "Initial Capital",
+          "type": "number"
+        },
+        "limit": {
+          "default": 500,
+          "maximum": 5000,
+          "minimum": 61,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "strategy": {
+          "$ref": "#/$defs/ManualStrategy"
+        }
+      },
+      "required": [
+        "strategy"
+      ],
+      "title": "BacktestRequest",
       "type": "object"
     },
     "BacktestResult": {
@@ -685,7 +765,7 @@
     },
     "ExitRules": {
       "additionalProperties": false,
-      "description": "Evaluated on each bar's close BEFORE entries, first match wins, in this order (simulator):\nTRAILING_STOP -> TAKE_PROFIT (pnl >= tp) -> STOP_LOSS (pnl <= -sl) -> RSI_EXIT -> MACD_EXIT.\nOpen positions are closed with reason END at the end of a backtest.",
+      "description": "Evaluated on each bar BEFORE entries; first match wins. Simulator order:\nTRAILING_STOP -> TAKE_PROFIT (pnl >= tp) -> STOP_LOSS (pnl <= -sl) -> RSI_EXIT -> MACD_EXIT.\n\nIntrabar rules for the engine / risk layer (contract v0.2, deviates from the close-only simulator):\n- If the bar's range hits BOTH the stop-loss and the take-profit level, STOP_LOSS wins (conservative).\n- SL / TP / trailing fill AT the level, or at the bar OPEN if the bar gapped through the level\n  (SL/trailing: fill = min(level, open) when open < level; TP: fill = max(level, open) when open > level).\n- The trailing level uses Position.highest_price as of the PREVIOUS bar (the app updates it from bar.high after\n  check_exits), so a bar's own high never tightens its own stop.\n- Open positions are closed with reason END at the end of a backtest.",
       "properties": {
         "macd_bearish_cross": {
           "$ref": "#/$defs/MacdCrossCondition"
@@ -710,6 +790,70 @@
         }
       },
       "title": "ExitRules",
+      "type": "object"
+    },
+    "LoopState": {
+      "additionalProperties": false,
+      "properties": {
+        "active_strategy": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Active Strategy"
+        },
+        "active_symbol": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Active Symbol"
+        },
+        "agent_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "interval_seconds": {
+          "title": "Interval Seconds",
+          "type": "number"
+        },
+        "replay_finished": {
+          "default": false,
+          "title": "Replay Finished",
+          "type": "boolean"
+        },
+        "running": {
+          "title": "Running",
+          "type": "boolean"
+        },
+        "ticks": {
+          "title": "Ticks",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "running",
+        "interval_seconds",
+        "ticks"
+      ],
+      "title": "LoopState",
       "type": "object"
     },
     "MacdCrossCondition": {
@@ -972,6 +1116,79 @@
       "title": "OrderStatus",
       "type": "string"
     },
+    "PerformanceSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "consecutive_losses": {
+          "title": "Consecutive Losses",
+          "type": "integer"
+        },
+        "equity": {
+          "title": "Equity",
+          "type": "number"
+        },
+        "equity_curve": {
+          "items": {
+            "$ref": "#/$defs/EquityPoint"
+          },
+          "title": "Equity Curve",
+          "type": "array"
+        },
+        "losses": {
+          "title": "Losses",
+          "type": "integer"
+        },
+        "max_drawdown_pct": {
+          "description": "Over the mark-to-market equity curve (open positions included)",
+          "title": "Max Drawdown Pct",
+          "type": "number"
+        },
+        "num_trades": {
+          "description": "Closed trades",
+          "title": "Num Trades",
+          "type": "integer"
+        },
+        "realized_pnl": {
+          "title": "Realized Pnl",
+          "type": "number"
+        },
+        "starting_capital": {
+          "title": "Starting Capital",
+          "type": "number"
+        },
+        "total_return_pct": {
+          "title": "Total Return Pct",
+          "type": "number"
+        },
+        "unrealized_pnl": {
+          "title": "Unrealized Pnl",
+          "type": "number"
+        },
+        "win_rate_pct": {
+          "title": "Win Rate Pct",
+          "type": "number"
+        },
+        "wins": {
+          "title": "Wins",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "starting_capital",
+        "equity",
+        "realized_pnl",
+        "unrealized_pnl",
+        "total_return_pct",
+        "max_drawdown_pct",
+        "win_rate_pct",
+        "num_trades",
+        "wins",
+        "losses",
+        "consecutive_losses"
+      ],
+      "title": "PerformanceSummary",
+      "type": "object"
+    },
     "Portfolio": {
       "additionalProperties": false,
       "properties": {
@@ -1041,6 +1258,7 @@
     },
     "Position": {
       "additionalProperties": false,
+      "description": "An open position. `highest_price` is maintained by backend/app: after RiskManager.check_exits runs for a bar,\nthe app sets highest_price = max(highest_price or avg_entry_price, bar.high) for every still-open position.",
       "properties": {
         "avg_entry_price": {
           "exclusiveMinimum": 0,
@@ -1069,8 +1287,12 @@
             }
           ],
           "default": null,
-          "description": "High-water mark since entry (trailing stop)",
+          "description": "High-water mark since entry (trailing stop); updated by the app from bar.high AFTER check_exits",
           "title": "Highest Price"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
         },
         "opened_at": {
           "format": "date-time",
@@ -1490,7 +1712,7 @@
     },
     "Signal": {
       "additionalProperties": false,
-      "description": "Proposed action from the strategy engine (Bot 2). Never executed without a RiskVerdict.",
+      "description": "Proposed action from the strategy engine (Bot 2) or an exit from RiskManager.check_exits (Bot 3).\nNever executed without a RiskVerdict. For SELL signals `price` is the intended fill price (e.g. the SL/TP level\nor gap-open price per ExitRules), `exit_reason` says why, and `position_id` targets a specific Position.",
       "properties": {
         "action": {
           "$ref": "#/$defs/Action"
@@ -1509,9 +1731,33 @@
           "title": "Conditions Met",
           "type": "array"
         },
+        "exit_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExitReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "id": {
           "title": "Id",
           "type": "string"
+        },
+        "position_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Position.id this SELL closes",
+          "title": "Position Id"
         },
         "preset": {
           "anyOf": [
@@ -1534,6 +1780,7 @@
             }
           ],
           "default": null,
+          "description": "BUY: reference price; SELL: fill price (level or gap open)",
           "title": "Price"
         },
         "proposed_notional": {
@@ -1735,6 +1982,49 @@
       "title": "StrategySelection",
       "type": "object"
     },
+    "SystemInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "components": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Components",
+          "type": "object"
+        },
+        "contracts_version": {
+          "title": "Contracts Version",
+          "type": "string"
+        },
+        "live_enabled": {
+          "title": "Live Enabled",
+          "type": "boolean"
+        },
+        "sim_seed": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sim Seed"
+        },
+        "trading_mode": {
+          "$ref": "#/$defs/TradingMode"
+        }
+      },
+      "required": [
+        "trading_mode",
+        "live_enabled",
+        "contracts_version",
+        "components"
+      ],
+      "title": "SystemInfo",
+      "type": "object"
+    },
     "Timeframe": {
       "enum": [
         "1m",
@@ -1926,5 +2216,5 @@
       "type": "object"
     }
   },
-  "version": "0.1.0"
+  "version": "0.2.0"
 }

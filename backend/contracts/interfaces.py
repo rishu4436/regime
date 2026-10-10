@@ -88,17 +88,31 @@ class RiskManager(Protocol):
 
     def check(self, signal: Signal, portfolio: Portfolio, control: ControlState) -> RiskVerdict: ...
 
-    def check_exits(self, portfolio: Portfolio, prices: dict[str, float]) -> list[Signal]:
-        """Stop-loss / take-profit / trailing-stop enforcement -> SELL signals."""
+    def check_exits(
+        self, portfolio: Portfolio, prices: dict[str, float], bars: Optional[dict[str, Candle]] = None
+    ) -> list[Signal]:
+        """Stop-loss / take-profit / trailing-stop enforcement -> SELL signals (exit_reason, position_id, price=fill).
+
+        `bars` (symbol -> latest bar) enables intrabar rules from ExitRules (SL wins if SL and TP both hit, fills at
+        level or gap open). Without `bars`, evaluate on `prices` only. Must not mutate the portfolio; the app updates
+        Position.highest_price from bar.high after this call."""
         ...
 
     def get_control_state(self) -> ControlState: ...
 
     def pause(self, reason: str = "") -> ControlState: ...
 
-    def resume(self) -> ControlState: ...
+    def resume(self) -> ControlState:
+        """Clears `paused` only. Does NOT clear an emergency stop (use reset_emergency_stop)."""
+        ...
 
-    def emergency_stop(self, reason: str = "") -> ControlState: ...
+    def emergency_stop(self, reason: str = "") -> ControlState:
+        """Sets emergency_stopped=True; blocks every signal until reset_emergency_stop()."""
+        ...
+
+    def reset_emergency_stop(self) -> ControlState:
+        """Clears emergency_stopped (explicit user action). Leaves `paused` unchanged."""
+        ...
 
     def set_confirmation_mode(self, enabled: bool) -> ControlState: ...
 

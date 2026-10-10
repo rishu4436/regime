@@ -270,6 +270,22 @@
       "title": "ExecutionResult",
       "type": "object"
     },
+    "ExitReason": {
+      "description": "Why a position was closed. First five mirror the simulator's reasons in priority order.",
+      "enum": [
+        "TRAILING_STOP",
+        "TAKE_PROFIT",
+        "STOP_LOSS",
+        "RSI_EXIT",
+        "MACD_EXIT",
+        "END",
+        "MAX_LOSS",
+        "MANUAL",
+        "EMERGENCY_STOP"
+      ],
+      "title": "ExitReason",
+      "type": "string"
+    },
     "OrderSide": {
       "enum": [
         "BUY",
@@ -359,6 +375,7 @@
     },
     "Position": {
       "additionalProperties": false,
+      "description": "An open position. `highest_price` is maintained by backend/app: after RiskManager.check_exits runs for a bar,\nthe app sets highest_price = max(highest_price or avg_entry_price, bar.high) for every still-open position.",
       "properties": {
         "avg_entry_price": {
           "exclusiveMinimum": 0,
@@ -387,8 +404,12 @@
             }
           ],
           "default": null,
-          "description": "High-water mark since entry (trailing stop)",
+          "description": "High-water mark since entry (trailing stop); updated by the app from bar.high AFTER check_exits",
           "title": "Highest Price"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
         },
         "opened_at": {
           "format": "date-time",
@@ -568,7 +589,7 @@
     },
     "Signal": {
       "additionalProperties": false,
-      "description": "Proposed action from the strategy engine (Bot 2). Never executed without a RiskVerdict.",
+      "description": "Proposed action from the strategy engine (Bot 2) or an exit from RiskManager.check_exits (Bot 3).\nNever executed without a RiskVerdict. For SELL signals `price` is the intended fill price (e.g. the SL/TP level\nor gap-open price per ExitRules), `exit_reason` says why, and `position_id` targets a specific Position.",
       "properties": {
         "action": {
           "$ref": "#/$defs/Action"
@@ -587,9 +608,33 @@
           "title": "Conditions Met",
           "type": "array"
         },
+        "exit_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExitReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "id": {
           "title": "Id",
           "type": "string"
+        },
+        "position_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Position.id this SELL closes",
+          "title": "Position Id"
         },
         "preset": {
           "anyOf": [
@@ -612,6 +657,7 @@
             }
           ],
           "default": null,
+          "description": "BUY: reference price; SELL: fill price (level or gap open)",
           "title": "Price"
         },
         "proposed_notional": {
