@@ -54,8 +54,8 @@ export function PriceChart({ candles, markers = [], height = 320 }: { candles: C
       const t = snap(ts(m.time));
       if (t == null) continue;
       ms.push(m.type === "BUY"
-        ? { time: t, position: "belowBar", color: "#22c55e", shape: "arrowUp", text: m.text ?? "B" }
-        : { time: t, position: "aboveBar", color: "#f87171", shape: "arrowDown", text: m.text ?? "S" });
+        ? { time: t, position: "belowBar", color: "#22c55e", shape: "arrowUp", text: m.text ?? "" }
+        : { time: t, position: "aboveBar", color: "#f87171", shape: "arrowDown", text: m.text ?? "" });
     }
     ms.sort((a, b) => (a.time as number) - (b.time as number));
     s.setMarkers(ms);

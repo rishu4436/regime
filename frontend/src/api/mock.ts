@@ -1,14 +1,16 @@
-// In-browser mock of Bot 6's API: seeded candles, a live bar loop every few seconds, decisions with
-// reasons, confirmation flow, pause/resume/emergency stop, overrides, and client-side backtests.
+// In-browser mock of Bot 6's API (backend/app/API.md): same methods, payloads, error codes (404/409/422) and
+// WebSocket-style Events (STATUS, DECISION, EXECUTION, CONTROL, PRICE, ALERT) emitted on a timer by a SIM loop.
 import {
-  DEFAULT_INITIAL_CAPITAL,
-  type AutoConfig, type BacktestResult, type Candle, type ControlState, type Decision, type Event, type ExecutionResult,
-  type ManualStrategy, type OrderRequest, type Portfolio, type PresetName, type Position, type Regime, type StatusSnapshot, type Timeframe, type TokenInfo,
+  CONTRACTS_VERSION, DEFAULT_INITIAL_CAPITAL, PresetNameValues,
+  type Alert, type AlertLevel, type BacktestRequest, type LoopState, type PerformanceSummary, type SystemInfo, type AutoConfig, type BacktestResult, type Candle, type ControlState, type Decision, type EquityPoint, type Event, type ExecutionResult,
+  type ExitReason, type ManualStrategy, type Portfolio, type PresetName, type Position, type Regime, type RegimeAnalysis, type Signal,
+  type StatusSnapshot, type StrategySelection, type Timeframe, type TokenInfo, type TraderStyle,
 } from "../contracts";
 import { detectRegime, presetWantsBuy, STYLE_MAP } from "../lib/auto";
-import { appendCandle, generateCandles, rng } from "../lib/candles";
-import { backtest, evaluateLast, fillStrategy, type FullStrategy } from "../lib/strategy";
-import type { ApiClient, BacktestRequest } from "./types";
+import { appendCandle, generateMixedCandles, rng } from "../lib/candles";
+import { parseStrategyText } from "../lib/parseText";
+import { backtest, conditionLabel, evaluateLast, fillStrategy, type FullStrategy } from "../lib/strategy";
+import { ApiError, type ActivateManualBody, type ApiClient, type ParseResult } from "./types";
 
 const TOKENS: TokenInfo[] = [
   { symbol: "NVDAon", name: "NVIDIA (Ondo tokenized)", token_type: "ONDO", chain: "Ethereum", underlying: "NVDA", decimals: 18 },
@@ -16,11 +18,12 @@ const TOKENS: TokenInfo[] = [
   { symbol: "AAPLB", name: "Apple BStock", token_type: "BSTOCK", chain: "BSC", underlying: "AAPL", decimals: 18 },
 ];
 const START: Record<string, number> = { NVDAon: 140, TSLAx: 200, AAPLB: 170 };
-const SHAPE: Record<string, Regime> = { NVDAon: "MILD_UPTREND", TSLAx: "HIGH_VOLATILITY", AAPLB: "SIDEWAYS" };
+const LIVE_REGIMES: Regime[] = ["MILD_UPTREND", "SIDEWAYS", "OVERSOLD_PULLBACK", "STRONG_UPTREND", "HIGH_VOLATILITY", "DOWNTREND"];
 const FEE = 0.001;
-const uid = () => Math.random().toString(16).slice(2) + Date.now().toString(16);
+const uid = () => Math.random().toString(16).slice(2, 10) + Date.now().toString(16);
 const now = () => new Date().toISOString();
-const delay = <T,>(v: T, ms = 150) => new Promise<T>((r) => setTimeout(() => r(structuredClone(v)), ms));
+const ok = <T,>(v: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(structuredClone(v)), ms));
+const fail = (status: number, detail: string) => new Promise<never>((_, rej) => setTimeout(() => rej(new ApiError(status, detail)), 80));
 
 export class MockApi implements ApiClient {
   readonly kind = "mock" as const;
@@ -28,256 +31,437 @@ export class MockApi implements ApiClient {
   private rand = rng("live");
   private listeners = new Set<(e: Event) => void>();
   private timer: number | undefined;
+  private loop: LoopState = { running: true, interval_seconds: 3, ticks: 0, agent_mode: null, active_symbol: null, active_strategy: null, replay_finished: false };
   private control: ControlState = { paused: false, emergency_stopped: false, confirmation_mode: true, trading_mode: "SIM", reason: null, updated_at: now() };
   private portfolio: Portfolio = { starting_capital: DEFAULT_INITIAL_CAPITAL, cash: DEFAULT_INITIAL_CAPITAL, positions: [], realized_pnl: 0, equity: DEFAULT_INITIAL_CAPITAL, bars_since_exit: {}, trades_today: 0, daily_pnl: 0, mode: "SIM", updated_at: now() };
   private agentMode: "MANUAL" | "AUTO" | null = null;
   private manual: FullStrategy | null = null;
   private auto: AutoConfig | null = null;
   private symbol = "NVDAon";
-  private regime: Regime | null = null;
-  private strategyLabel: string | null = null;
+  private regime: RegimeAnalysis | null = null;
+  private activeStrategy: string | null = null;
   private decisions: Decision[] = [];
+  private alerts: Alert[] = [];
+  private strategies = new Map<string, ManualStrategy>();
+  private equityCurve: EquityPoint[] = [];
+  private closed: number[] = []; // realised PnL per closed trade
   private barsSinceEntry: Record<string, number> = {};
   private trails: Record<string, number> = {};
 
-  constructor(private tickMs = 3000) {
-    // live series ends at the current hour; each mock tick then advances simulated time by one 1h bar
+  constructor() {
+    // live series ends at the current hour; each loop tick advances simulated time by one 1h bar
     const startTime = Math.floor(Date.now() / 3_600_000) * 3_600_000 - 249 * 3_600_000;
-    for (const t of TOKENS) this.candles[t.symbol] = generateCandles({ regime: SHAPE[t.symbol], startPrice: START[t.symbol], n: 250, seed: 7, startTime });
-    this.regime = detectRegime(this.candles[this.symbol]).regime;
+    for (const t of TOKENS) this.candles[t.symbol] = generateMixedCandles(t.symbol, START[t.symbol], 250, "1h", 7, startTime);
+    this.regime = this.analyse(this.symbol);
     this.markToMarket();
+    try { for (const s of JSON.parse(localStorage.getItem("mock.strategies") ?? "[]")) this.strategies.set(s.id, s); } catch { /* ignore */ }
   }
 
-  // ------------------------------------------------------------------ reads
-  health() { return delay({ status: "ok", trading_mode: "SIM" }); }
-  getStatus() { return delay(this.snapshot()); }
+  // ------------------------------------------------------------------ system & market data
+  health() { return ok({ status: "ok", contracts_version: CONTRACTS_VERSION, trading_mode: "SIM" }); }
+  system() {
+    return ok<SystemInfo>({ trading_mode: "SIM", live_enabled: false, contracts_version: CONTRACTS_VERSION, sim_seed: 42,
+      components: { engine: "mock:browser", risk: "mock:browser", exchange: "mock:browser", explainer: "mock:template" } });
+  }
   getTokens(q = "") {
     const ql = q.toLowerCase();
-    return delay(TOKENS.filter((t) => !ql || t.symbol.toLowerCase().includes(ql) || t.name.toLowerCase().includes(ql))
+    return ok(TOKENS.filter((t) => !ql || t.symbol.toLowerCase().includes(ql) || t.name.toLowerCase().includes(ql))
       .map((t) => ({ ...t, price: this.last(t.symbol), volume_24h: this.candles[t.symbol].slice(-24).reduce((a, c) => a + c.volume * c.close, 0) })));
   }
-  getCandles(symbol: string, _tf: Timeframe = "1h", limit = 250) { return delay((this.candles[symbol] ?? []).slice(-limit)); }
+  getCandles(symbol: string, _tf: Timeframe = "1h", limit = 200) {
+    return this.candles[symbol] ? ok(this.candles[symbol].slice(-limit)) : fail(404, `unknown symbol ${symbol}`);
+  }
+  getPrice(symbol: string) { return this.candles[symbol] ? ok({ symbol, price: this.last(symbol) }) : fail(404, `unknown symbol ${symbol}`); }
+  getRegime(symbol: string) { return this.candles[symbol] ? ok(this.analyse(symbol)) : fail(404, `unknown symbol ${symbol}`); }
+  getSelection(symbol: string, style: TraderStyle = "BALANCED") {
+    if (!this.candles[symbol]) return fail(404, `unknown symbol ${symbol}`);
+    return ok(this.select(this.analyse(symbol), style, [...PresetNameValues]));
+  }
 
-  // ------------------------------------------------------------------ strategy
-  activateManual(s: ManualStrategy) {
-    this.manual = fillStrategy(s); this.auto = null; this.agentMode = "MANUAL"; this.symbol = this.manual.symbol;
-    this.strategyLabel = `MANUAL:${this.manual.name}`;
+  // ------------------------------------------------------------------ strategies
+  listStrategies() { return ok([...this.strategies.values()]); }
+  saveStrategy(s: ManualStrategy) {
+    const v = this.validate(s); if (typeof v === "string") return fail(422, v);
+    const saved = { ...v, id: v.id ?? uid(), created_at: v.created_at ?? now() };
+    this.strategies.set(saved.id!, saved); this.persist();
+    return ok(saved);
+  }
+  getStrategy(id: string) { const s = this.strategies.get(id); return s ? ok(s) : fail(404, `strategy ${id} not found`); }
+  updateStrategy(id: string, s: ManualStrategy) {
+    const cur = this.strategies.get(id); if (!cur) return fail(404, `strategy ${id} not found`);
+    const v = this.validate(s); if (typeof v === "string") return fail(422, v);
+    const saved = { ...v, id, created_at: cur.created_at, version: (cur.version ?? 1) + 1 };
+    this.strategies.set(id, saved); this.persist();
+    return ok(saved);
+  }
+  deleteStrategy(id: string) {
+    if (!this.strategies.delete(id)) return fail(404, `strategy ${id} not found`);
+    this.persist(); return ok({ deleted: id });
+  }
+  validateStrategy(json: unknown) { const v = this.validate(json); return typeof v === "string" ? fail(422, v) : ok(v); }
+  backtest(req: BacktestRequest): Promise<BacktestResult> {
+    const v = this.validate(req.strategy); if (typeof v === "string") return fail(422, v);
+    if (req.initial_capital != null && !(req.initial_capital > 0)) return fail(422, "initial_capital: must be > 0");
+    const s = fillStrategy(v);
+    const candles = generateMixedCandles(s.symbol, START[s.symbol] ?? 100, req.limit ?? 500, s.timeframe);
+    const { buyBars: _b, sellBars: _s, ...res } = backtest(s, candles, req.initial_capital ?? DEFAULT_INITIAL_CAPITAL);
+    return ok(res, 300);
+  }
+  /** Same seeded series the mock backtest used, so the chart lines up with the trades. */
+  backtestCandles(symbol: string, timeframe: Timeframe = "1h", limit = 500) {
+    return ok(generateMixedCandles(symbol, START[symbol] ?? 100, limit, timeframe));
+  }
+
+  // ------------------------------------------------------------------ agent & loop
+  activateManual(body: ActivateManualBody) {
+    let src: unknown;
+    if ("strategy_id" in body) { src = this.strategies.get(body.strategy_id); if (!src) return fail(404, `strategy ${body.strategy_id} not found`); }
+    else src = body.strategy;
+    const v = this.validate(src); if (typeof v === "string") return fail(422, v);
+    this.manual = fillStrategy(v); this.auto = null; this.agentMode = "MANUAL"; this.symbol = this.manual.symbol;
+    this.activeStrategy = `MANUAL:${this.manual.name}`;
     this.setControl({ confirmation_mode: this.manual.activation === "CONFIRMATION" });
-    this.emit("STATUS", { message: `Manual strategy "${this.manual.name}" activated on ${this.symbol}` });
-    this.ensureLoop();
-    return delay(this.snapshot());
+    this.syncLoop(); this.emitStatus();
+    return ok(this.snapshot());
   }
   activateAuto(c: AutoConfig) {
+    if (!this.candles[c.symbol]) return fail(404, `unknown symbol ${c.symbol}`);
+    if (!(c.capital > 0)) return fail(422, "capital: must be greater than 0");
+    if (c.enabled_presets && !c.enabled_presets.length) return fail(422, "enabled_presets: at least 1 item required");
     this.auto = { ...c }; this.manual = null; this.agentMode = "AUTO"; this.symbol = c.symbol;
+    this.regime = this.analyse(c.symbol);
+    this.activeStrategy = this.select(this.regime, c.style ?? "BALANCED", c.enabled_presets ?? [...PresetNameValues]).preset ?? "NONE";
     this.setControl({ confirmation_mode: (c.activation ?? "CONFIRMATION") === "CONFIRMATION" });
-    this.emit("STATUS", { message: `Auto mode (${c.style ?? "BALANCED"}) activated on ${c.symbol}` });
-    this.ensureLoop();
-    this.tick(false);
-    return delay(this.snapshot());
+    this.syncLoop(); this.emitStatus();
+    return ok(this.snapshot());
   }
-  backtest(req: BacktestRequest): Promise<BacktestResult> {
-    const s = fillStrategy(req.strategy);
-    const candles = generateCandles({ regime: SHAPE[s.symbol] ?? "SIDEWAYS", startPrice: START[s.symbol] ?? 100, n: req.limit ?? 250, seed: 42, timeframe: s.timeframe });
-    const { buyBars: _b, sellBars: _s, ...res } = backtest(s, candles, req.initial_capital);
-    return delay(res, 300);
+  deactivate() {
+    this.agentMode = null; this.manual = null; this.auto = null; this.activeStrategy = null;
+    this.syncLoop(); this.emitStatus();
+    return ok(this.snapshot());
   }
-  /** Candles used by the mock backtest (so the chart matches the trades). */
-  backtestCandles(symbol: string, timeframe: Timeframe = "1h", n = 250): Candle[] {
-    return generateCandles({ regime: SHAPE[symbol] ?? "SIDEWAYS", startPrice: START[symbol] ?? 100, n, seed: 42, timeframe });
+  getLoop() { return ok(this.loop); }
+  startLoop(interval_seconds?: number) {
+    if (interval_seconds != null && !(interval_seconds > 0)) return fail(422, "interval_seconds: must be > 0");
+    this.loop = { ...this.loop, running: true, interval_seconds: interval_seconds ?? this.loop.interval_seconds };
+    this.restartTimer(); this.emitStatus();
+    return ok(this.loop);
+  }
+  stopLoop() { this.loop = { ...this.loop, running: false }; this.restartTimer(); this.emitStatus(); return ok(this.loop); }
+  tick() {
+    if (!this.agentMode) return fail(409, "no active agent");
+    return ok(this.cycle());
   }
 
-  // ------------------------------------------------------------------ controls
-  pause(reason = "") { return delay(this.setControl({ paused: true, reason: reason || "Paused by user" })); }
-  resume() {
-    if (this.control.emergency_stopped) return delay(this.setControl({ emergency_stopped: false, paused: false, reason: "Resumed after emergency stop" }));
-    return delay(this.setControl({ paused: false, reason: null }));
+  // ------------------------------------------------------------------ decisions / confirmations / positions
+  getStatus() { return ok(this.snapshot()); }
+  getPortfolio() { this.markToMarket(); return ok(this.portfolio); }
+  getDecisions(limit = 50, symbol?: string) { return ok(this.decisions.filter((d) => !symbol || d.symbol === symbol).slice(0, limit)); }
+  getDecision(id: string) { const d = this.decisions.find((x) => x.id === id); return d ? ok(d) : fail(404, `decision ${id} not found`); }
+  getConfirmations() { return ok(this.pending()); }
+  approve(id: string) {
+    const d = this.decisions.find((x) => x.id === id);
+    if (!d) return fail(404, `decision ${id} not found`);
+    if (d.execution?.status !== "PENDING_CONFIRMATION") return fail(409, "decision is not pending confirmation");
+    if (this.control.emergency_stopped) return fail(409, "emergency stop active");
+    const r = this.buy(d.symbol, d.risk_verdict?.adjusted_notional ?? d.signal?.proposed_notional ?? 0, d.strategy, d.id);
+    d.execution = r;
+    d.reason += " (approved by user)";
+    if (r.status !== "FILLED") this.alert("WARNING", "EXECUTION_FAILED", `Approve failed: ${r.error}`, d.symbol);
+    this.emit("DECISION", d); this.emitStatus();
+    return ok(d);
   }
-  emergencyStop(reason = "") {
-    for (const p of [...(this.portfolio.positions ?? [])]) this.fill(p.symbol, "SELL", p.quantity * this.last(p.symbol), p.quantity, "EMERGENCY_STOP");
-    for (const d of this.decisions) if (d.execution?.status === "PENDING_CONFIRMATION") d.execution = { ...d.execution, status: "REJECTED", error: "emergency stop" };
-    return delay(this.setControl({ emergency_stopped: true, paused: true, reason: reason || "Emergency stop: all positions closed" }));
+  reject(id: string, reason?: string) {
+    const d = this.decisions.find((x) => x.id === id);
+    if (!d) return fail(404, `decision ${id} not found`);
+    if (d.execution?.status !== "PENDING_CONFIRMATION") return fail(409, "decision is not pending confirmation");
+    d.action = "STAY_OUT";
+    d.execution = { ...d.execution, status: "REJECTED", error: reason || "rejected by user" };
+    d.reason += ` (rejected by user${reason ? `: ${reason}` : ""})`;
+    this.emit("DECISION", d); this.emitStatus();
+    return ok(d);
   }
-  setConfirmationMode(enabled: boolean) { return delay(this.setControl({ confirmation_mode: enabled })); }
+  closePosition(symbol: string) {
+    if (!this.candles[symbol]) return fail(404, `unknown symbol ${symbol}`);
+    const lots = (this.portfolio.positions ?? []).filter((p) => p.symbol === symbol);
+    if (!lots.length) return fail(409, `no open ${symbol} position`);
+    let d: Decision | null = null;
+    for (const pos of lots) d = this.exitDecision(pos, "MANUAL", this.last(symbol), `Manual override: user closed ${symbol}`);
+    this.emitStatus();
+    return ok(d!);
+  }
 
-  confirmDecision(id: string) {
-    const d = this.decisions.find((x) => x.id === id);
-    if (!d || d.execution?.status !== "PENDING_CONFIRMATION") return Promise.reject(new Error("No pending trade with that id"));
-    if (this.control.emergency_stopped) return Promise.reject(new Error("Emergency stop active"));
-    d.execution = this.fill(d.symbol, d.action === "SELL" ? "SELL" : "BUY", d.signal?.proposed_notional ?? 0, null, null, d.strategy);
-    d.reason += " — confirmed by user";
-    this.emit("DECISION", d as unknown as Record<string, unknown>);
-    return delay(d);
+  // ------------------------------------------------------------------ control
+  getControl() { return ok(this.control); }
+  pause(reason?: string) {
+    const c = this.setControl({ paused: true, reason: reason || "Paused by user" });
+    this.alert("WARNING", "PAUSED", c.reason ?? "Paused"); this.emitStatus(); return ok(c);
   }
-  rejectDecision(id: string) {
-    const d = this.decisions.find((x) => x.id === id);
-    if (!d || !d.execution) return Promise.reject(new Error("No pending trade with that id"));
-    d.execution = { ...d.execution, status: "REJECTED", error: "rejected by user" };
-    this.emit("DECISION", d as unknown as Record<string, unknown>);
-    return delay(d);
+  resume() { const c = this.setControl({ paused: false, reason: this.control.emergency_stopped ? this.control.reason : null }); this.emitStatus(); return ok(c); }
+  resetEmergencyStop() {
+    if (!this.control.emergency_stopped) return fail(409, "emergency stop is not active");
+    const c = this.setControl({ emergency_stopped: false, reason: this.control.paused ? "Emergency stop reset; still paused" : null });
+    this.alert("INFO", "EMERGENCY_STOP", "Emergency stop reset by user"); this.emitStatus(); return ok(c);
   }
-  override(o: OrderRequest) {
-    const r = this.fill(o.symbol, o.side, o.notional, o.quantity ?? null, o.side === "SELL" ? "MANUAL" : null, "MANUAL_OVERRIDE");
-    this.log({ action: o.side, symbol: o.symbol, strategy: "MANUAL_OVERRIDE", reason: `Manual override by user: ${o.side} ${o.symbol}`, execution: r });
-    return delay(r);
+  emergencyStop(reason?: string, flatten = false) {
+    if (flatten) for (const p of [...(this.portfolio.positions ?? [])]) this.exitDecision(p, "EMERGENCY_STOP", this.last(p.symbol), "Emergency stop: position flattened");
+    for (const d of this.pending()) { d.action = "STAY_OUT"; d.execution = { ...d.execution!, status: "REJECTED", error: "emergency stop" }; }
+    const c = this.setControl({ emergency_stopped: true, reason: reason || "Emergency stop" });
+    this.alert("CRITICAL", "EMERGENCY_STOP", `${c.reason}${flatten ? " (all positions closed)" : ""}`);
+    this.emitStatus();
+    return ok(c);
+  }
+  setConfirmationMode(enabled: boolean) { const c = this.setControl({ confirmation_mode: enabled }); this.emitStatus(); return ok(c); }
+
+  // ------------------------------------------------------------------ monitoring
+  getAlerts(limit = 50) { return ok(this.alerts.slice(0, limit)); }
+  getPerformance() {
+    this.markToMarket();
+    const pf = this.portfolio, unreal = (pf.positions ?? []).reduce((a, p) => a + (p.unrealized_pnl ?? 0), 0);
+    let peak = pf.starting_capital, mdd = 0;
+    for (const e of this.equityCurve) { peak = Math.max(peak, e.equity); mdd = Math.max(mdd, (peak - e.equity) / peak); }
+    const wins = this.closed.filter((x) => x > 0).length, losses = this.closed.length - wins;
+    let consec = 0; for (let i = this.closed.length - 1; i >= 0 && this.closed[i] <= 0; i--) consec++;
+    return ok<PerformanceSummary>({
+      starting_capital: pf.starting_capital, equity: pf.equity, realized_pnl: pf.realized_pnl ?? 0, unrealized_pnl: unreal,
+      total_return_pct: ((pf.equity - pf.starting_capital) / pf.starting_capital) * 100, max_drawdown_pct: mdd * 100,
+      win_rate_pct: this.closed.length ? (wins / this.closed.length) * 100 : 0, num_trades: this.closed.length, wins, losses,
+      consecutive_losses: consec, equity_curve: this.equityCurve.slice(-500),
+    });
+  }
+
+  // ------------------------------------------------------------------ llm (mocked Bot 5)
+  llmParse(text: string, default_symbol?: string) {
+    if (!text.trim()) return fail(422, "text: must not be empty");
+    const out = parseStrategyText(text, default_symbol);
+    return ok<ParseResult>("entry" in out || "exit" in out ? { kind: "MANUAL", strategy: out as ManualStrategy } : { kind: "AUTO", config: out as AutoConfig }, 450);
+  }
+  llmAsk(question: string) {
+    if (!question.trim()) return fail(422, "question: must not be empty");
+    const q = question.toLowerCase(), last = this.decisions[0], pf = this.portfolio;
+    let answer: string;
+    if (/why|reason|last|decision/.test(q)) answer = last ? `Last decision on ${last.symbol}: ${last.action.replace("_", " ")}. ${last.reason}` : "No decisions yet; activate a strategy and the agent will explain each bar.";
+    else if (/regime|market/.test(q)) answer = this.regime ? `${this.symbol} is in a ${this.regime.regime.replace(/_/g, " ").toLowerCase()} regime (${Math.round(this.regime.confidence * 100)}% confidence). ${this.regime.reason}` : "Regime unknown.";
+    else if (/pnl|profit|loss|perform|equity/.test(q)) answer = `Equity ${pf.equity.toFixed(2)} USDT vs ${pf.starting_capital} start (${(((pf.equity - pf.starting_capital) / pf.starting_capital) * 100).toFixed(2)}%), realised ${(pf.realized_pnl ?? 0).toFixed(2)} USDT over ${this.closed.length} closed trades.`;
+    else if (/position|holding/.test(q)) answer = pf.positions?.length ? pf.positions.map((p) => `${p.symbol}: ${p.quantity.toFixed(4)} @ ${p.avg_entry_price.toFixed(2)} (uPnL ${(p.unrealized_pnl ?? 0).toFixed(2)})`).join("; ") : "No open positions.";
+    else if (/strategy|preset/.test(q)) answer = this.activeStrategy ? `Active: ${this.activeStrategy === "NONE" ? "staying out (no preset fits this regime and style)" : this.activeStrategy} on ${this.symbol}, ${this.agentMode} mode.` : "No strategy is active.";
+    else answer = `I'm the SIM-mode agent (mock). Status: ${this.control.emergency_stopped ? "emergency stopped" : this.control.paused ? "paused" : "running"}, ${this.agentMode ?? "no"} agent on ${this.symbol}. Ask about the last decision, the regime, PnL, positions or the strategy.`;
+    return ok({ answer }, 400);
+  }
+  llmSummary() {
+    const pf = this.portfolio, r = this.regime;
+    return ok({ summary: `${this.agentMode ? `${this.agentMode} agent running ${this.activeStrategy === "NONE" ? "but staying out" : this.activeStrategy} on ${this.symbol}` : "No agent active"}. ` +
+      `Regime: ${r ? r.regime.replace(/_/g, " ").toLowerCase() : "unknown"}. Equity ${pf.equity.toFixed(0)} USDT (${(((pf.equity - pf.starting_capital) / pf.starting_capital) * 100).toFixed(2)}%), ` +
+      `${pf.positions?.length ?? 0} open position(s), ${this.pending().length} trade(s) awaiting confirmation.` }, 300);
   }
 
   subscribe(fn: (e: Event) => void) {
     this.listeners.add(fn);
-    this.ensureLoop();
-    return () => { this.listeners.delete(fn); if (!this.listeners.size) { window.clearInterval(this.timer); this.timer = undefined; } };
+    fn({ type: "STATUS", payload: structuredClone(this.snapshot()) as unknown as Record<string, unknown>, timestamp: now() }); // like WS on-connect
+    this.restartTimer();
+    return () => { this.listeners.delete(fn); if (!this.listeners.size) this.restartTimer(); };
   }
 
   // ------------------------------------------------------------------ internals
-  private ensureLoop() { if (this.timer === undefined) this.timer = window.setInterval(() => this.tick(true), this.tickMs); }
-  /** Simulated clock = open time of the latest bar (decisions line up with chart bars). */
-  private simNow() { const c = this.candles[this.symbol]; return c[c.length - 1].timestamp; }
+  private persist() { try { localStorage.setItem("mock.strategies", JSON.stringify([...this.strategies.values()])); } catch { /* ignore */ } }
+  private validate(json: unknown): ManualStrategy | string {
+    if (!json || typeof json !== "object") return "body: expected a ManualStrategy object";
+    const s = fillStrategy(json as ManualStrategy);
+    if (!this.candles[s.symbol]) return `symbol: unknown token ${s.symbol}`;
+    if (!(s.risk.position_size_pct > 0 && s.risk.position_size_pct <= 100)) return "risk.position_size_pct: must be in (0, 100]";
+    if (s.risk.max_open_positions < 1) return "risk.max_open_positions: must be >= 1";
+    if (s.exit.take_profit_pct <= 0 || s.exit.stop_loss_pct <= 0) return "exit: take_profit_pct and stop_loss_pct must be > 0";
+    if (s.entry.rsi_below.threshold < 0 || s.entry.rsi_below.threshold > 100) return "entry.rsi_below.threshold: must be 0-100";
+    return { ...s, id: (json as ManualStrategy).id, created_at: (json as ManualStrategy).created_at } as ManualStrategy;
+  }
+  private restartTimer() {
+    window.clearInterval(this.timer); this.timer = undefined;
+    if (this.loop.running && this.listeners.size) this.timer = window.setInterval(() => this.cycle(true), this.loop.interval_seconds * 1000);
+  }
+  private syncLoop() { this.loop = { ...this.loop, agent_mode: this.agentMode, active_symbol: this.agentMode ? this.symbol : null, active_strategy: this.activeStrategy }; }
   private last(sym: string) { const c = this.candles[sym]; return c[c.length - 1].close; }
-  private emit(type: Event["type"], payload: Record<string, unknown>) {
-    const e: Event = { type, payload, timestamp: now() };
+  private simNow() { const c = this.candles[this.symbol]; return c[c.length - 1].timestamp; }
+  private pending() { return this.decisions.filter((d) => d.execution?.status === "PENDING_CONFIRMATION"); }
+  private emit(type: Event["type"], payload: unknown) {
+    const e: Event = { type, payload: structuredClone(payload) as Record<string, unknown>, timestamp: now() };
     this.listeners.forEach((fn) => fn(e));
+  }
+  private emitStatus() { this.emit("STATUS", this.snapshot()); }
+  private alert(level: AlertLevel, code: string, message: string, symbol?: string) {
+    const a: Alert = { id: uid(), level, code, message, symbol: symbol ?? null, timestamp: now() };
+    this.alerts.unshift(a); this.alerts = this.alerts.slice(0, 100);
+    this.emit("ALERT", a);
   }
   private setControl(p: Partial<ControlState>) {
     this.control = { ...this.control, ...p, updated_at: now() };
-    this.emit("CONTROL", this.control as Record<string, unknown>);
+    this.emit("CONTROL", this.control);
     return this.control;
+  }
+  private analyse(symbol: string): RegimeAnalysis {
+    const r = detectRegime(this.candles[symbol]);
+    return { regime: r.regime, confidence: r.confidence, reason: r.reason, features: {}, timestamp: now() };
+  }
+  private select(r: RegimeAnalysis, style: TraderStyle, enabled: PresetName[]): StrategySelection {
+    const [p, m] = STYLE_MAP[r.regime][style];
+    if (!p) return { regime: r.regime, style, preset: null, size_multiplier: 0, reason: `${r.regime} + ${style}: no preset fits, stay out` };
+    if (!enabled.includes(p)) return { regime: r.regime, style, preset: null, size_multiplier: 0, reason: `${r.regime} + ${style} maps to ${p}, which is disabled: stay out` };
+    return { regime: r.regime, style, preset: p, size_multiplier: m, reason: `${r.regime} + ${style} → ${p}${m !== 1 ? ` (size ×${m})` : ""}` };
   }
   private snapshot(): StatusSnapshot {
     return { control: this.control, portfolio: this.portfolio, agent_mode: this.agentMode, active_symbol: this.symbol,
-      current_regime: this.regime, active_strategy: this.strategyLabel, last_decision: this.decisions[0] ?? null,
+      current_regime: this.regime?.regime ?? null, active_strategy: this.activeStrategy, last_decision: this.decisions[0] ?? null,
       recent_decisions: this.decisions.slice(0, 50), timestamp: now() };
   }
   private markToMarket() {
-    const ps = this.portfolio.positions ?? [];
     let mv = 0;
-    for (const p of ps) { p.current_price = this.last(p.symbol); p.highest_price = Math.max(p.highest_price ?? 0, p.current_price); p.unrealized_pnl = (p.current_price - p.avg_entry_price) * p.quantity; mv += p.current_price * p.quantity; }
+    for (const p of this.portfolio.positions ?? []) {
+      p.current_price = this.last(p.symbol); p.highest_price = Math.max(p.highest_price ?? 0, p.current_price);
+      p.unrealized_pnl = (p.current_price - p.avg_entry_price) * p.quantity; mv += p.current_price * p.quantity;
+    }
     this.portfolio.equity = this.portfolio.cash + mv;
     this.portfolio.updated_at = now();
   }
 
-  private fill(symbol: string, side: "BUY" | "SELL", notional: number, qty: number | null, exitReason: string | null, strategy = "MANUAL"): ExecutionResult {
-    const px = this.last(symbol), pf = this.portfolio, ps = pf.positions ?? (pf.positions = []);
-    const base: ExecutionResult = { order_id: uid(), client_order_id: uid(), symbol, side, status: "FILLED", path: "SWAP", mode: "SIM", timestamp: now() };
-    if (side === "BUY") {
-      notional = Math.min(notional, pf.cash);
-      if (notional <= 1) return { ...base, status: "REJECTED", error: "insufficient cash" };
-      const q = (notional * (1 - FEE)) / px;
-      const ex = ps.find((p) => p.symbol === symbol);
-      if (ex) { ex.avg_entry_price = (ex.avg_entry_price * ex.quantity + px * q) / (ex.quantity + q); ex.quantity += q; }
-      else {
-        const pos: Position = { symbol, quantity: q, avg_entry_price: px, opened_at: now(), strategy, current_price: px, highest_price: px };
-        if (this.manual) {
-          pos.stop_loss_price = px * (1 - this.manual.exit.stop_loss_pct / 100);
-          pos.take_profit_price = px * (1 + this.manual.exit.take_profit_pct / 100);
-          if (this.manual.exit.trailing_stop.enabled) { pos.trailing_stop_pct = this.manual.exit.trailing_stop.pct; this.trails[symbol] = px * (1 - pos.trailing_stop_pct / 100); }
-        } else { pos.stop_loss_price = px * 0.94; pos.take_profit_price = px * 1.12; }
-        ps.push(pos);
-      }
-      pf.cash -= notional; pf.trades_today = (pf.trades_today ?? 0) + 1; this.barsSinceEntry[symbol] = 0;
-      this.markToMarket();
-      return { ...base, filled_quantity: q, avg_price: px, notional, fee: notional * FEE };
-    }
-    const pos = ps.find((p) => p.symbol === symbol);
-    if (!pos) return { ...base, status: "REJECTED", error: `no open ${symbol} position` };
-    const q = Math.min(qty ?? notional / px, pos.quantity), gross = q * px, fee = gross * FEE;
-    const pnl = (px - pos.avg_entry_price) * q - fee;
-    pf.cash += gross - fee; pf.realized_pnl = (pf.realized_pnl ?? 0) + pnl; pf.daily_pnl = (pf.daily_pnl ?? 0) + pnl;
-    pos.quantity -= q;
-    if (pos.quantity <= 1e-9) { pf.positions = ps.filter((p) => p !== pos); pf.bars_since_exit = { ...pf.bars_since_exit, [symbol]: 0 }; delete this.trails[symbol]; }
-    pf.trades_today = (pf.trades_today ?? 0) + 1;
+  private exec(symbol: string, side: "BUY" | "SELL"): ExecutionResult {
+    return { order_id: uid(), client_order_id: uid(), symbol, side, status: "FILLED", path: "SWAP", mode: "SIM", timestamp: now() };
+  }
+  private done(r: ExecutionResult, decisionId?: string) { this.emit("EXECUTION", { ...r, decision_id: decisionId ?? null }); return r; }
+
+  /** Open a new lot (several lots per symbol are allowed; each has a stable Position.id). */
+  private buy(symbol: string, notional: number, strategy: string, decisionId?: string): ExecutionResult {
+    const px = this.last(symbol), pf = this.portfolio, ps = pf.positions ?? (pf.positions = []), base = this.exec(symbol, "BUY");
+    notional = Math.min(notional, pf.cash);
+    if (notional <= 1) return this.done({ ...base, status: "REJECTED", error: "insufficient cash" }, decisionId);
+    const q = (notional * (1 - FEE)) / px, x = this.manual?.exit;
+    const pos: Position = { id: uid(), symbol, quantity: q, avg_entry_price: px, opened_at: now(), strategy, current_price: px, highest_price: px,
+      stop_loss_price: px * (1 - (x?.stop_loss_pct ?? 6) / 100), take_profit_price: px * (1 + (x?.take_profit_pct ?? 12) / 100) };
+    if (x?.trailing_stop.enabled) { pos.trailing_stop_pct = x.trailing_stop.pct; this.trails[pos.id!] = px * (1 - x.trailing_stop.pct / 100); }
+    ps.push(pos);
+    pf.cash -= notional; pf.trades_today = (pf.trades_today ?? 0) + 1; this.barsSinceEntry[symbol] = 0;
     this.markToMarket();
-    this.emit("EXECUTION", { symbol, side, pnl, exit_reason: exitReason });
-    return { ...base, filled_quantity: q, avg_price: px, notional: gross, fee };
+    return this.done({ ...base, filled_quantity: q, avg_price: px, notional, fee: notional * FEE }, decisionId);
+  }
+
+  /** Close one lot at `fillPx` (SL/TP level, gap open or market). */
+  private sellLot(pos: Position, fillPx: number, decisionId?: string): ExecutionResult {
+    const pf = this.portfolio, base = this.exec(pos.symbol, "SELL");
+    const gross = pos.quantity * fillPx, fee = gross * FEE, pnl = (fillPx - pos.avg_entry_price) * pos.quantity - fee;
+    pf.cash += gross - fee; pf.realized_pnl = (pf.realized_pnl ?? 0) + pnl; pf.daily_pnl = (pf.daily_pnl ?? 0) + pnl;
+    pf.positions = (pf.positions ?? []).filter((p) => p !== pos);
+    pf.bars_since_exit = { ...pf.bars_since_exit, [pos.symbol]: 0 }; delete this.trails[pos.id!];
+    pf.trades_today = (pf.trades_today ?? 0) + 1;
+    this.closed.push(pnl);
+    let consec = 0; for (let i = this.closed.length - 1; i >= 0 && this.closed[i] <= 0; i--) consec++;
+    if (consec >= 3) this.alert("WARNING", "CONSECUTIVE_LOSSES", `${consec} losing trades in a row`, pos.symbol);
+    this.markToMarket();
+    return this.done({ ...base, filled_quantity: pos.quantity, avg_price: fillPx, notional: gross, fee }, decisionId);
+  }
+
+  /** SELL decision for one lot, with Signal.exit_reason / position_id / price (intended fill) like the backend. */
+  private exitDecision(pos: Position, why: ExitReason, fillPx: number, reason: string): Decision {
+    const id = uid();
+    const signal: Signal = { id: uid(), symbol: pos.symbol, action: "SELL", source: this.agentMode ?? "MANUAL", strategy: pos.strategy, reason,
+      price: fillPx, exit_reason: why, position_id: pos.id ?? null, regime: this.regime?.regime ?? null, timestamp: this.simNow() };
+    const r = this.sellLot(pos, fillPx, id);
+    return this.log({ id, symbol: pos.symbol, action: "SELL", strategy: pos.strategy, reason, signal, execution: r });
   }
 
   private log(d: Omit<Decision, "mode" | "agent_mode"> & { agent_mode?: Decision["agent_mode"] }): Decision {
-    const full: Decision = { id: uid(), timestamp: this.simNow(), mode: "SIM", agent_mode: d.agent_mode ?? this.agentMode ?? "MANUAL", regime: this.regime, ...d };
+    const full: Decision = { id: uid(), timestamp: this.simNow(), mode: "SIM", agent_mode: d.agent_mode ?? this.agentMode ?? "MANUAL", regime: this.regime?.regime ?? null, ...d };
     full.explanation ??= full.reason;
     this.decisions.unshift(full);
-    this.decisions = this.decisions.slice(0, 100);
-    this.emit("DECISION", full as unknown as Record<string, unknown>);
+    this.decisions = this.decisions.slice(0, 200);
+    this.emit("DECISION", full);
     return full;
   }
 
-  private tick(advance: boolean) {
+  /** One loop cycle: (advance a bar) -> exits -> entry. Emits PRICE, DECISION, EXECUTION, ALERT, STATUS. */
+  private cycle(advance = false): Decision[] {
+    const out: Decision[] = [];
+    this.loop = { ...this.loop, ticks: this.loop.ticks + 1 };
     if (advance) for (const t of TOKENS) {
       const c = this.candles[t.symbol];
-      c.push(appendCandle(c, this.rand, SHAPE[t.symbol]));
-      if (c.length > 500) c.shift();
+      const live = LIVE_REGIMES[Math.floor(this.loop.ticks / 40 + TOKENS.indexOf(t)) % LIVE_REGIMES.length];
+      c.push(appendCandle(c, this.rand, live === "OVERSOLD_PULLBACK" ? "DOWNTREND" : live));
+      if (c.length > 600) c.shift();
       this.barsSinceEntry[t.symbol] = (this.barsSinceEntry[t.symbol] ?? 99) + 1;
       const bse = this.portfolio.bars_since_exit ?? {};
       if (bse[t.symbol] != null) bse[t.symbol] += 1;
     }
     const c = this.candles[this.symbol], px = this.last(this.symbol);
-    const reg = detectRegime(c);
-    this.regime = reg.regime;
+    this.regime = this.analyse(this.symbol);
     this.markToMarket();
-    this.emit("PRICE", { symbol: this.symbol, price: px });
+    this.equityCurve.push({ timestamp: this.simNow(), equity: this.portfolio.equity });
+    this.emit("PRICE", { symbol: this.symbol, price: px, candle: c[c.length - 1] });
+    const finish = () => { this.syncLoop(); this.emitStatus(); return out; };
+    if (!this.agentMode) return finish();
 
-    if (this.control.emergency_stopped || !this.agentMode) { this.emit("STATUS", {}); return; }
-
-    // 1. exits (risk layer)
+    // 1. protective exits: no confirmation needed, run even while emergency stopped
     for (const p of [...(this.portfolio.positions ?? [])]) {
-      const cp = this.last(p.symbol);
-      let why: string | null = null;
-      if (p.trailing_stop_pct && this.trails[p.symbol] != null) {
-        if (cp < this.trails[p.symbol]) why = "TRAILING_STOP";
-        else this.trails[p.symbol] = Math.max(this.trails[p.symbol], cp * (1 - p.trailing_stop_pct / 100));
-      }
-      if (!why && p.stop_loss_price && cp <= p.stop_loss_price) why = "STOP_LOSS";
-      if (!why && p.take_profit_price && cp >= p.take_profit_price) why = "TAKE_PROFIT";
-      if (why) {
-        const r = this.fill(p.symbol, "SELL", 0, p.quantity, why, p.strategy);
-        this.log({ symbol: p.symbol, action: "SELL", strategy: p.strategy, reason: `${why.replace("_", " ").toLowerCase()} hit at ${cp.toFixed(2)}`, execution: r });
-      }
+      const bar = this.candles[p.symbol][this.candles[p.symbol].length - 1];
+      const trail = p.id ? this.trails[p.id] : undefined;
+      let why: ExitReason | null = null, level = bar.close;
+      if (p.trailing_stop_pct && trail != null && bar.low <= trail) { why = "TRAILING_STOP"; level = Math.min(bar.open, trail); }
+      else if (p.stop_loss_price && bar.low <= p.stop_loss_price) { why = "STOP_LOSS"; level = Math.min(bar.open, p.stop_loss_price); }
+      else if (p.take_profit_price && bar.high >= p.take_profit_price) { why = "TAKE_PROFIT"; level = Math.max(bar.open, p.take_profit_price); }
+      if (!why && p.trailing_stop_pct && trail != null && p.id) this.trails[p.id] = Math.max(trail, bar.high * (1 - p.trailing_stop_pct / 100));
+      if (why) out.push(this.exitDecision(p, why, level, `${why.replace(/_/g, " ").toLowerCase()} hit: lot ${p.id?.slice(0, 6)} filled at ${level.toFixed(2)}`));
     }
-    if (this.control.paused) { this.log({ symbol: this.symbol, action: "STAY_OUT", strategy: this.strategyLabel ?? "-", reason: `Paused: ${this.control.reason ?? "by user"}` }); return; }
-    if (this.decisions.some((d) => d.execution?.status === "PENDING_CONFIRMATION")) return; // wait for the user
+    if (this.control.emergency_stopped) {
+      out.push(this.log({ symbol: this.symbol, action: "STAY_OUT", strategy: this.activeStrategy ?? "-", reason: `Emergency stop active: no new entries (${this.control.reason ?? "stopped"})` }));
+      return finish();
+    }
+    if (this.control.paused) { out.push(this.log({ symbol: this.symbol, action: "STAY_OUT", strategy: this.activeStrategy ?? "-", reason: `Paused: ${this.control.reason ?? "by user"}` })); return finish(); }
+    if (this.pending().length) return finish(); // waiting for the user
 
     // 2. strategy
-    let buy = false, reason = "", sizePct = 15, strategy = this.strategyLabel ?? "-", preset: PresetName | null = null;
+    let buy = false, reason = "", sizePct = 15, strategy = this.activeStrategy ?? "-", preset: PresetName | null = null;
     const met: string[] = [], failed: string[] = [];
     const open = (this.portfolio.positions ?? []).filter((p) => p.symbol === this.symbol).length;
     if (this.agentMode === "MANUAL" && this.manual) {
       const m = this.manual, cool = (this.portfolio.bars_since_exit ?? {})[this.symbol];
       sizePct = m.risk.position_size_pct;
-      if (open >= m.risk.max_open_positions) reason = `Max open positions (${m.risk.max_open_positions}) reached`;
-      else if (cool != null && cool <= m.risk.cooldown_bars) reason = `Cooldown: ${cool}/${m.risk.cooldown_bars} bars since last exit`;
+      if (open >= m.risk.max_open_positions) { failed.push("max_open_positions"); reason = `Max open positions (${m.risk.max_open_positions}) reached`; }
+      else if (cool != null && cool <= m.risk.cooldown_bars) { met.push("max_open_positions"); failed.push("cooldown"); reason = `Cooldown: ${cool}/${m.risk.cooldown_bars} bars since last exit`; }
       else {
         const ev = evaluateLast(m, c);
-        met.push(...ev.met); failed.push(...ev.failed);
+        met.push("max_open_positions", "cooldown", ...ev.met); failed.push(...ev.failed);
         buy = ev.ok;
-        reason = ev.blocked ? `Entry blocked: ${ev.blocked}` : buy ? `Entry (${m.entry.logic}) met: ${ev.met.join(", ")}` : `Entry (${m.entry.logic}) not met: ${ev.failed.join(", ") || "-"}`;
+        const L = (a: string[]) => a.map(conditionLabel).join(", ");
+        reason = ev.blocked ? `Entry blocked: ${ev.blocked}` : buy ? `Entry (${m.entry.logic}) met: ${L(ev.met)}` : `Entry (${m.entry.logic}) not met: ${L(ev.failed) || "-"}`;
       }
     } else if (this.agentMode === "AUTO" && this.auto) {
       const style = this.auto.style ?? "BALANCED";
-      const [p, mult] = STYLE_MAP[reg.regime][style];
-      const enabled = this.auto.enabled_presets ?? [];
-      if (!p || (enabled.length && !enabled.includes(p))) {
-        strategy = "NONE"; this.strategyLabel = "STAY OUT";
-        reason = `${reg.regime} + ${style} → no preset${p ? ` (${p} disabled)` : ""}; staying out. ${reg.reason}`;
-      } else {
-        preset = p; strategy = p; this.strategyLabel = p; sizePct = 10 * mult;
-        if (open >= 3) reason = `${p}: max exposure (3 entries) reached`;
-        else { const w = presetWantsBuy(p, c, this.barsSinceEntry[this.symbol] ?? 99); buy = w.buy; reason = `${reg.regime} + ${style} → ${p}: ${w.reason}`; }
+      const sel = this.select(this.regime, style, this.auto.enabled_presets ?? [...PresetNameValues]);
+      if (!sel.preset) { strategy = "NONE"; this.activeStrategy = "NONE"; reason = `${sel.reason}. ${this.regime.reason}`; }
+      else {
+        preset = sel.preset; strategy = sel.preset; this.activeStrategy = sel.preset; sizePct = 10 * (sel.size_multiplier ?? 1);
+        if (open >= 3) reason = `${sel.preset}: max exposure (3 entries) reached`;
+        else { const w = presetWantsBuy(sel.preset, c, this.barsSinceEntry[this.symbol] ?? 99); buy = w.buy; reason = `${sel.reason}: ${w.reason}`; }
       }
     }
-    if (!buy) { this.log({ symbol: this.symbol, action: "STAY_OUT", strategy, reason }); return; }
+    const signal: Signal = { id: uid(), symbol: this.symbol, action: buy ? "BUY" : "STAY_OUT", source: this.agentMode, strategy, preset, regime: this.regime.regime,
+      reason, conditions_met: met, conditions_failed: failed, price: px, proposed_size_pct: sizePct, proposed_notional: this.portfolio.equity * (sizePct / 100), timestamp: this.simNow() };
+    if (!buy) { out.push(this.log({ symbol: this.symbol, action: "STAY_OUT", strategy, reason, signal })); return finish(); }
 
     // 3. risk + execution
-    const notional = this.portfolio.equity * (sizePct / 100);
-    const signal = { id: uid(), symbol: this.symbol, action: "BUY" as const, source: this.agentMode, strategy, preset, regime: reg.regime, reason, conditions_met: met, conditions_failed: failed, price: px, proposed_size_pct: sizePct, proposed_notional: notional, timestamp: now() };
+    const notional = signal.proposed_notional!;
     if (notional > this.portfolio.cash) {
-      this.log({ symbol: this.symbol, action: "STAY_OUT", strategy, reason: `Risk blocked: insufficient cash for ${notional.toFixed(0)} USDT`, signal,
-        risk_verdict: { signal_id: signal.id, approved: false, reasons: ["insufficient cash"] } });
-      return;
+      out.push(this.log({ symbol: this.symbol, action: "STAY_OUT", strategy, reason: `Risk blocked: insufficient cash for ${notional.toFixed(0)} USDT`, signal,
+        risk_verdict: { signal_id: signal.id!, approved: false, reasons: ["insufficient cash"], checks: [{ name: "cash", passed: false }] } }));
+      this.alert("INFO", "RISK_BLOCKED", "Entry blocked: insufficient cash", this.symbol);
+      return finish();
     }
-    const verdict = { signal_id: signal.id, approved: true, reasons: [], adjusted_size_pct: sizePct, adjusted_notional: notional, requires_confirmation: !!this.control.confirmation_mode };
+    const verdict = { signal_id: signal.id!, approved: true, reasons: [], adjusted_size_pct: sizePct, adjusted_notional: notional, requires_confirmation: !!this.control.confirmation_mode,
+      checks: [{ name: "paused", passed: true }, { name: "max_exposure", passed: true }, { name: "cash", passed: true }] };
     if (this.control.confirmation_mode) {
-      this.log({ symbol: this.symbol, action: "BUY", strategy, reason: `${reason} — awaiting your confirmation`, signal, risk_verdict: verdict,
-        execution: { client_order_id: uid(), symbol: this.symbol, side: "BUY", status: "PENDING_CONFIRMATION", path: "SWAP", mode: "SIM", notional, avg_price: px } });
-      return;
+      out.push(this.log({ symbol: this.symbol, action: "BUY", strategy, reason: `${reason}. Waiting for your confirmation`, signal, risk_verdict: verdict,
+        execution: { client_order_id: uid(), symbol: this.symbol, side: "BUY", status: "PENDING_CONFIRMATION", path: "SWAP", mode: "SIM", notional, avg_price: px } }));
+      return finish();
     }
-    const r = this.fill(this.symbol, "BUY", notional, null, null, strategy);
-    this.log({ symbol: this.symbol, action: "BUY", strategy, reason, signal, risk_verdict: verdict, execution: r });
+    const id = uid();
+    const r = this.buy(this.symbol, notional, strategy, id);
+    out.push(this.log({ id, symbol: this.symbol, action: "BUY", strategy, reason, signal, risk_verdict: verdict, execution: r }));
+    return finish();
   }
 }

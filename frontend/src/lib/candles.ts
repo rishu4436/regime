@@ -80,3 +80,23 @@ export function appendCandle(prev: Candle[], r: () => number, regime: Regime, ti
 }
 
 const round = (x: number) => Math.round(x * 1e6) / 1e6;
+
+const TF_OF: Record<string, Timeframe> = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d" };
+
+/** Regime-switching series for mock backtests: consecutive segments of different regimes, continuous price. */
+export function generateMixedCandles(symbol: string, startPrice: number, n = 250, timeframe: Timeframe = "1h", seed = 42, startTime = DEFAULT_START): Candle[] {
+  const orders: Record<string, Regime[]> = {
+    NVDAon: ["MILD_UPTREND", "OVERSOLD_PULLBACK", "SIDEWAYS", "STRONG_UPTREND", "HIGH_VOLATILITY", "DOWNTREND", "MILD_UPTREND"],
+    TSLAx: ["HIGH_VOLATILITY", "DOWNTREND", "OVERSOLD_PULLBACK", "STRONG_UPTREND", "SIDEWAYS", "HIGH_VOLATILITY", "MILD_UPTREND"],
+    AAPLB: ["SIDEWAYS", "MILD_UPTREND", "OVERSOLD_PULLBACK", "SIDEWAYS", "DOWNTREND", "MILD_UPTREND", "SIDEWAYS"],
+  };
+  const regimes = orders[symbol] ?? orders.AAPLB, seg = Math.ceil(n / regimes.length), step = TF_MS[TF_OF[timeframe]];
+  const out: Candle[] = [];
+  let price = startPrice, t = startTime;
+  for (let k = 0; out.length < n; k++) {
+    const part = generateCandles({ regime: regimes[k % regimes.length], n: Math.min(seg, n - out.length), seed: seed + k, startPrice: price, timeframe, startTime: t });
+    out.push(...part);
+    price = part[part.length - 1].close; t = Date.parse(part[part.length - 1].timestamp) + step;
+  }
+  return out;
+}

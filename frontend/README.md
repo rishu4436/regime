@@ -43,10 +43,14 @@ the generated `src/contracts.ts`):
   (NVDAon mild uptrend, TSLAx high volatility, AAPLB sideways), a live bar loop every 3 s with `Decision`s and reasons,
   confirmation flow, pause/resume, emergency stop, manual override, and client-side backtests (`src/lib/strategy.ts`,
   simulator semantics plus the backend's intrabar exit rules: SL/TP vs bar low/high with SL first, trailing stop vs the
-  previous bar's level, gap fills at the open, rolling 20-bar volume average). The Auto Mode regime detector and
+  previous bar's level, gap fills at the open, rolling 20-bar volume average), a keyword parser standing in for
+  `llm/parse`, and canned `llm/ask` answers. The Auto Mode regime detector and
   (regime, style) → preset map in `src/lib/auto.ts` are **indicative only**; the real ones are Bot 2's.
-- `src/api/http.ts` (**`VITE_API_MODE=http`**): Bot 6's FastAPI REST + WebSocket (`/ws` `Event` stream, auto-reconnect).
-  Base URL from `VITE_API_URL` (empty = same origin). Endpoint paths follow `backend/app/README.md`; if the published
-  API differs, only this file changes.
+- `src/api/http.ts` (**`VITE_API_MODE=http`**): Bot 6's FastAPI exactly as documented in `backend/app/API.md`
+  (REST under `/api` + `/ws` `Event` stream with auto-reconnect and ping). Base URL from `VITE_API_URL` (empty = same origin).
+  4xx errors (`404` unknown id, `409` invalid state, `422` validation, `{"detail": ...}`) become `ApiError`s shown as toasts.
+  The mock implements the same methods, payloads, error codes and WS events (STATUS/DECISION/EXECUTION/CONTROL/PRICE/ALERT),
+  so swapping is just the env var. Types marked *(app)* in API.md (`BacktestRequest`, `LoopState`, `Alert`,
+  `PerformanceSummary`, `SystemInfo`, llm parse result) live in `src/api/types.ts` until they land in the contracts.
 
 Charts use TradingView `lightweight-charts` (candlesticks with trade markers, equity area); font is Inter (bundled via `@fontsource-variable/inter`).

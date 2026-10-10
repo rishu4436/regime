@@ -1,30 +1,32 @@
-import { useState } from "react";
-import type { OrderSide, StatusSnapshot } from "../contracts";
+import { useEffect, useState } from "react";
+import type { StatusSnapshot } from "../contracts";
 import { api } from "../api";
+import type { LoopState } from "../api/types";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ModeBadge } from "../components/Badges";
-import { Card, NumberInput, Segmented, Toggle, useToast } from "../components/ui";
-import { usd } from "../lib/format";
-import { TOKENS } from "../lib/strategy";
+import { Card, NumberInput, Toggle, useToast } from "../components/ui";
 
-interface Props { status: StatusSnapshot | null; onChange: () => void }
+interface Props { status: StatusSnapshot | null; onChange: () => void; tick: number }
 
-/** Pause/resume, confirmation mode, manual override and emergency stop. */
-export function Controls({ status, onChange }: Props) {
+/** Pause/resume, confirmation mode, decision loop, emergency stop (manual override = close buttons on positions). */
+export function Controls({ status, onChange, tick }: Props) {
   const c = status?.control;
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const [askStop, setAskStop] = useState(false);
-  const [askOvr, setAskOvr] = useState(false);
-  const [ovr, setOvr] = useState<{ side: OrderSide; symbol: string; notional: number }>({ side: "BUY", symbol: status?.active_symbol ?? "NVDAon", notional: 500 });
+  const [askReset, setAskReset] = useState(false);
+  const [flatten, setFlatten] = useState(true);
+  const [loop, setLoop] = useState<LoopState | null>(null);
+  const [interval, setIntervalS] = useState<number | null>(null);
 
-  const run = async (fn: () => Promise<unknown>, ok?: string) => {
+  useEffect(() => { api.getLoop().then(setLoop).catch(() => setLoop(null)); }, [tick, status?.agent_mode]);
+
+  const run = async <T,>(fn: () => Promise<T>, okMsg?: string): Promise<T | undefined> => {
     setBusy(true);
-    try { await fn(); onChange(); if (ok) toast(ok, "success"); return true; }
-    catch (e) { toast(e instanceof Error ? e.message : String(e), "error"); return false; }
+    try { const r = await fn(); onChange(); if (okMsg) toast(okMsg, "success"); return r; }
+    catch (e) { toast(e instanceof Error ? e.message : String(e), "error"); return undefined; }
     finally { setBusy(false); }
   };
-  const pos = status?.portfolio.positions?.find((p) => p.symbol === ovr.symbol);
   const state = c?.emergency_stopped ? <span className="pill bad"><span className="dot" />Emergency stop</span>
     : c?.paused ? <span className="pill warn"><span className="dot" />Paused</span>
     : <span className="pill ok"><span className="live-dot" style={{ marginRight: 2 }} />Running</span>;
@@ -32,49 +34,55 @@ export function Controls({ status, onChange }: Props) {
   return (
     <Card title="Controls" extra={<ModeBadge mode={c?.trading_mode} />}>
       <div className="kv" style={{ marginBottom: 14 }}>
-        <span className="k">Agent</span><span>{state}</span>
+        <span className="k">Risk layer</span><span>{state}</span>
         {c?.reason && <><span className="k">Note</span><span className="small">{c.reason}</span></>}
       </div>
       <div className="field-grid">
-        {c?.paused || c?.emergency_stopped
+        {c?.paused
           ? <button className="btn green" disabled={busy} onClick={() => run(() => api.resume(), "Agent resumed")}>▶ Resume</button>
           : <button className="btn amber" disabled={busy} onClick={() => run(() => api.pause("Paused by user"), "Agent paused")}>❚❚ Pause</button>}
-        <button className="btn red" disabled={busy || c?.emergency_stopped} onClick={() => setAskStop(true)}>■ Emergency stop</button>
+        {c?.emergency_stopped
+          ? <button className="btn ghost" style={{ borderColor: "rgba(239,68,68,.5)" }} disabled={busy} onClick={() => setAskReset(true)}>↺ Reset e-stop</button>
+          : <button className="btn red" disabled={busy} onClick={() => setAskStop(true)}>■ Emergency stop</button>}
       </div>
       <div className="rule on" style={{ marginTop: 10 }}>
         <Toggle checked={!!c?.confirmation_mode} disabled={busy} label="Confirmation mode"
-          onChange={(v) => run(() => api.setConfirmationMode(v), v ? "Confirmation mode on: trades wait for you" : "Auto-execute on")} />
-        <div className="rule-text"><div className="rule-title">Confirmation mode</div><div className="rule-hint">Ask me before every trade</div></div>
+          onChange={(v) => run(() => api.setConfirmationMode(v), v ? "Confirmation mode on: entries wait for you" : "Auto-execute on")} />
+        <div className="rule-text"><div className="rule-title">Confirmation mode</div><div className="rule-hint">Ask me before every entry (protective exits always run)</div></div>
       </div>
 
       <div className="group" style={{ margin: "12px -18px -18px", padding: "16px 18px 18px" }}>
-        <div className="group-title">Manual override</div>
-        <div style={{ display: "grid", gap: 10 }}>
-          <Segmented value={ovr.side} onChange={(side) => setOvr({ ...ovr, side })}
-            options={[{ value: "BUY", label: "Buy" }, { value: "SELL", label: "Sell" }]} />
-          <div className="field-grid">
-            <div><span className="lbl">Token</span>
-              <select value={ovr.symbol} onChange={(e) => setOvr({ ...ovr, symbol: e.target.value })}>{TOKENS.map((t) => <option key={t.symbol}>{t.symbol}</option>)}</select></div>
-            <div><span className="lbl">Amount</span><NumberInput value={ovr.notional} min={1} step={50} suffix="USDT" onChange={(v) => setOvr({ ...ovr, notional: v ?? 0 })} /></div>
-          </div>
-          <div className="btn-row">
-            <button className="btn ghost" style={{ flex: 1 }} disabled={busy || c?.emergency_stopped || ovr.notional <= 0} onClick={() => setAskOvr(true)}>Send {ovr.side.toLowerCase()} order</button>
-            {pos && <button className="btn ghost" disabled={busy} onClick={() => run(() => api.override({ symbol: pos.symbol, side: "SELL", notional: (pos.current_price ?? pos.avg_entry_price) * pos.quantity, quantity: pos.quantity }), `${pos.symbol} position closed`)}>Close {pos.symbol}</button>}
-          </div>
+        <div className="group-title">Decision loop
+          <span className="count">{loop ? (loop.running ? <span className="pill ok"><span className="live-dot" />every {loop.interval_seconds}s</span> : <span className="pill">stopped</span>) : null}</span>
+        </div>
+        <div className="small muted" style={{ marginBottom: 10 }}>
+          {loop ? <>{loop.ticks} ticks{loop.replay_finished ? " · SIM replay finished" : ""}</> : "Loop state unavailable"}
+        </div>
+        <div className="btn-row">
+          {loop?.running
+            ? <button className="btn ghost" style={{ flex: 1 }} disabled={busy} onClick={async () => { const l = await run(() => api.stopLoop(), "Loop stopped"); if (l) setLoop(l); }}>■ Stop loop</button>
+            : <button className="btn ghost" style={{ flex: 1 }} disabled={busy} onClick={async () => { const l = await run(() => api.startLoop(interval ?? undefined), "Loop started"); if (l) setLoop(l); }}>▶ Start loop</button>}
+          <NumberInput value={interval ?? loop?.interval_seconds ?? 5} min={1} suffix="s" width={84} onChange={(v) => setIntervalS(v)} />
+          <button className="btn ghost" disabled={busy || !status?.agent_mode} title={status?.agent_mode ? "Run one cycle now" : "Activate an agent first"}
+            onClick={async () => { const d = await run(() => api.tick()); if (d) toast(`Tick: ${d.length ? d.map((x) => x.action.replace("_", " ")).join(", ") : "no decision"}`, "info"); }}>Tick once</button>
         </div>
       </div>
 
-      {askStop && (
-        <ConfirmDialog title="Trigger emergency stop?" danger confirmLabel="Stop everything" busy={busy}
-          onCancel={() => setAskStop(false)} onConfirm={() => run(() => api.emergencyStop("Emergency stop by user"), "Emergency stop engaged").then(() => setAskStop(false))}>
-          The agent halts immediately, pending trades are cancelled and all open positions are closed at market
-          ({c?.trading_mode ?? "SIM"} mode). You can resume afterwards.
+      {askReset && (
+        <ConfirmDialog title="Reset emergency stop?" confirmLabel="Reset emergency stop" busy={busy}
+          onCancel={() => setAskReset(false)} onConfirm={() => run(() => api.resetEmergencyStop(), "Emergency stop reset").then(() => setAskReset(false))}>
+          New entries become possible again on the next cycle{c?.paused ? " once you also resume (the agent is still paused)" : ""}.
+          Make sure the reason for the stop is resolved first.
         </ConfirmDialog>
       )}
-      {askOvr && (
-        <ConfirmDialog title="Send manual order?" confirmLabel={`${ovr.side} ${ovr.symbol}`} busy={busy}
-          onCancel={() => setAskOvr(false)} onConfirm={() => run(() => api.override({ symbol: ovr.symbol, side: ovr.side, notional: ovr.notional }), `${ovr.side} ${ovr.symbol} sent`).then(() => setAskOvr(false))}>
-          {ovr.side} {usd(ovr.notional)} of {ovr.symbol} in <b>{c?.trading_mode ?? "SIM"}</b> mode, bypassing the strategy (risk limits still apply).
+      {askStop && (
+        <ConfirmDialog title="Trigger emergency stop?" danger confirmLabel="Stop everything" busy={busy}
+          onCancel={() => setAskStop(false)} onConfirm={() => run(() => api.emergencyStop("Emergency stop by user", flatten), "Emergency stop engaged").then(() => setAskStop(false))}>
+          Every cycle becomes STAY OUT and pending confirmations are rejected ({c?.trading_mode ?? "SIM"} mode). Protective SL/TP exits keep running. Clear it later with “Reset e-stop” (Resume does not clear it).
+          <div className="rule on" style={{ marginTop: 12 }}>
+            <Toggle checked={flatten} onChange={setFlatten} label="Close all positions" />
+            <div className="rule-text"><div className="rule-title">Also close all open positions at market</div><div className="rule-hint">flatten = {String(flatten)}</div></div>
+          </div>
         </ConfirmDialog>
       )}
     </Card>

@@ -102,27 +102,30 @@ function inMarketHours(s: FullStrategy, ts: string): boolean {
 function evalEntry(s: FullStrategy, c: Candle[], ind: Ind, i: number): EntryEval {
   const e = s.entry, met: string[] = [], failed: string[] = [], px = c[i].close;
   const push = (name: string, v: boolean) => (v ? met : failed).push(name);
-  if (!inMarketHours(s, c[i].timestamp)) return { ok: false, met, failed, blocked: "outside market hours" };
+  // Condition ids match Bot 2's engine: EntryConditions field names + market_hours, min_volume, cooldown, max_open_positions
+  if (!inMarketHours(s, c[i].timestamp)) return { ok: false, met, failed: ["market_hours"], blocked: "outside market hours" };
+  if (s.filters.market_hours.enabled) met.push("market_hours");
   const mv = s.filters.min_volume;
   if (mv.enabled) {
     const avg = ind.fAvg[i];
     if ((avg != null && c[i].volume <= avg * mv.multiplier) || (mv.min_volume != null && c[i].volume < mv.min_volume))
-      return { ok: false, met, failed, blocked: "volume below minimum (filter)" };
+      return { ok: false, met, failed: ["min_volume"], blocked: "volume below minimum (filter)" };
+    met.push("min_volume");
   }
-  if (e.rsi_below.enabled && ind.rsiE[i] != null) push(`RSI ${ind.rsiE[i]!.toFixed(1)} < ${e.rsi_below.threshold}`, ind.rsiE[i]! < e.rsi_below.threshold);
-  if (e.price_above_sma.enabled && ind.smaV[i] != null) push(`price > SMA${e.price_above_sma.period}`, px > ind.smaV[i]!);
-  if (e.price_above_ema.enabled && ind.emaV[i] != null) push(`price > EMA${e.price_above_ema.period}`, px > ind.emaV[i]!);
+  if (e.rsi_below.enabled && ind.rsiE[i] != null) push("rsi_below", ind.rsiE[i]! < e.rsi_below.threshold);
+  if (e.price_above_sma.enabled && ind.smaV[i] != null) push("price_above_sma", px > ind.smaV[i]!);
+  if (e.price_above_ema.enabled && ind.emaV[i] != null) push("price_above_ema", px > ind.emaV[i]!);
   const { line, signal } = ind.macdE;
   if (e.macd_bullish_cross.enabled && line[i] != null && signal[i] != null && line[i - 1] != null && signal[i - 1] != null)
-    push("MACD bullish cross", line[i]! > signal[i]! && line[i - 1]! <= signal[i - 1]!);
+    push("macd_bullish_cross", line[i]! > signal[i]! && line[i - 1]! <= signal[i - 1]!);
   if (e.bollinger_lower.enabled && ind.bb.lower[i] != null)
-    push("near lower BB", px < ind.bb.lower[i]! * (1 + e.bollinger_lower.proximity_pct / 100));
-  if (e.volume_above_avg.enabled && ind.vAvg[i] != null) push("volume above avg", c[i].volume > ind.vAvg[i]! * e.volume_above_avg.multiplier);
+    push("bollinger_lower", px < ind.bb.lower[i]! * (1 + e.bollinger_lower.proximity_pct / 100));
+  if (e.volume_above_avg.enabled && ind.vAvg[i] != null) push("volume_above_avg", c[i].volume > ind.vAvg[i]! * e.volume_above_avg.multiplier);
   if (e.breakout.enabled && i >= e.breakout.lookback) {
     const w = c.slice(i - e.breakout.lookback, i);
-    push(`breakout ${e.breakout.direction}`, e.breakout.direction === "HIGH" ? px > Math.max(...w.map((x) => x.high)) : px < Math.min(...w.map((x) => x.low)));
+    push("breakout", e.breakout.direction === "HIGH" ? px > Math.max(...w.map((x) => x.high)) : px < Math.min(...w.map((x) => x.low)));
   }
-  const n = met.length + failed.length;
+  const n = met.length + failed.length - (s.filters.market_hours.enabled ? 1 : 0) - (s.filters.min_volume.enabled ? 1 : 0);
   if (n === 0) return { ok: false, met, failed, blocked: "no active conditions" };
   return { ok: e.logic === "AND" ? failed.length === 0 : met.length > 0, met, failed };
 }
@@ -206,3 +209,14 @@ export function fillStrategy(s: ManualStrategy): FullStrategy {
   };
   return merge(defaultStrategy(), s);
 }
+
+/** Friendly labels for Signal.conditions_met / conditions_failed ids (Bot 2's engine). Unknown ids pass through. */
+export const CONDITION_LABEL: Record<string, string> = {
+  rsi_below: "RSI below threshold", price_above_sma: "Price above SMA", price_above_ema: "Price above EMA",
+  macd_bullish_cross: "MACD bullish cross", bollinger_lower: "Near lower Bollinger", volume_above_avg: "Volume above average",
+  breakout: "Breakout", market_hours: "Market hours", min_volume: "Min volume", cooldown: "Cooldown elapsed",
+  max_open_positions: "Position slot free",
+};
+export const conditionLabel = (id: string) => CONDITION_LABEL[id] ?? id.replace(/_/g, " ");
+/** Signal.strategy / active_strategy "NONE" means Auto Mode is staying out. */
+export const strategyLabel = (s?: string | null) => (!s ? "—" : s === "NONE" ? "Staying out" : s);

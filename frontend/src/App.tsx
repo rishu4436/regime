@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { CONTRACTS_VERSION } from "./contracts";
 import { API_MODE } from "./api";
 import { ModeBadge, RegimeBadge } from "./components/Badges";
@@ -17,9 +17,7 @@ export default function App() {
 
 function Shell() {
   const [tab, setTab] = useState<Tab>("dashboard");
-  const { status, error, refresh, lastEvent } = useStatus();
-  const [tick, setTick] = useState(0);
-  useEffect(() => { if (lastEvent?.type === "PRICE") setTick((t) => t + 1); }, [lastEvent]);
+  const { status, error, refresh, alertsVersion, tick } = useStatus();
   const pendingCount = (status?.recent_decisions ?? []).filter((d) => d.execution?.status === "PENDING_CONFIRMATION").length;
   const meta = TABS.find((t) => t.id === tab) ?? TABS[0];
   const go = (t: Tab) => setTab(TABS.some((x) => x.id === t) ? t : "dashboard");
@@ -52,7 +50,7 @@ function Shell() {
           <ModeBadge mode={status?.control.trading_mode} />
         </div>
         {error && <div className="banner amber"><span className="grow">Backend unreachable: {error}</span><span className="small muted">Start the API or run with VITE_API_MODE=mock</span></div>}
-        {tab === "dashboard" && <Dashboard status={status} refresh={refresh} tick={tick} go={go} />}
+        {tab === "dashboard" && <Dashboard status={status} refresh={refresh} tick={tick} alertsVersion={alertsVersion} go={go} />}
       </main>
       <nav className="mobile-nav">{nav}</nav>
     </div>
