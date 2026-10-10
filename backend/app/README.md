@@ -29,3 +29,20 @@ Suggested API (all bodies/responses are contract models): `GET /health`, `GET /a
 - Unit tests live in this directory's `tests/` and pass with `pytest` from the repo root; the whole suite stays green.
 - Works fully in **SIM** mode with `backend.mocks` (no network, no API keys).
 - No edits outside the owned directory. Contract changes go through the coordinator (see CONTRIBUTING.md).
+
+## Implementation (Bot 6)
+- `API.md` - REST + WebSocket shape for the UI (contract models; *(app)* types proposed for the contracts).
+- `main.py` - `create_app(settings, components)` + module-level `app`. `loop.py` - the trading loop.
+- `wiring.py` - builds engine / risk / exchange / explainer against the Protocols. Until a bot's module is
+  implemented, `fallbacks.py` stands in (engine/explainer per method, risk as a whole); `/api/system` shows which.
+- `exits.py` - executable statement of the agreed protective-exit rule (parity-tested in `tests/e2e/test_exit_parity.py`).
+- `portfolio.py` (cash / lots / PnL, maintains `Position.highest_price` after `check_exits`), `feed.py` (SIM bar replay,
+  PAPER/LIVE polling), `events.py` (log + WS fan-out), `store.py` (saved strategies), `settings.py` (env).
+- Monitoring in `backend/monitoring` (JSONL event log, alerts, mark-to-market performance).
+
+## Run
+- `backend/app/deploy/run.sh` (backend :8000 + Vite :5173) or `run.sh --backend-only`.
+- `docker compose -f backend/app/deploy/docker-compose.yml up --build` (UI :8080, API :8000).
+  These live here because root files / `scripts/` belong to the coordinator; they can be moved to the root later.
+- Env: `TRADING_MODE` (SIM default), `LIVE_TRADING_ENABLED` + `BINANCE_API_KEY/SECRET` (LIVE only), `SIM_SEED`,
+  `SIM_REPLAY_BARS`, `STARTING_CAPITAL`, `LOOP_INTERVAL_SECONDS`, `PENDING_TTL_SECONDS`, `LOG_DIR`, `USE_FALLBACKS_ONLY`.

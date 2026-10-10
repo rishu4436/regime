@@ -40,7 +40,7 @@ they are proposed as contract additions (see bottom).
 | POST | `/api/manual/activate` | `{strategy_id}` or `{strategy: ManualStrategy}` | `StatusSnapshot` |
 | POST | `/api/auto/activate` | `AutoConfig` | `StatusSnapshot` |
 | POST | `/api/agent/deactivate` | – | `StatusSnapshot` |
-| GET | `/api/loop` | – | `LoopState` *(app)*: `{running, interval_seconds, ticks, agent_mode, active_symbol, active_strategy}` |
+| GET | `/api/loop` | – | `LoopState` *(app)*: `{running, interval_seconds, ticks, agent_mode, active_symbol, active_strategy, replay_finished}` |
 | POST | `/api/loop/start` | `{interval_seconds?: 5}` | `LoopState` |
 | POST | `/api/loop/stop` | – | `LoopState` |
 | POST | `/api/loop/tick` | – | `Decision[]` (runs exactly one cycle now: exits first, then entry) |
@@ -78,7 +78,7 @@ Protective exits (SL / TP / trailing / emergency flatten) execute without confir
 | GET | `/api/performance` | – | `PerformanceSummary` *(app)*: `{starting_capital, equity, realized_pnl, unrealized_pnl, total_return_pct, max_drawdown_pct, win_rate_pct, num_trades, wins, losses, consecutive_losses, equity_curve: EquityPoint[]}` (equity marked to market every tick → drawdown not understated) |
 
 Alert codes: `EMERGENCY_STOP`, `PAUSED`, `CONSECUTIVE_LOSSES` (≥3), `DAILY_LOSS` , `QUOTE_EXPIRED`, `EXECUTION_FAILED`,
-`RISK_BLOCKED`, `LIVE_MODE`, `COMPONENT_FALLBACK`.
+`RISK_BLOCKED`, `LIVE_MODE`, `COMPONENT_FALLBACK`, `REPLAY_FINISHED` (SIM replay hit the last bar), `TICK_FAILED`.
 
 ## LLM (Bot 5, never trades)
 | Method | Path | Body | Response |
