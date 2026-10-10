@@ -1,0 +1,540 @@
+{
+  "$defs": {
+    "ActivationMode": {
+      "description": "How an approved signal is executed. AUTO_EXECUTE = execute immediately, CONFIRMATION = wait for the user.",
+      "enum": [
+        "AUTO_EXECUTE",
+        "CONFIRMATION"
+      ],
+      "title": "ActivationMode",
+      "type": "string"
+    },
+    "BollingerLowerCondition": {
+      "additionalProperties": false,
+      "description": "sim:useBB. True when close < lower_band * (1 + proximity_pct/100) (i.e. near OR below the band).",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "period": {
+          "default": 20,
+          "minimum": 2,
+          "title": "Period",
+          "type": "integer"
+        },
+        "proximity_pct": {
+          "default": 2.0,
+          "description": "Simulator uses close < lower * 1.02",
+          "minimum": 0,
+          "title": "Proximity Pct",
+          "type": "number"
+        },
+        "std_dev": {
+          "default": 2.0,
+          "exclusiveMinimum": 0,
+          "title": "Std Dev",
+          "type": "number"
+        }
+      },
+      "title": "BollingerLowerCondition",
+      "type": "object"
+    },
+    "BreakoutCondition": {
+      "additionalProperties": false,
+      "description": "PDF-only (not in the simulator). HIGH: close > max(high of previous `lookback` bars);\nLOW: close < min(low of previous `lookback` bars).",
+      "properties": {
+        "direction": {
+          "$ref": "#/$defs/BreakoutDirection",
+          "default": "HIGH"
+        },
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "lookback": {
+          "default": 20,
+          "minimum": 2,
+          "title": "Lookback",
+          "type": "integer"
+        }
+      },
+      "title": "BreakoutCondition",
+      "type": "object"
+    },
+    "BreakoutDirection": {
+      "description": "Price-action breakout: break of the recent HIGH (bullish) or recent LOW.",
+      "enum": [
+        "HIGH",
+        "LOW"
+      ],
+      "title": "BreakoutDirection",
+      "type": "string"
+    },
+    "ConditionLogic": {
+      "enum": [
+        "AND",
+        "OR"
+      ],
+      "title": "ConditionLogic",
+      "type": "string"
+    },
+    "EntryConditions": {
+      "additionalProperties": false,
+      "description": "Combination semantics (simulator): each ENABLED condition whose indicator is available (not in warm-up)\ncontributes one boolean; conditions whose indicator is still null are skipped, not counted as false.\nIf no booleans were produced -> no entry. AND = all true (sim: every), OR = at least one true (sim: some).\nCanonical names for Signal.conditions_met/failed are the field names below.",
+      "properties": {
+        "bollinger_lower": {
+          "$ref": "#/$defs/BollingerLowerCondition"
+        },
+        "breakout": {
+          "$ref": "#/$defs/BreakoutCondition"
+        },
+        "logic": {
+          "$ref": "#/$defs/ConditionLogic",
+          "default": "AND"
+        },
+        "macd_bullish_cross": {
+          "$ref": "#/$defs/MacdCrossCondition"
+        },
+        "price_above_ema": {
+          "$ref": "#/$defs/PriceAboveEmaCondition"
+        },
+        "price_above_sma": {
+          "$ref": "#/$defs/PriceAboveSmaCondition"
+        },
+        "rsi_below": {
+          "$ref": "#/$defs/RsiBelowCondition"
+        },
+        "volume_above_avg": {
+          "$ref": "#/$defs/VolumeAboveAverageCondition"
+        }
+      },
+      "title": "EntryConditions",
+      "type": "object"
+    },
+    "ExitRules": {
+      "additionalProperties": false,
+      "description": "Evaluated on each bar BEFORE entries; first match wins. Simulator order:\nTRAILING_STOP -> TAKE_PROFIT (pnl >= tp) -> STOP_LOSS (pnl <= -sl) -> RSI_EXIT -> MACD_EXIT.\n\nIntrabar rules for the engine / risk layer (contract v0.2, deviates from the close-only simulator):\n- If the bar's range hits BOTH the stop-loss and the take-profit level, STOP_LOSS wins (conservative).\n- SL / TP / trailing fill AT the level, or at the bar OPEN if the bar gapped through the level\n  (SL/trailing: fill = min(level, open) when open < level; TP: fill = max(level, open) when open > level).\n- The trailing level uses Position.highest_price as of the PREVIOUS bar (the app updates it from bar.high after\n  check_exits), so a bar's own high never tightens its own stop.\n- Open positions are closed with reason END at the end of a backtest.",
+      "properties": {
+        "macd_bearish_cross": {
+          "$ref": "#/$defs/MacdCrossCondition"
+        },
+        "rsi_above": {
+          "$ref": "#/$defs/RsiExitRule"
+        },
+        "stop_loss_pct": {
+          "default": 6.0,
+          "exclusiveMinimum": 0,
+          "title": "Stop Loss Pct",
+          "type": "number"
+        },
+        "take_profit_pct": {
+          "default": 12.0,
+          "exclusiveMinimum": 0,
+          "title": "Take Profit Pct",
+          "type": "number"
+        },
+        "trailing_stop": {
+          "$ref": "#/$defs/TrailingStopRule"
+        }
+      },
+      "title": "ExitRules",
+      "type": "object"
+    },
+    "MacdCrossCondition": {
+      "additionalProperties": false,
+      "description": "Entry (sim:useMACD): line crosses ABOVE signal this bar (line[i] > sig[i] and line[i-1] <= sig[i-1]).\nExit (sim:useMacdExit): line crosses BELOW signal (line[i] < sig[i] and line[i-1] > sig[i-1]).",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "params": {
+          "$ref": "#/$defs/MacdParams"
+        }
+      },
+      "title": "MacdCrossCondition",
+      "type": "object"
+    },
+    "MacdParams": {
+      "additionalProperties": false,
+      "properties": {
+        "fast": {
+          "default": 12,
+          "minimum": 1,
+          "title": "Fast",
+          "type": "integer"
+        },
+        "signal": {
+          "default": 9,
+          "description": "Simulator approximates a 9-period signal EMA with alpha=0.15",
+          "minimum": 1,
+          "title": "Signal",
+          "type": "integer"
+        },
+        "slow": {
+          "default": 26,
+          "minimum": 2,
+          "title": "Slow",
+          "type": "integer"
+        }
+      },
+      "title": "MacdParams",
+      "type": "object"
+    },
+    "ManualStrategy": {
+      "additionalProperties": false,
+      "description": "A user-built rule set (spec 2.1/2.2). Saved and exchanged as JSON. Defaults == simulator defaults.",
+      "properties": {
+        "activation": {
+          "$ref": "#/$defs/ActivationMode",
+          "default": "CONFIRMATION"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "entry": {
+          "$ref": "#/$defs/EntryConditions"
+        },
+        "exit": {
+          "$ref": "#/$defs/ExitRules"
+        },
+        "filters": {
+          "$ref": "#/$defs/StrategyFilters"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "default": "My Strategy",
+          "title": "Name",
+          "type": "string"
+        },
+        "risk": {
+          "$ref": "#/$defs/PositionRiskRules"
+        },
+        "symbol": {
+          "default": "NVDAon",
+          "description": "Token symbol (sim:token): NVDAon, TSLAx, AAPLB, ...",
+          "title": "Symbol",
+          "type": "string"
+        },
+        "timeframe": {
+          "$ref": "#/$defs/Timeframe",
+          "default": "1h"
+        },
+        "version": {
+          "default": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "title": "ManualStrategy",
+      "type": "object"
+    },
+    "MarketHoursFilter": {
+      "additionalProperties": false,
+      "description": "sim:marketHours. Real engine: only trade when bar time is within [start, end) UTC (weekdays if set).\nThe simulator fakes this as bar_index % 24 < 16.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "end_hour_utc": {
+          "default": 20,
+          "maximum": 24,
+          "minimum": 0,
+          "title": "End Hour Utc",
+          "type": "integer"
+        },
+        "start_hour_utc": {
+          "default": 13,
+          "maximum": 23,
+          "minimum": 0,
+          "title": "Start Hour Utc",
+          "type": "integer"
+        },
+        "weekdays_only": {
+          "default": true,
+          "title": "Weekdays Only",
+          "type": "boolean"
+        }
+      },
+      "title": "MarketHoursFilter",
+      "type": "object"
+    },
+    "MinVolumeFilter": {
+      "additionalProperties": false,
+      "description": "sim:minVol ('Require above-average volume'). Hard gate: volume > multiplier * average volume\n(same average as VolumeAboveAverageCondition) and, if set, volume >= min_volume (absolute, PDF).",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "min_volume": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Volume"
+        },
+        "multiplier": {
+          "default": 1.1,
+          "exclusiveMinimum": 0,
+          "title": "Multiplier",
+          "type": "number"
+        }
+      },
+      "title": "MinVolumeFilter",
+      "type": "object"
+    },
+    "PositionRiskRules": {
+      "additionalProperties": false,
+      "description": "Entry allowed only if open_positions < max_open_positions AND bars_since_last_exit > cooldown_bars.",
+      "properties": {
+        "cooldown_bars": {
+          "default": 5,
+          "description": "sim:cooldown",
+          "minimum": 0,
+          "title": "Cooldown Bars",
+          "type": "integer"
+        },
+        "max_loss_per_trade_pct": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "PDF-only; % of capital",
+          "title": "Max Loss Per Trade Pct"
+        },
+        "max_open_positions": {
+          "default": 1,
+          "description": "sim:maxPos (UI allows 1-3)",
+          "minimum": 1,
+          "title": "Max Open Positions",
+          "type": "integer"
+        },
+        "position_size_pct": {
+          "default": 15.0,
+          "description": "% of current capital per entry (sim:size)",
+          "exclusiveMinimum": 0,
+          "maximum": 100,
+          "title": "Position Size Pct",
+          "type": "number"
+        }
+      },
+      "title": "PositionRiskRules",
+      "type": "object"
+    },
+    "PriceAboveEmaCondition": {
+      "additionalProperties": false,
+      "description": "sim:useEMA / sim:emaPeriod. True when close > EMA(period).",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "period": {
+          "default": 20,
+          "minimum": 2,
+          "title": "Period",
+          "type": "integer"
+        }
+      },
+      "title": "PriceAboveEmaCondition",
+      "type": "object"
+    },
+    "PriceAboveSmaCondition": {
+      "additionalProperties": false,
+      "description": "sim:useSMA / sim:smaPeriod. True when close > SMA(period).",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "period": {
+          "default": 50,
+          "minimum": 2,
+          "title": "Period",
+          "type": "integer"
+        }
+      },
+      "title": "PriceAboveSmaCondition",
+      "type": "object"
+    },
+    "RsiBelowCondition": {
+      "additionalProperties": false,
+      "description": "sim:useRSI / sim:rsiEntry. True when RSI(period) < threshold.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "period": {
+          "default": 14,
+          "minimum": 2,
+          "title": "Period",
+          "type": "integer"
+        },
+        "threshold": {
+          "default": 35.0,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Threshold",
+          "type": "number"
+        }
+      },
+      "title": "RsiBelowCondition",
+      "type": "object"
+    },
+    "RsiExitRule": {
+      "additionalProperties": false,
+      "description": "sim:useRsiExit / sim:rsiExit. Exit when RSI(period) > threshold.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "period": {
+          "default": 14,
+          "minimum": 2,
+          "title": "Period",
+          "type": "integer"
+        },
+        "threshold": {
+          "default": 70.0,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Threshold",
+          "type": "number"
+        }
+      },
+      "title": "RsiExitRule",
+      "type": "object"
+    },
+    "StrategyFilters": {
+      "additionalProperties": false,
+      "properties": {
+        "market_hours": {
+          "$ref": "#/$defs/MarketHoursFilter"
+        },
+        "min_volume": {
+          "$ref": "#/$defs/MinVolumeFilter"
+        }
+      },
+      "title": "StrategyFilters",
+      "type": "object"
+    },
+    "Timeframe": {
+      "enum": [
+        "1m",
+        "5m",
+        "15m",
+        "1h",
+        "4h",
+        "1d"
+      ],
+      "title": "Timeframe",
+      "type": "string"
+    },
+    "TrailingStopRule": {
+      "additionalProperties": false,
+      "description": "sim:useTrail / sim:trail. Stop starts at entry*(1-pct/100), ratchets up to close*(1-pct/100);\nexit when close < stop.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "pct": {
+          "default": 4.0,
+          "exclusiveMinimum": 0,
+          "title": "Pct",
+          "type": "number"
+        }
+      },
+      "title": "TrailingStopRule",
+      "type": "object"
+    },
+    "VolumeAboveAverageCondition": {
+      "additionalProperties": false,
+      "description": "sim:useVolume. True when volume > multiplier * average volume.\nperiod=None means 'average over all candles passed to the evaluator' (simulator behaviour).",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "multiplier": {
+          "default": 1.1,
+          "exclusiveMinimum": 0,
+          "title": "Multiplier",
+          "type": "number"
+        },
+        "period": {
+          "anyOf": [
+            {
+              "minimum": 2,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Period"
+        }
+      },
+      "title": "VolumeAboveAverageCondition",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "initial_capital": {
+      "default": 10000.0,
+      "exclusiveMinimum": 0,
+      "title": "Initial Capital",
+      "type": "number"
+    },
+    "limit": {
+      "default": 500,
+      "maximum": 5000,
+      "minimum": 61,
+      "title": "Limit",
+      "type": "integer"
+    },
+    "strategy": {
+      "$ref": "#/$defs/ManualStrategy"
+    }
+  },
+  "required": [
+    "strategy"
+  ],
+  "title": "BacktestRequest",
+  "type": "object"
+}
