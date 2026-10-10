@@ -43,16 +43,17 @@ evaluation), `manager.py` (`DefaultRiskManager`), `tests/` (pytest). Determinist
 ### Usage
 
 ```python
-from backend.risk import DefaultRiskManager, RiskConfig, exit_reason_of, is_risk_exit
+from backend.risk import DefaultRiskManager, RiskConfig, is_risk_exit
 
 rm = DefaultRiskManager()                       # ControlState() defaults: SIM, confirmation ON, not paused
 rm = DefaultRiskManager(control, config=RiskConfig(max_total_exposure_pct=50), clock=fake_clock)  # tests
 rm.apply_manual_strategy(strategy)              # use ManualStrategy.risk / .exit / .activation for strategy.symbol
 
 # per bar / tick (trading loop, Bot 6)
-for sell in rm.check_exits_candles(portfolio, {sym: last_closed_candle}):   # or rm.check_exits(portfolio, {sym: price})
+for sell in rm.check_exits(portfolio, prices, bars={sym: last_closed_candle}):   # bars optional (prices-only fallback)
     v = rm.check(sell, portfolio, rm.get_control_state())   # approved; never requires confirmation (protective)
-    ...execute: OrderRequest(side=SELL, quantity=<full position qty>, ...); exit_reason_of(sell) -> ExitReason
+    ...execute: close Position sell.position_id at sell.price (fill), reason sell.exit_reason
+# then the APP raises highest_price = max(highest_price or entry, bar.high) for every still-open position
 signal = engine.evaluate_manual(...)            # or evaluate_auto
 verdict = rm.check(signal, portfolio, rm.get_control_state())
 if verdict.approved: notional = verdict.adjusted_notional; wait for user if verdict.requires_confirmation
@@ -84,29 +85,36 @@ enabled, max-loss-per-trade (`notional <= starting_capital * max_loss% / stop_lo
 with "reduced from X to Y"; if the result is below `min_order_notional` the verdict is blocked.
 
 **Confirmation:** `requires_confirmation = approved and (control.confirmation_mode or symbol activation == CONFIRMATION)`.
-Protective SELLs (from `check_exits`, tagged `"risk_exit"` in `conditions_met`) and any SELL during emergency stop never
+Protective SELLs (`exit_reason` in STOP_LOSS / TAKE_PROFIT / TRAILING_STOP / MAX_LOSS / EMERGENCY_STOP, i.e. what
+`check_exits` produces; see `is_risk_exit`) and any SELL during emergency stop never
 wait for confirmation (`risk_exits_bypass_confirmation=True`). Strategy SELLs (e.g. RSI exit from the engine) do.
 
 **Per-symbol rules:** `apply_manual_strategy(s)` / `set_symbol_rules(symbol, SymbolRiskRules(...))` override
 `position_rules`, `exit_rules`, `activation` for one symbol; everything else uses `RiskConfig` defaults.
 
-### `check_exits(portfolio, prices)` / `check_exits_candles(portfolio, candles)` -> `list[Signal]`
-Returns SELL signals (`price` = fill price, `proposed_notional` = qty * fill, `conditions_met = ["risk_exit", <ExitReason>]`,
-`reason` = full explanation, `strategy` = the position's strategy, `source` MANUAL if strategy starts with `MANUAL` else AUTO).
+### `check_exits(portfolio, prices, bars=None) -> list[Signal]`
+One SELL per position to close, with `exit_reason`, `position_id` (= `Position.id`), `price` = **fill price**,
+`proposed_notional` = qty * fill, `reason` = full explanation, `conditions_met = [<ExitReason>]`, `strategy` = the
+position's strategy, `source` MANUAL if strategy starts with `MANUAL` else AUTO, `timestamp` = bar time (or clock).
+`bars` (symbol -> latest closed bar) turns on the intrabar rules below; symbols without a bar use `prices`, then
+`Position.current_price`; positions with no price at all are skipped. **The portfolio is never mutated** and the manager
+keeps no per-position state — same input, same output. `check_exits_candles(portfolio, candles)` is a deprecated alias
+for `check_exits(portfolio, {}, bars=candles)`.
 Stops are enforced even while paused. During **emergency stop every open position gets an `EMERGENCY_STOP` SELL** at the
 latest price (candle close / price / `current_price` / entry). Levels: `Position.stop_loss_price` /
 `take_profit_price` / `trailing_stop_pct` if set, else `entry * (1 -/+ pct)` from the symbol's `ExitRules`
 (TP 12%, SL 6%, trailing 4% off by default). Max-loss-per-trade (OFF by default) adds a stop at
 `entry - starting_capital * pct / 100 / quantity` (reason `MAX_LOSS`). RSI / MACD exits need indicators and are Bot 2's job.
 
-#### Exit semantics (agreed with Bot 2's `backtest_manual` — must match exactly)
+#### Exit semantics (contract v0.2 `ExitRules` docstring + reference/README.md item 12; shared with Bot 2's `backtest_manual`)
 1. **SL and TP use the bar's LOW / HIGH.** `low <= stop` -> stop loss; `high >= target` -> take profit.
    **If a stop and the TP are both hit in the same bar, the stop wins** (intrabar order unknown -> assume worst case).
    This applies to every stop (SL, trailing, max-loss), not only SL.
-2. **Trailing stop:** the bar's LOW is compared with the trail computed from the **previous** bars' high-water mark
-   (`trail = hwm_prev * (1 - pct/100)`, strict `low < trail` like the simulator's `close < trail`); only if the position
-   survives is the high-water mark raised with **this bar's HIGH**. Initial hwm = entry (or `Position.highest_price` if
-   higher), so the first trail is `entry * (1 - pct/100)`, as in the simulator.
+2. **Trailing stop:** the bar's LOW is compared with `trail = hwm_prev * (1 - pct/100)` where
+   `hwm_prev = max(Position.highest_price, entry)` **as given** (prior bars only; strict `low < trail` like the simulator's
+   `close < trail`). A bar's own high never tightens its own stop. The **app** then raises
+   `highest_price = max(highest_price or entry, bar.high)` for still-open positions (risk does not store it). With
+   `highest_price=None` the first trail is `entry * (1 - pct/100)`, as in the simulator.
 3. **Fills at the level, not the close.** If the bar **opens beyond the level** (gap down through a stop, gap up through
    the target) the fill is the **open**.
 4. Several stops in one bar: the highest level (touched first on the way down) gives the fill and reason; ties ->
@@ -118,19 +126,21 @@ to the simulator's close check (raising-then-checking with the same close can ne
 fills are then the last price. With candles, wicks that touch a level trigger exits the sim would miss, and fills are at
 the level/open instead of the close — so backtest PnL will differ from the sim (by design, more realistic).
 
-Trailing high-water marks are kept in memory per position (`symbol|opened_at|entry`) and pruned when the position is
-gone. Call `check_exits*` **once per closed bar** (calling it repeatedly with the same candle is harmless; skipping bars
-loses wick information). Don't call it on the entry bar (the sim manages exits before entries on each bar).
+Call `check_exits` **once per closed bar**, before entries, and not on the entry bar (the sim manages exits before
+entries on each bar). Skipping bars loses wick information; if the app doesn't update `highest_price` the trailing stop
+never ratchets.
 
 ### Controls
-`pause(reason)` -> paused; `resume()` clears pause but **not** an emergency stop; `emergency_stop(reason)` -> emergency +
-paused, blocks every BUY and makes `check_exits` close all positions; `reset_emergency_stop()` clears it and leaves the
-agent paused (explicit `resume()` needed); `set_confirmation_mode(bool)`; `set_trading_mode(mode)` refuses LIVE unless
+`pause(reason)` -> paused; `resume()` clears `paused` only, **never** an emergency stop; `emergency_stop(reason)` ->
+`emergency_stopped=True` (`paused` untouched), blocks every BUY and makes `check_exits` emit an `EMERGENCY_STOP` SELL for
+every position (closing SELLs still pass `check`); `reset_emergency_stop()` (interface method) clears it and leaves
+`paused` as it was; `set_confirmation_mode(bool)`; `set_trading_mode(mode)` refuses LIVE unless
 `RiskConfig.allow_live=True` (default False, and `check` blocks everything in LIVE without it). Every change sets
 `reason` and `updated_at`.
 
 ### Notes for other bots
-- **Bot 6 (loop):** per bar `check_exits_candles` -> `check` each SELL -> execute full quantity -> update
+- **Bot 6 (loop):** per bar `check_exits(portfolio, prices, bars)` -> `check` each SELL -> close `position_id` ->
+  update `highest_price` from `bar.high` for open positions ->
   `bars_since_exit[symbol] = 0` on exit and `+1` per bar, `daily_pnl`, `trades_today`, `equity`, `cash`; then engine ->
   `check(signal, portfolio, rm.get_control_state())` -> `adjusted_notional`; if `requires_confirmation` hold as
   `PENDING_CONFIRMATION` and re-run `check` at confirm time (state may have changed). Expose pause / resume /
