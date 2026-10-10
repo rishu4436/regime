@@ -1,0 +1,19 @@
+{
+  "additionalProperties": false,
+  "description": "sim:useTrail / sim:trail. Stop starts at entry*(1-pct/100), ratchets up to close*(1-pct/100);\nexit when close < stop.",
+  "properties": {
+    "enabled": {
+      "default": false,
+      "title": "Enabled",
+      "type": "boolean"
+    },
+    "pct": {
+      "default": 4.0,
+      "exclusiveMinimum": 0,
+      "title": "Pct",
+      "type": "number"
+    }
+  },
+  "title": "TrailingStopRule",
+  "type": "object"
+}

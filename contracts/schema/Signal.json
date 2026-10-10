@@ -1,0 +1,148 @@
+{
+  "$defs": {
+    "Action": {
+      "enum": [
+        "BUY",
+        "SELL",
+        "STAY_OUT"
+      ],
+      "title": "Action",
+      "type": "string"
+    },
+    "AgentMode": {
+      "description": "Which brain produced a signal: the user's rule set (MANUAL) or the regime-driven preset selector (AUTO).",
+      "enum": [
+        "MANUAL",
+        "AUTO"
+      ],
+      "title": "AgentMode",
+      "type": "string"
+    },
+    "PresetName": {
+      "enum": [
+        "DCA",
+        "SMART_DCA",
+        "BUY_THE_DIP",
+        "TREND_FOLLOWING",
+        "GRID"
+      ],
+      "title": "PresetName",
+      "type": "string"
+    },
+    "Regime": {
+      "description": "The six market regimes from spec section 3.1.",
+      "enum": [
+        "STRONG_UPTREND",
+        "MILD_UPTREND",
+        "SIDEWAYS",
+        "OVERSOLD_PULLBACK",
+        "HIGH_VOLATILITY",
+        "DOWNTREND"
+      ],
+      "title": "Regime",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Proposed action from the strategy engine (Bot 2). Never executed without a RiskVerdict.",
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action"
+    },
+    "conditions_failed": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Conditions Failed",
+      "type": "array"
+    },
+    "conditions_met": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Conditions Met",
+      "type": "array"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "preset": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PresetName"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "price": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Price"
+    },
+    "proposed_notional": {
+      "default": 0.0,
+      "minimum": 0,
+      "title": "Proposed Notional",
+      "type": "number"
+    },
+    "proposed_size_pct": {
+      "default": 0.0,
+      "maximum": 100,
+      "minimum": 0,
+      "title": "Proposed Size Pct",
+      "type": "number"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    },
+    "regime": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Regime"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "source": {
+      "$ref": "#/$defs/AgentMode"
+    },
+    "strategy": {
+      "description": "Preset name (AUTO) or 'MANUAL:<name>'",
+      "title": "Strategy",
+      "type": "string"
+    },
+    "symbol": {
+      "title": "Symbol",
+      "type": "string"
+    },
+    "timestamp": {
+      "format": "date-time",
+      "title": "Timestamp",
+      "type": "string"
+    }
+  },
+  "required": [
+    "symbol",
+    "action",
+    "source",
+    "strategy",
+    "reason"
+  ],
+  "title": "Signal",
+  "type": "object"
+}

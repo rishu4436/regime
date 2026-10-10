@@ -1,0 +1,1930 @@
+{
+  "$defs": {
+    "Action": {
+      "enum": [
+        "BUY",
+        "SELL",
+        "STAY_OUT"
+      ],
+      "title": "Action",
+      "type": "string"
+    },
+    "ActivationMode": {
+      "description": "How an approved signal is executed. AUTO_EXECUTE = execute immediately, CONFIRMATION = wait for the user.",
+      "enum": [
+        "AUTO_EXECUTE",
+        "CONFIRMATION"
+      ],
+      "title": "ActivationMode",
+      "type": "string"
+    },
+    "AgentMode": {
+      "description": "Which brain produced a signal: the user's rule set (MANUAL) or the regime-driven preset selector (AUTO).",
+      "enum": [
+        "MANUAL",
+        "AUTO"
+      ],
+      "title": "AgentMode",
+      "type": "string"
+    },
+    "AutoConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "activation": {
+          "$ref": "#/$defs/ActivationMode",
+          "default": "CONFIRMATION"
+        },
+        "capital": {
+          "description": "USDT allocated to the auto agent",
+          "exclusiveMinimum": 0,
+          "title": "Capital",
+          "type": "number"
+        },
+        "enabled_presets": {
+          "items": {
+            "$ref": "#/$defs/PresetName"
+          },
+          "minItems": 1,
+          "title": "Enabled Presets",
+          "type": "array"
+        },
+        "style": {
+          "$ref": "#/$defs/TraderStyle",
+          "default": "BALANCED"
+        },
+        "symbol": {
+          "title": "Symbol",
+          "type": "string"
+        },
+        "timeframe": {
+          "$ref": "#/$defs/Timeframe",
+          "default": "1h"
+        }
+      },
+      "required": [
+        "symbol",
+        "capital"
+      ],
+      "title": "AutoConfig",
+      "type": "object"
+    },
+    "BacktestResult": {
+      "additionalProperties": false,
+      "properties": {
+        "equity_curve": {
+          "items": {
+            "$ref": "#/$defs/EquityPoint"
+          },
+          "title": "Equity Curve",
+          "type": "array"
+        },
+        "final_equity": {
+          "title": "Final Equity",
+          "type": "number"
+        },
+        "initial_capital": {
+          "title": "Initial Capital",
+          "type": "number"
+        },
+        "max_drawdown_pct": {
+          "title": "Max Drawdown Pct",
+          "type": "number"
+        },
+        "num_trades": {
+          "title": "Num Trades",
+          "type": "integer"
+        },
+        "strategy_name": {
+          "title": "Strategy Name",
+          "type": "string"
+        },
+        "symbol": {
+          "title": "Symbol",
+          "type": "string"
+        },
+        "total_return_pct": {
+          "title": "Total Return Pct",
+          "type": "number"
+        },
+        "trades": {
+          "items": {
+            "$ref": "#/$defs/BacktestTrade"
+          },
+          "title": "Trades",
+          "type": "array"
+        },
+        "win_rate_pct": {
+          "title": "Win Rate Pct",
+          "type": "number"
+        }
+      },
+      "required": [
+        "strategy_name",
+        "symbol",
+        "initial_capital",
+        "final_equity",
+        "total_return_pct",
+        "max_drawdown_pct",
+        "win_rate_pct",
+        "num_trades"
+      ],
+      "title": "BacktestResult",
+      "type": "object"
+    },
+    "BacktestTrade": {
+      "additionalProperties": false,
+      "properties": {
+        "entry_price": {
+          "title": "Entry Price",
+          "type": "number"
+        },
+        "entry_time": {
+          "format": "date-time",
+          "title": "Entry Time",
+          "type": "string"
+        },
+        "exit_price": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exit Price"
+        },
+        "exit_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExitReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "exit_time": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exit Time"
+        },
+        "pnl": {
+          "default": 0.0,
+          "title": "Pnl",
+          "type": "number"
+        },
+        "pnl_pct": {
+          "default": 0.0,
+          "title": "Pnl Pct",
+          "type": "number"
+        },
+        "quantity": {
+          "title": "Quantity",
+          "type": "number"
+        },
+        "symbol": {
+          "title": "Symbol",
+          "type": "string"
+        }
+      },
+      "required": [
+        "symbol",
+        "entry_time",
+        "entry_price",
+        "quantity"
+      ],
+      "title": "BacktestTrade",
+      "type": "object"
+    },
+    "BollingerLowerCondition": {
+      "additionalProperties": false,
+      "description": "sim:useBB. True when close < lower_band * (1 + proximity_pct/100) (i.e. near OR below the band).",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "period": {
+          "default": 20,
+          "minimum": 2,
+          "title": "Period",
+          "type": "integer"
+        },
+        "proximity_pct": {
+          "default": 2.0,
+          "description": "Simulator uses close < lower * 1.02",
+          "minimum": 0,
+          "title": "Proximity Pct",
+          "type": "number"
+        },
+        "std_dev": {
+          "default": 2.0,
+          "exclusiveMinimum": 0,
+          "title": "Std Dev",
+          "type": "number"
+        }
+      },
+      "title": "BollingerLowerCondition",
+      "type": "object"
+    },
+    "BreakoutCondition": {
+      "additionalProperties": false,
+      "description": "PDF-only (not in the simulator). HIGH: close > max(high of previous `lookback` bars);\nLOW: close < min(low of previous `lookback` bars).",
+      "properties": {
+        "direction": {
+          "$ref": "#/$defs/BreakoutDirection",
+          "default": "HIGH"
+        },
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "lookback": {
+          "default": 20,
+          "minimum": 2,
+          "title": "Lookback",
+          "type": "integer"
+        }
+      },
+      "title": "BreakoutCondition",
+      "type": "object"
+    },
+    "BreakoutDirection": {
+      "description": "Price-action breakout: break of the recent HIGH (bullish) or recent LOW.",
+      "enum": [
+        "HIGH",
+        "LOW"
+      ],
+      "title": "BreakoutDirection",
+      "type": "string"
+    },
+    "Candle": {
+      "additionalProperties": false,
+      "properties": {
+        "close": {
+          "exclusiveMinimum": 0,
+          "title": "Close",
+          "type": "number"
+        },
+        "high": {
+          "exclusiveMinimum": 0,
+          "title": "High",
+          "type": "number"
+        },
+        "low": {
+          "exclusiveMinimum": 0,
+          "title": "Low",
+          "type": "number"
+        },
+        "open": {
+          "exclusiveMinimum": 0,
+          "title": "Open",
+          "type": "number"
+        },
+        "timestamp": {
+          "description": "Candle open time (UTC)",
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        },
+        "volume": {
+          "minimum": 0,
+          "title": "Volume",
+          "type": "number"
+        }
+      },
+      "required": [
+        "timestamp",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume"
+      ],
+      "title": "Candle",
+      "type": "object"
+    },
+    "ConditionLogic": {
+      "enum": [
+        "AND",
+        "OR"
+      ],
+      "title": "ConditionLogic",
+      "type": "string"
+    },
+    "ControlState": {
+      "additionalProperties": false,
+      "properties": {
+        "confirmation_mode": {
+          "default": true,
+          "title": "Confirmation Mode",
+          "type": "boolean"
+        },
+        "emergency_stopped": {
+          "default": false,
+          "title": "Emergency Stopped",
+          "type": "boolean"
+        },
+        "paused": {
+          "default": false,
+          "title": "Paused",
+          "type": "boolean"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "trading_mode": {
+          "$ref": "#/$defs/TradingMode",
+          "default": "SIM"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        }
+      },
+      "title": "ControlState",
+      "type": "object"
+    },
+    "Decision": {
+      "additionalProperties": false,
+      "description": "Final, fully explainable record of one evaluation cycle (regime + strategy + reason).",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/Action"
+        },
+        "agent_mode": {
+          "$ref": "#/$defs/AgentMode"
+        },
+        "execution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutionResult"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "explanation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Plain-language text from the LLM layer (Bot 5)",
+          "title": "Explanation"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/TradingMode"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "regime": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Regime"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "risk_verdict": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RiskVerdict"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "signal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "strategy": {
+          "title": "Strategy",
+          "type": "string"
+        },
+        "symbol": {
+          "title": "Symbol",
+          "type": "string"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode",
+        "agent_mode",
+        "symbol",
+        "strategy",
+        "action",
+        "reason"
+      ],
+      "title": "Decision",
+      "type": "object"
+    },
+    "EntryConditions": {
+      "additionalProperties": false,
+      "description": "Combination semantics (simulator): each ENABLED condition whose indicator is available (not in warm-up)\ncontributes one boolean; conditions whose indicator is still null are skipped, not counted as false.\nIf no booleans were produced -> no entry. AND = all true (sim: every), OR = at least one true (sim: some).\nCanonical names for Signal.conditions_met/failed are the field names below.",
+      "properties": {
+        "bollinger_lower": {
+          "$ref": "#/$defs/BollingerLowerCondition"
+        },
+        "breakout": {
+          "$ref": "#/$defs/BreakoutCondition"
+        },
+        "logic": {
+          "$ref": "#/$defs/ConditionLogic",
+          "default": "AND"
+        },
+        "macd_bullish_cross": {
+          "$ref": "#/$defs/MacdCrossCondition"
+        },
+        "price_above_ema": {
+          "$ref": "#/$defs/PriceAboveEmaCondition"
+        },
+        "price_above_sma": {
+          "$ref": "#/$defs/PriceAboveSmaCondition"
+        },
+        "rsi_below": {
+          "$ref": "#/$defs/RsiBelowCondition"
+        },
+        "volume_above_avg": {
+          "$ref": "#/$defs/VolumeAboveAverageCondition"
+        }
+      },
+      "title": "EntryConditions",
+      "type": "object"
+    },
+    "EquityPoint": {
+      "additionalProperties": false,
+      "properties": {
+        "equity": {
+          "title": "Equity",
+          "type": "number"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        }
+      },
+      "required": [
+        "timestamp",
+        "equity"
+      ],
+      "title": "EquityPoint",
+      "type": "object"
+    },
+    "Event": {
+      "additionalProperties": false,
+      "description": "Envelope for WebSocket messages and structured logs.",
+      "properties": {
+        "payload": {
+          "additionalProperties": true,
+          "title": "Payload",
+          "type": "object"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/EventType"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Event",
+      "type": "object"
+    },
+    "EventType": {
+      "description": "WebSocket / log event kinds pushed from backend/app to the frontend.",
+      "enum": [
+        "DECISION",
+        "EXECUTION",
+        "CONTROL",
+        "PRICE",
+        "ALERT",
+        "STATUS"
+      ],
+      "title": "EventType",
+      "type": "string"
+    },
+    "ExecutionPath": {
+      "enum": [
+        "SWAP",
+        "RFQ"
+      ],
+      "title": "ExecutionPath",
+      "type": "string"
+    },
+    "ExecutionResult": {
+      "additionalProperties": false,
+      "properties": {
+        "avg_price": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Avg Price"
+        },
+        "client_order_id": {
+          "title": "Client Order Id",
+          "type": "string"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error"
+        },
+        "fee": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Fee",
+          "type": "number"
+        },
+        "filled_quantity": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Filled Quantity",
+          "type": "number"
+        },
+        "mode": {
+          "$ref": "#/$defs/TradingMode"
+        },
+        "notional": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Notional",
+          "type": "number"
+        },
+        "order_id": {
+          "title": "Order Id",
+          "type": "string"
+        },
+        "path": {
+          "$ref": "#/$defs/ExecutionPath"
+        },
+        "side": {
+          "$ref": "#/$defs/OrderSide"
+        },
+        "status": {
+          "$ref": "#/$defs/OrderStatus"
+        },
+        "symbol": {
+          "title": "Symbol",
+          "type": "string"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        },
+        "tx_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tx Hash"
+        }
+      },
+      "required": [
+        "client_order_id",
+        "symbol",
+        "side",
+        "status",
+        "path",
+        "mode"
+      ],
+      "title": "ExecutionResult",
+      "type": "object"
+    },
+    "ExitReason": {
+      "description": "Why a position was closed. First five mirror the simulator's reasons in priority order.",
+      "enum": [
+        "TRAILING_STOP",
+        "TAKE_PROFIT",
+        "STOP_LOSS",
+        "RSI_EXIT",
+        "MACD_EXIT",
+        "END",
+        "MAX_LOSS",
+        "MANUAL",
+        "EMERGENCY_STOP"
+      ],
+      "title": "ExitReason",
+      "type": "string"
+    },
+    "ExitRules": {
+      "additionalProperties": false,
+      "description": "Evaluated on each bar's close BEFORE entries, first match wins, in this order (simulator):\nTRAILING_STOP -> TAKE_PROFIT (pnl >= tp) -> STOP_LOSS (pnl <= -sl) -> RSI_EXIT -> MACD_EXIT.\nOpen positions are closed with reason END at the end of a backtest.",
+      "properties": {
+        "macd_bearish_cross": {
+          "$ref": "#/$defs/MacdCrossCondition"
+        },
+        "rsi_above": {
+          "$ref": "#/$defs/RsiExitRule"
+        },
+        "stop_loss_pct": {
+          "default": 6.0,
+          "exclusiveMinimum": 0,
+          "title": "Stop Loss Pct",
+          "type": "number"
+        },
+        "take_profit_pct": {
+          "default": 12.0,
+          "exclusiveMinimum": 0,
+          "title": "Take Profit Pct",
+          "type": "number"
+        },
+        "trailing_stop": {
+          "$ref": "#/$defs/TrailingStopRule"
+        }
+      },
+      "title": "ExitRules",
+      "type": "object"
+    },
+    "MacdCrossCondition": {
+      "additionalProperties": false,
+      "description": "Entry (sim:useMACD): line crosses ABOVE signal this bar (line[i] > sig[i] and line[i-1] <= sig[i-1]).\nExit (sim:useMacdExit): line crosses BELOW signal (line[i] < sig[i] and line[i-1] > sig[i-1]).",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "params": {
+          "$ref": "#/$defs/MacdParams"
+        }
+      },
+      "title": "MacdCrossCondition",
+      "type": "object"
+    },
+    "MacdParams": {
+      "additionalProperties": false,
+      "properties": {
+        "fast": {
+          "default": 12,
+          "minimum": 1,
+          "title": "Fast",
+          "type": "integer"
+        },
+        "signal": {
+          "default": 9,
+          "description": "Simulator approximates a 9-period signal EMA with alpha=0.15",
+          "minimum": 1,
+          "title": "Signal",
+          "type": "integer"
+        },
+        "slow": {
+          "default": 26,
+          "minimum": 2,
+          "title": "Slow",
+          "type": "integer"
+        }
+      },
+      "title": "MacdParams",
+      "type": "object"
+    },
+    "ManualStrategy": {
+      "additionalProperties": false,
+      "description": "A user-built rule set (spec 2.1/2.2). Saved and exchanged as JSON. Defaults == simulator defaults.",
+      "properties": {
+        "activation": {
+          "$ref": "#/$defs/ActivationMode",
+          "default": "CONFIRMATION"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "entry": {
+          "$ref": "#/$defs/EntryConditions"
+        },
+        "exit": {
+          "$ref": "#/$defs/ExitRules"
+        },
+        "filters": {
+          "$ref": "#/$defs/StrategyFilters"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "default": "My Strategy",
+          "title": "Name",
+          "type": "string"
+        },
+        "risk": {
+          "$ref": "#/$defs/PositionRiskRules"
+        },
+        "symbol": {
+          "default": "NVDAon",
+          "description": "Token symbol (sim:token): NVDAon, TSLAx, AAPLB, ...",
+          "title": "Symbol",
+          "type": "string"
+        },
+        "timeframe": {
+          "$ref": "#/$defs/Timeframe",
+          "default": "1h"
+        },
+        "version": {
+          "default": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "title": "ManualStrategy",
+      "type": "object"
+    },
+    "MarketHoursFilter": {
+      "additionalProperties": false,
+      "description": "sim:marketHours. Real engine: only trade when bar time is within [start, end) UTC (weekdays if set).\nThe simulator fakes this as bar_index % 24 < 16.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "end_hour_utc": {
+          "default": 20,
+          "maximum": 24,
+          "minimum": 0,
+          "title": "End Hour Utc",
+          "type": "integer"
+        },
+        "start_hour_utc": {
+          "default": 13,
+          "maximum": 23,
+          "minimum": 0,
+          "title": "Start Hour Utc",
+          "type": "integer"
+        },
+        "weekdays_only": {
+          "default": true,
+          "title": "Weekdays Only",
+          "type": "boolean"
+        }
+      },
+      "title": "MarketHoursFilter",
+      "type": "object"
+    },
+    "MinVolumeFilter": {
+      "additionalProperties": false,
+      "description": "sim:minVol ('Require above-average volume'). Hard gate: volume > multiplier * average volume\n(same average as VolumeAboveAverageCondition) and, if set, volume >= min_volume (absolute, PDF).",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "min_volume": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Volume"
+        },
+        "multiplier": {
+          "default": 1.1,
+          "exclusiveMinimum": 0,
+          "title": "Multiplier",
+          "type": "number"
+        }
+      },
+      "title": "MinVolumeFilter",
+      "type": "object"
+    },
+    "OrderRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "client_order_id": {
+          "title": "Client Order Id",
+          "type": "string"
+        },
+        "decision_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Decision Id"
+        },
+        "mode": {
+          "$ref": "#/$defs/TradingMode",
+          "default": "SIM"
+        },
+        "notional": {
+          "description": "USDT amount for BUY; for SELL the USDT value to sell",
+          "exclusiveMinimum": 0,
+          "title": "Notional",
+          "type": "number"
+        },
+        "path": {
+          "$ref": "#/$defs/ExecutionPath",
+          "default": "SWAP"
+        },
+        "quantity": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Exact token qty (SELL); overrides notional",
+          "title": "Quantity"
+        },
+        "quote_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Quote Id"
+        },
+        "side": {
+          "$ref": "#/$defs/OrderSide"
+        },
+        "slippage_bps": {
+          "default": 50,
+          "minimum": 0,
+          "title": "Slippage Bps",
+          "type": "integer"
+        },
+        "symbol": {
+          "title": "Symbol",
+          "type": "string"
+        }
+      },
+      "required": [
+        "symbol",
+        "side",
+        "notional"
+      ],
+      "title": "OrderRequest",
+      "type": "object"
+    },
+    "OrderSide": {
+      "enum": [
+        "BUY",
+        "SELL"
+      ],
+      "title": "OrderSide",
+      "type": "string"
+    },
+    "OrderStatus": {
+      "enum": [
+        "FILLED",
+        "PARTIALLY_FILLED",
+        "PENDING_CONFIRMATION",
+        "REJECTED",
+        "EXPIRED",
+        "FAILED"
+      ],
+      "title": "OrderStatus",
+      "type": "string"
+    },
+    "Portfolio": {
+      "additionalProperties": false,
+      "properties": {
+        "bars_since_exit": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "description": "Per symbol, bars since last exit (cooldown)",
+          "title": "Bars Since Exit",
+          "type": "object"
+        },
+        "cash": {
+          "minimum": 0,
+          "title": "Cash",
+          "type": "number"
+        },
+        "daily_pnl": {
+          "default": 0.0,
+          "title": "Daily Pnl",
+          "type": "number"
+        },
+        "equity": {
+          "description": "cash + market value of positions",
+          "minimum": 0,
+          "title": "Equity",
+          "type": "number"
+        },
+        "mode": {
+          "$ref": "#/$defs/TradingMode",
+          "default": "SIM"
+        },
+        "positions": {
+          "items": {
+            "$ref": "#/$defs/Position"
+          },
+          "title": "Positions",
+          "type": "array"
+        },
+        "realized_pnl": {
+          "default": 0.0,
+          "title": "Realized Pnl",
+          "type": "number"
+        },
+        "starting_capital": {
+          "exclusiveMinimum": 0,
+          "title": "Starting Capital",
+          "type": "number"
+        },
+        "trades_today": {
+          "default": 0,
+          "title": "Trades Today",
+          "type": "integer"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "starting_capital",
+        "cash",
+        "equity"
+      ],
+      "title": "Portfolio",
+      "type": "object"
+    },
+    "Position": {
+      "additionalProperties": false,
+      "properties": {
+        "avg_entry_price": {
+          "exclusiveMinimum": 0,
+          "title": "Avg Entry Price",
+          "type": "number"
+        },
+        "current_price": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Current Price"
+        },
+        "highest_price": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "High-water mark since entry (trailing stop)",
+          "title": "Highest Price"
+        },
+        "opened_at": {
+          "format": "date-time",
+          "title": "Opened At",
+          "type": "string"
+        },
+        "quantity": {
+          "exclusiveMinimum": 0,
+          "title": "Quantity",
+          "type": "number"
+        },
+        "stop_loss_price": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stop Loss Price"
+        },
+        "strategy": {
+          "description": "Strategy that opened it: preset name or 'MANUAL:<strategy name>'",
+          "title": "Strategy",
+          "type": "string"
+        },
+        "symbol": {
+          "title": "Symbol",
+          "type": "string"
+        },
+        "take_profit_price": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Take Profit Price"
+        },
+        "trailing_stop_pct": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Trailing Stop Pct"
+        },
+        "unrealized_pnl": {
+          "default": 0.0,
+          "title": "Unrealized Pnl",
+          "type": "number"
+        }
+      },
+      "required": [
+        "symbol",
+        "quantity",
+        "avg_entry_price",
+        "strategy"
+      ],
+      "title": "Position",
+      "type": "object"
+    },
+    "PositionRiskRules": {
+      "additionalProperties": false,
+      "description": "Entry allowed only if open_positions < max_open_positions AND bars_since_last_exit > cooldown_bars.",
+      "properties": {
+        "cooldown_bars": {
+          "default": 5,
+          "description": "sim:cooldown",
+          "minimum": 0,
+          "title": "Cooldown Bars",
+          "type": "integer"
+        },
+        "max_loss_per_trade_pct": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "PDF-only; % of capital",
+          "title": "Max Loss Per Trade Pct"
+        },
+        "max_open_positions": {
+          "default": 1,
+          "description": "sim:maxPos (UI allows 1-3)",
+          "minimum": 1,
+          "title": "Max Open Positions",
+          "type": "integer"
+        },
+        "position_size_pct": {
+          "default": 15.0,
+          "description": "% of current capital per entry (sim:size)",
+          "exclusiveMinimum": 0,
+          "maximum": 100,
+          "title": "Position Size Pct",
+          "type": "number"
+        }
+      },
+      "title": "PositionRiskRules",
+      "type": "object"
+    },
+    "PresetName": {
+      "enum": [
+        "DCA",
+        "SMART_DCA",
+        "BUY_THE_DIP",
+        "TREND_FOLLOWING",
+        "GRID"
+      ],
+      "title": "PresetName",
+      "type": "string"
+    },
+    "PriceAboveEmaCondition": {
+      "additionalProperties": false,
+      "description": "sim:useEMA / sim:emaPeriod. True when close > EMA(period).",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "period": {
+          "default": 20,
+          "minimum": 2,
+          "title": "Period",
+          "type": "integer"
+        }
+      },
+      "title": "PriceAboveEmaCondition",
+      "type": "object"
+    },
+    "PriceAboveSmaCondition": {
+      "additionalProperties": false,
+      "description": "sim:useSMA / sim:smaPeriod. True when close > SMA(period).",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "period": {
+          "default": 50,
+          "minimum": 2,
+          "title": "Period",
+          "type": "integer"
+        }
+      },
+      "title": "PriceAboveSmaCondition",
+      "type": "object"
+    },
+    "Quote": {
+      "additionalProperties": false,
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "fee": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Fee",
+          "type": "number"
+        },
+        "notional": {
+          "description": "Quote-currency amount (USDT) to spend (BUY) or receive (SELL)",
+          "exclusiveMinimum": 0,
+          "title": "Notional",
+          "type": "number"
+        },
+        "path": {
+          "$ref": "#/$defs/ExecutionPath",
+          "default": "SWAP"
+        },
+        "price": {
+          "exclusiveMinimum": 0,
+          "title": "Price",
+          "type": "number"
+        },
+        "quantity": {
+          "description": "Token quantity bought/sold at this quote",
+          "exclusiveMinimum": 0,
+          "title": "Quantity",
+          "type": "number"
+        },
+        "quote_id": {
+          "title": "Quote Id",
+          "type": "string"
+        },
+        "side": {
+          "$ref": "#/$defs/OrderSide"
+        },
+        "slippage_bps": {
+          "default": 50,
+          "minimum": 0,
+          "title": "Slippage Bps",
+          "type": "integer"
+        },
+        "symbol": {
+          "title": "Symbol",
+          "type": "string"
+        }
+      },
+      "required": [
+        "symbol",
+        "side",
+        "notional",
+        "quantity",
+        "price"
+      ],
+      "title": "Quote",
+      "type": "object"
+    },
+    "Regime": {
+      "description": "The six market regimes from spec section 3.1.",
+      "enum": [
+        "STRONG_UPTREND",
+        "MILD_UPTREND",
+        "SIDEWAYS",
+        "OVERSOLD_PULLBACK",
+        "HIGH_VOLATILITY",
+        "DOWNTREND"
+      ],
+      "title": "Regime",
+      "type": "string"
+    },
+    "RegimeAnalysis": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "features": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "description": "e.g. sma_slope, rsi, atr_pct, dist_from_ema_pct",
+          "title": "Features",
+          "type": "object"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "regime": {
+          "$ref": "#/$defs/Regime"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        }
+      },
+      "required": [
+        "regime",
+        "confidence",
+        "reason"
+      ],
+      "title": "RegimeAnalysis",
+      "type": "object"
+    },
+    "RiskCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "default": "",
+          "title": "Detail",
+          "type": "string"
+        },
+        "name": {
+          "description": "e.g. max_exposure, cooldown, paused, max_open_positions",
+          "title": "Name",
+          "type": "string"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "passed"
+      ],
+      "title": "RiskCheck",
+      "type": "object"
+    },
+    "RiskVerdict": {
+      "additionalProperties": false,
+      "properties": {
+        "adjusted_notional": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Adjusted Notional",
+          "type": "number"
+        },
+        "adjusted_size_pct": {
+          "default": 0.0,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Adjusted Size Pct",
+          "type": "number"
+        },
+        "approved": {
+          "title": "Approved",
+          "type": "boolean"
+        },
+        "checks": {
+          "items": {
+            "$ref": "#/$defs/RiskCheck"
+          },
+          "title": "Checks",
+          "type": "array"
+        },
+        "reasons": {
+          "description": "Human readable; required when blocked",
+          "items": {
+            "type": "string"
+          },
+          "title": "Reasons",
+          "type": "array"
+        },
+        "requires_confirmation": {
+          "default": false,
+          "title": "Requires Confirmation",
+          "type": "boolean"
+        },
+        "signal_id": {
+          "title": "Signal Id",
+          "type": "string"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        }
+      },
+      "required": [
+        "signal_id",
+        "approved"
+      ],
+      "title": "RiskVerdict",
+      "type": "object"
+    },
+    "RsiBelowCondition": {
+      "additionalProperties": false,
+      "description": "sim:useRSI / sim:rsiEntry. True when RSI(period) < threshold.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "period": {
+          "default": 14,
+          "minimum": 2,
+          "title": "Period",
+          "type": "integer"
+        },
+        "threshold": {
+          "default": 35.0,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Threshold",
+          "type": "number"
+        }
+      },
+      "title": "RsiBelowCondition",
+      "type": "object"
+    },
+    "RsiExitRule": {
+      "additionalProperties": false,
+      "description": "sim:useRsiExit / sim:rsiExit. Exit when RSI(period) > threshold.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "period": {
+          "default": 14,
+          "minimum": 2,
+          "title": "Period",
+          "type": "integer"
+        },
+        "threshold": {
+          "default": 70.0,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Threshold",
+          "type": "number"
+        }
+      },
+      "title": "RsiExitRule",
+      "type": "object"
+    },
+    "Signal": {
+      "additionalProperties": false,
+      "description": "Proposed action from the strategy engine (Bot 2). Never executed without a RiskVerdict.",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/Action"
+        },
+        "conditions_failed": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Conditions Failed",
+          "type": "array"
+        },
+        "conditions_met": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Conditions Met",
+          "type": "array"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "preset": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PresetName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "price": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Price"
+        },
+        "proposed_notional": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Proposed Notional",
+          "type": "number"
+        },
+        "proposed_size_pct": {
+          "default": 0.0,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Proposed Size Pct",
+          "type": "number"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "regime": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Regime"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "source": {
+          "$ref": "#/$defs/AgentMode"
+        },
+        "strategy": {
+          "description": "Preset name (AUTO) or 'MANUAL:<name>'",
+          "title": "Strategy",
+          "type": "string"
+        },
+        "symbol": {
+          "title": "Symbol",
+          "type": "string"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        }
+      },
+      "required": [
+        "symbol",
+        "action",
+        "source",
+        "strategy",
+        "reason"
+      ],
+      "title": "Signal",
+      "type": "object"
+    },
+    "StatusSnapshot": {
+      "additionalProperties": false,
+      "description": "Everything the dashboard / explainer needs in one object.",
+      "properties": {
+        "active_strategy": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Active Strategy"
+        },
+        "active_symbol": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Active Symbol"
+        },
+        "agent_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "control": {
+          "$ref": "#/$defs/ControlState"
+        },
+        "current_regime": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Regime"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "last_decision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Decision"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "portfolio": {
+          "$ref": "#/$defs/Portfolio"
+        },
+        "recent_decisions": {
+          "items": {
+            "$ref": "#/$defs/Decision"
+          },
+          "title": "Recent Decisions",
+          "type": "array"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        }
+      },
+      "required": [
+        "control",
+        "portfolio"
+      ],
+      "title": "StatusSnapshot",
+      "type": "object"
+    },
+    "StrategyFilters": {
+      "additionalProperties": false,
+      "properties": {
+        "market_hours": {
+          "$ref": "#/$defs/MarketHoursFilter"
+        },
+        "min_volume": {
+          "$ref": "#/$defs/MinVolumeFilter"
+        }
+      },
+      "title": "StrategyFilters",
+      "type": "object"
+    },
+    "StrategySelection": {
+      "additionalProperties": false,
+      "description": "Result of map(regime, style) -> exactly one strategy (or none => stay out).",
+      "properties": {
+        "preset": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PresetName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "None means 'pause / stay out' for this regime"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "regime": {
+          "$ref": "#/$defs/Regime"
+        },
+        "size_multiplier": {
+          "default": 1.0,
+          "description": "e.g. 0.5 in high volatility",
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Size Multiplier",
+          "type": "number"
+        },
+        "style": {
+          "$ref": "#/$defs/TraderStyle"
+        }
+      },
+      "required": [
+        "regime",
+        "style",
+        "reason"
+      ],
+      "title": "StrategySelection",
+      "type": "object"
+    },
+    "Timeframe": {
+      "enum": [
+        "1m",
+        "5m",
+        "15m",
+        "1h",
+        "4h",
+        "1d"
+      ],
+      "title": "Timeframe",
+      "type": "string"
+    },
+    "TokenInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "chain": {
+          "description": "Chain name, e.g. BSC, Ethereum, Solana",
+          "title": "Chain",
+          "type": "string"
+        },
+        "chain_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Chain Id"
+        },
+        "contract_address": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Contract Address"
+        },
+        "decimals": {
+          "default": 18,
+          "title": "Decimals",
+          "type": "integer"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "price": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Last known price in USDT",
+          "title": "Price"
+        },
+        "symbol": {
+          "description": "Trading symbol, e.g. NVDAon, TSLAx, AAPLB",
+          "title": "Symbol",
+          "type": "string"
+        },
+        "token_type": {
+          "$ref": "#/$defs/TokenType",
+          "default": "OTHER"
+        },
+        "underlying": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Underlying equity ticker, e.g. NVDA",
+          "title": "Underlying"
+        },
+        "volume_24h": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Volume 24H"
+        }
+      },
+      "required": [
+        "symbol",
+        "name",
+        "chain"
+      ],
+      "title": "TokenInfo",
+      "type": "object"
+    },
+    "TokenType": {
+      "description": "Issuer family of a tokenized stock.",
+      "enum": [
+        "ONDO",
+        "XSTOCK",
+        "BSTOCK",
+        "OTHER"
+      ],
+      "title": "TokenType",
+      "type": "string"
+    },
+    "TraderStyle": {
+      "enum": [
+        "PATIENT",
+        "BALANCED",
+        "ACTIVE"
+      ],
+      "title": "TraderStyle",
+      "type": "string"
+    },
+    "TradingMode": {
+      "description": "Execution environment. SIM = mocks/offline, PAPER = real market data + simulated fills, LIVE = real money.",
+      "enum": [
+        "SIM",
+        "PAPER",
+        "LIVE"
+      ],
+      "title": "TradingMode",
+      "type": "string"
+    },
+    "TrailingStopRule": {
+      "additionalProperties": false,
+      "description": "sim:useTrail / sim:trail. Stop starts at entry*(1-pct/100), ratchets up to close*(1-pct/100);\nexit when close < stop.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "pct": {
+          "default": 4.0,
+          "exclusiveMinimum": 0,
+          "title": "Pct",
+          "type": "number"
+        }
+      },
+      "title": "TrailingStopRule",
+      "type": "object"
+    },
+    "VolumeAboveAverageCondition": {
+      "additionalProperties": false,
+      "description": "sim:useVolume. True when volume > multiplier * average volume.\nperiod=None means 'average over all candles passed to the evaluator' (simulator behaviour).",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "multiplier": {
+          "default": 1.1,
+          "exclusiveMinimum": 0,
+          "title": "Multiplier",
+          "type": "number"
+        },
+        "period": {
+          "anyOf": [
+            {
+              "minimum": 2,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Period"
+        }
+      },
+      "title": "VolumeAboveAverageCondition",
+      "type": "object"
+    }
+  },
+  "version": "0.1.0"
+}

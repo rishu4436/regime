@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Full Manual Strategy Builder — On-Chain Stocks Simulation</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0f1117; --card: #1a1d27; --border: #2a2e3a;
+    --accent: #3b82f6; --green: #10b981; --red: #ef4444;
+    --text: #e5e7eb; --muted: #9ca3af;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); }
+  .container { max-width: 1280px; margin: 0 auto; padding: 20px; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  .subtitle { color: var(--muted); margin-bottom: 20px; font-size: 0.9rem; }
+  .layout { display: grid; grid-template-columns: 420px 1fr; gap: 18px; }
+  @media (max-width: 1000px) { .layout { grid-template-columns: 1fr; } }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
+  .card h2 { margin: 0 0 14px; font-size: 1.05rem; }
+  label { display: block; font-size: 0.8rem; color: var(--muted); margin: 10px 0 4px; }
+  select, input[type="number"], input[type="text"] {
+    width: 100%; padding: 7px 9px; background: #111318; border: 1px solid var(--border);
+    border-radius: 7px; color: var(--text); font-size: 0.9rem;
+  }
+  .row { display: flex; gap: 10px; }
+  .row > div { flex: 1; }
+  .section { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 12px; }
+  .check-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 0.9rem; }
+  .check-row input { width: auto; }
+  button {
+    background: var(--accent); color: white; border: none; padding: 10px;
+    border-radius: 8px; cursor: pointer; font-weight: 600; width: 100%; margin-top: 14px;
+  }
+  button.secondary { background: #374151; margin-top: 6px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .stat { background: #111318; border-radius: 8px; padding: 10px; text-align: center; }
+  .stat .val { font-size: 1.25rem; font-weight: 700; }
+  .stat .lbl { font-size: 0.7rem; color: var(--muted); }
+  .positive { color: var(--green); } .negative { color: var(--red); }
+  #chart { width: 100%; height: 260px; background: #111318; border-radius: 8px; margin-bottom: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+  th, td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); }
+  .summary-box { background: #111318; border-radius: 8px; padding: 12px; font-size: 0.85rem; white-space: pre-wrap; margin-top: 8px; }
+  .note { font-size: 0.75rem; color: var(--muted); margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Full Manual Strategy Builder</h1>
+  <p class="subtitle">On-chain stocks simulation — all major options included. Define conditions freely and test.</p>
+
+  <div class="layout">
+    <!-- Builder -->
+    <div class="card">
+      <h2>Strategy Settings</h2>
+
+      <label>Tokenized Stock</label>
+      <select id="token">
+        <option value="NVDAon">NVDAon (NVIDIA)</option>
+        <option value="TSLAx">TSLAx (Tesla)</option>
+        <option value="AAPLB">AAPLB (Apple)</option>
+      </select>
+
+      <div class="section">
+        <strong style="font-size:0.9rem">Entry Conditions</strong>
+        <div class="check-row"><input type="checkbox" id="useRSI" checked> RSI (14) below <input type="number" id="rsiEntry" value="35" style="width:70px;margin-left:6px"></div>
+        <div class="check-row"><input type="checkbox" id="useSMA" checked> Price above SMA <input type="number" id="smaPeriod" value="50" style="width:70px;margin-left:6px"></div>
+        <div class="check-row"><input type="checkbox" id="useEMA"> Price above EMA <input type="number" id="emaPeriod" value="20" style="width:70px;margin-left:6px"></div>
+        <div class="check-row"><input type="checkbox" id="useMACD"> MACD bullish crossover</div>
+        <div class="check-row"><input type="checkbox" id="useBB"> Price near lower Bollinger Band</div>
+        <div class="check-row"><input type="checkbox" id="useVolume"> Volume above average</div>
+
+        <label>Combine entry conditions with</label>
+        <select id="entryLogic">
+          <option value="AND">AND (all selected must be true)</option>
+          <option value="OR">OR (any selected is enough)</option>
+        </select>
+      </div>
+
+      <div class="section">
+        <strong style="font-size:0.9rem">Exit Rules</strong>
+        <div class="row">
+          <div><label>Take Profit %</label><input type="number" id="tp" value="12" step="0.5"></div>
+          <div><label>Stop Loss %</label><input type="number" id="sl" value="6" step="0.5"></div>
+        </div>
+        <div class="check-row"><input type="checkbox" id="useTrail"> Use Trailing Stop % <input type="number" id="trail" value="4" style="width:70px;margin-left:6px"></div>
+        <div class="check-row"><input type="checkbox" id="useRsiExit" checked> Exit when RSI above <input type="number" id="rsiExit" value="70" style="width:70px;margin-left:6px"></div>
+        <div class="check-row"><input type="checkbox" id="useMacdExit"> Exit on MACD bearish crossover</div>
+      </div>
+
+      <div class="section">
+        <strong style="font-size:0.9rem">Position & Risk</strong>
+        <div class="row">
+          <div><label>Position Size %</label><input type="number" id="size" value="15" min="1" max="100"></div>
+          <div><label>Max Open Positions</label><input type="number" id="maxPos" value="1" min="1" max="3"></div>
+        </div>
+        <label>Cooldown bars after exit</label>
+        <input type="number" id="cooldown" value="5" min="0">
+      </div>
+
+      <div class="section">
+        <strong style="font-size:0.9rem">Filters</strong>
+        <div class="check-row"><input type="checkbox" id="marketHours"> Only trade during simulated US market hours</div>
+        <div class="check-row"><input type="checkbox" id="minVol"> Require above-average volume</div>
+      </div>
+
+      <label>Starting Capital</label>
+      <input type="number" id="capital" value="10000">
+
+      <button onclick="runSimulation()">Run Full Simulation</button>
+      <button class="secondary" onclick="reset()">Reset</button>
+      <div class="note">Mock data only. Real version pulls candles from Binance Web3 Market API and executes via Trading API (SWAP / RFQ).</div>
+    </div>
+
+    <!-- Results -->
+    <div class="card">
+      <h2>Results</h2>
+      <div class="stats" id="stats"></div>
+      <canvas id="chart"></canvas>
+      <div id="summary" class="summary-box">Configure options and run the simulation.</div>
+      <div style="overflow-x:auto; margin-top:12px;">
+        <table id="trades">
+          <thead><tr><th>Type</th><th>Price</th><th>Bar</th><th>PnL</th><th>Reason</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function generateCandles(n = 250, start = 180) {
+  const c = [];
+  let p = start;
+  for (let i = 0; i < n; i++) {
+    p = Math.max(30, p + (Math.random() - 0.47) * 5);
+    const o = p, h = p + Math.random()*4, l = p - Math.random()*4;
+    const cl = l + Math.random()*(h-l);
+    c.push({i, open:o, high:h, low:l, close:cl, volume:800+Math.random()*6000});
+    p = cl;
+  }
+  return c;
+}
+
+const starts = {NVDAon:140, TSLAx:200, AAPLB:170};
+
+function ema(data, period) {
+  const k = 2/(period+1), res = [];
+  let prev = null;
+  for (let i = 0; i < data.length; i++) {
+    if (i < period-1) { res.push(null); continue; }
+    if (prev === null) {
+      let s = 0; for (let j=0;j<period;j++) s += data[i-j].close;
+      prev = s/period;
+    } else prev = data[i].close * k + prev * (1-k);
+    res.push(prev);
+  }
+  return res;
+}
+function sma(data, period) {
+  const res = [];
+  for (let i=0;i<data.length;i++) {
+    if (i < period-1) { res.push(null); continue; }
+    let s=0; for (let j=0;j<period;j++) s += data[i-j].close;
+    res.push(s/period);
+  }
+  return res;
+}
+function rsi(data, period=14) {
+  const res = []; let g=0, l=0;
+  for (let i=0;i<data.length;i++) {
+    if (i===0) { res.push(null); continue; }
+    const ch = data[i].close - data[i-1].close;
+    if (i <= period) {
+      if (ch>0) g+=ch; else l-=ch;
+      res.push(i===period ? 100-100/(1+(g/(l||1))) : null);
+    } else {
+      g = (g*(period-1) + Math.max(ch,0))/period;
+      l = (l*(period-1) + Math.max(-ch,0))/period;
+      res.push(100-100/(1+(g/(l||1))));
+    }
+  }
+  return res;
+}
+function macd(data) {
+  const e12 = ema(data,12), e26 = ema(data,26);
+  const line = e12.map((v,i) => v&&e26[i] ? v-e26[i] : null);
+  const sig = [];
+  let prev=null;
+  for (let i=0;i<line.length;i++) {
+    if (line[i]==null) { sig.push(null); continue; }
+    if (prev==null) prev=line[i];
+    else prev = line[i]*0.15 + prev*0.85; // approx 9-period
+    sig.push(prev);
+  }
+  return {line, signal:sig};
+}
+function bollinger(data, period=20) {
+  const mid = sma(data, period);
+  const upper=[], lower=[];
+  for (let i=0;i<data.length;i++) {
+    if (!mid[i]) { upper.push(null); lower.push(null); continue; }
+    let sum=0; for (let j=0;j<period;j++) sum += Math.pow(data[i-j].close-mid[i],2);
+    const sd = Math.sqrt(sum/period);
+    upper.push(mid[i]+2*sd); lower.push(mid[i]-2*sd);
+  }
+  return {upper, lower, mid};
+}
+
+function runSimulation() {
+  const token = document.getElementById('token').value;
+  const candles = generateCandles(250, starts[token]);
+  const smaV = sma(candles, +document.getElementById('smaPeriod').value);
+  const emaV = ema(candles, +document.getElementById('emaPeriod').value);
+  const rsiV = rsi(candles);
+  const macdV = macd(candles);
+  const bb = bollinger(candles);
+  const avgVol = candles.reduce((a,c)=>a+c.volume,0)/candles.length;
+
+  const useRSI = document.getElementById('useRSI').checked;
+  const useSMA = document.getElementById('useSMA').checked;
+  const useEMA = document.getElementById('useEMA').checked;
+  const useMACD = document.getElementById('useMACD').checked;
+  const useBB = document.getElementById('useBB').checked;
+  const useVolume = document.getElementById('useVolume').checked;
+  const logic = document.getElementById('entryLogic').value;
+  const rsiEntry = +document.getElementById('rsiEntry').value;
+  const tp = +document.getElementById('tp').value/100;
+  const sl = +document.getElementById('sl').value/100;
+  const useTrail = document.getElementById('useTrail').checked;
+  const trailPct = +document.getElementById('trail').value/100;
+  const useRsiExit = document.getElementById('useRsiExit').checked;
+  const rsiExit = +document.getElementById('rsiExit').value;
+  const useMacdExit = document.getElementById('useMacdExit').checked;
+  const sizePct = +document.getElementById('size').value/100;
+  const maxPos = +document.getElementById('maxPos').value;
+  const cooldownBars = +document.getElementById('cooldown').value;
+  const marketHours = document.getElementById('marketHours').checked;
+  const minVol = document.getElementById('minVol').checked;
+  let capital = +document.getElementById('capital').value;
+  const startCap = capital;
+
+  const trades = [];
+  let positions = [];
+  let lastExit = -999;
+  const equity = [capital];
+
+  for (let i = 60; i < candles.length; i++) {
+    const c = candles[i];
+    const isMarketHour = !marketHours || (i % 24 < 16); // fake filter
+
+    // Manage existing positions
+    positions = positions.filter(pos => {
+      const pnlPct = (c.close - pos.entry) / pos.entry;
+      let reason = null;
+
+      if (useTrail && pos.trail) {
+        const newTrail = c.close * (1 - trailPct);
+        if (newTrail > pos.trail) pos.trail = newTrail;
+        if (c.close < pos.trail) reason = 'Trailing Stop';
+      }
+      if (!reason && pnlPct >= tp) reason = 'Take Profit';
+      if (!reason && pnlPct <= -sl) reason = 'Stop Loss';
+      if (!reason && useRsiExit && rsiV[i] > rsiExit) reason = 'RSI Exit';
+      if (!reason && useMacdExit && macdV.line[i] && macdV.signal[i] && macdV.line[i] < macdV.signal[i] && macdV.line[i-1] > macdV.signal[i-1]) reason = 'MACD Exit';
+
+      if (reason) {
+        const pnl = pos.size * pnlPct;
+        capital += pnl;
+        trades.push({type:'SELL', price:c.close.toFixed(2), idx:i, pnl:(pnlPct*100).toFixed(2)+'%', reason});
+        lastExit = i;
+        return false;
+      }
+      return true;
+    });
+
+    // Entry
+    if (positions.length < maxPos && i - lastExit > cooldownBars && isMarketHour) {
+      const conds = [];
+      if (useRSI && rsiV[i] !== null) conds.push(rsiV[i] < rsiEntry);
+      if (useSMA && smaV[i] !== null) conds.push(c.close > smaV[i]);
+      if (useEMA && emaV[i] !== null) conds.push(c.close > emaV[i]);
+      if (useMACD && macdV.line[i] && macdV.signal[i] && macdV.line[i-1]) 
+        conds.push(macdV.line[i] > macdV.signal[i] && macdV.line[i-1] <= macdV.signal[i-1]);
+      if (useBB && bb.lower[i]) conds.push(c.close < bb.lower[i] * 1.02);
+      if (useVolume || minVol) conds.push(c.volume > avgVol * 1.1);
+
+      if (conds.length === 0) continue;
+      const ok = logic === 'AND' ? conds.every(Boolean) : conds.some(Boolean);
+      if (ok) {
+        const size = capital * sizePct;
+        positions.push({entry: c.close, size, trail: useTrail ? c.close*(1-trailPct) : null});
+        trades.push({type:'BUY', price:c.close.toFixed(2), idx:i, pnl:'-', reason:'Entry'});
+      }
+    }
+    equity.push(capital);
+  }
+
+  // Close remaining
+  positions.forEach(pos => {
+    const last = candles.at(-1).close;
+    const pnlPct = (last - pos.entry)/pos.entry;
+    capital += pos.size * pnlPct;
+    trades.push({type:'SELL', price:last.toFixed(2), idx:candles.length-1, pnl:(pnlPct*100).toFixed(2)+'%', reason:'End'});
+  });
+
+  const ret = ((capital - startCap)/startCap*100).toFixed(2);
+  const sells = trades.filter(t=>t.type==='SELL');
+  const wins = sells.filter(t=>parseFloat(t.pnl)>0).length;
+  const wr = sells.length ? (wins/sells.length*100).toFixed(1) : 0;
+  let peak = startCap, mdd = 0;
+  equity.forEach(e => { if (e>peak) peak=e; mdd = Math.max(mdd, (peak-e)/peak); });
+
+  document.getElementById('stats').innerHTML = `
+    <div class="stat"><div class="val ${ret>=0?'positive':'negative'}">${ret}%</div><div class="lbl">Return</div></div>
+    <div class="stat"><div class="val">${wr}%</div><div class="lbl">Win Rate</div></div>
+    <div class="stat"><div class="val">${sells.length}</div><div class="lbl">Trades</div></div>
+    <div class="stat"><div class="val negative">${(mdd*100).toFixed(1)}%</div><div class="lbl">Max DD</div></div>
+    <div class="stat"><div class="val">$${Math.round(capital)}</div><div class="lbl">Final</div></div>
+  `;
+
+  const active = [];
+  if (useRSI) active.push(`RSI<${rsiEntry}`);
+  if (useSMA) active.push(`Price>SMA`);
+  if (useEMA) active.push(`Price>EMA`);
+  if (useMACD) active.push(`MACD cross`);
+  if (useBB) active.push(`BB lower`);
+  if (useVolume) active.push(`High volume`);
+  document.getElementById('summary').textContent =
+`Token: ${token}
+Entry (${logic}): ${active.join(', ') || 'None'}
+Exit: TP ${(tp*100)}% / SL ${(sl*100)}%${useTrail?' / Trail':''}${useRsiExit?' / RSI':''}
+Size: ${sizePct*100}% | Max positions: ${maxPos} | Cooldown: ${cooldownBars}
+${marketHours?'Market hours only | ':''}${minVol?'Volume filter | ':''}
+Result: ${ret}% | ${sells.length} trades | Win rate ${wr}%`;
+
+  document.querySelector('#trades tbody').innerHTML = trades.map(t=>`
+    <tr><td style="color:${t.type==='BUY'?'#10b981':'#ef4444'}">${t.type}</td>
+    <td>${t.price}</td><td>${t.idx}</td>
+    <td class="${parseFloat(t.pnl)>0?'positive':parseFloat(t.pnl)<0?'negative':''}">${t.pnl}</td>
+    <td>${t.reason}</td></tr>`).join('');
+
+  drawChart(candles, equity, trades);
+}
+
+function drawChart(candles, equity, trades) {
+  const canvas = document.getElementById('chart');
+  const ctx = canvas.getContext('2d');
+  canvas.width = canvas.offsetWidth; canvas.height = 260;
+  const w = canvas.width, h = canvas.height;
+  ctx.clearRect(0,0,w,h);
+  const prices = candles.map(c=>c.close);
+  const minP = Math.min(...prices)*0.97, maxP = Math.max(...prices)*1.03;
+  ctx.strokeStyle='#60a5fa'; ctx.lineWidth=1.4; ctx.beginPath();
+  prices.forEach((p,i)=>{
+    const x = i/(prices.length-1)*w;
+    const y = h - (p-minP)/(maxP-minP)*h;
+    i?ctx.lineTo(x,y):ctx.moveTo(x,y);
+  }); ctx.stroke();
+  trades.forEach(t=>{
+    const x = t.idx/(candles.length-1)*w;
+    const y = h - (parseFloat(t.price)-minP)/(maxP-minP)*h;
+    ctx.fillStyle = t.type==='BUY'?'#10b981':'#ef4444';
+    ctx.beginPath(); ctx.arc(x,y,4,0,Math.PI*2); ctx.fill();
+  });
+}
+
+function reset() {
+  document.getElementById('stats').innerHTML='';
+  document.getElementById('summary').textContent='Configure options and run the simulation.';
+  document.querySelector('#trades tbody').innerHTML='';
+  const c = document.getElementById('chart');
+  c.getContext('2d').clearRect(0,0,c.width,c.height);
+}
+setTimeout(runSimulation, 200);
+</script>
+</body>
+</html>

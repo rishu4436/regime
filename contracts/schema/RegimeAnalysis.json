@@ -1,0 +1,53 @@
+{
+  "$defs": {
+    "Regime": {
+      "description": "The six market regimes from spec section 3.1.",
+      "enum": [
+        "STRONG_UPTREND",
+        "MILD_UPTREND",
+        "SIDEWAYS",
+        "OVERSOLD_PULLBACK",
+        "HIGH_VOLATILITY",
+        "DOWNTREND"
+      ],
+      "title": "Regime",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "confidence": {
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "features": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "description": "e.g. sma_slope, rsi, atr_pct, dist_from_ema_pct",
+      "title": "Features",
+      "type": "object"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    },
+    "regime": {
+      "$ref": "#/$defs/Regime"
+    },
+    "timestamp": {
+      "format": "date-time",
+      "title": "Timestamp",
+      "type": "string"
+    }
+  },
+  "required": [
+    "regime",
+    "confidence",
+    "reason"
+  ],
+  "title": "RegimeAnalysis",
+  "type": "object"
+}

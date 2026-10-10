@@ -1,0 +1,25 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "detail": {
+      "default": "",
+      "title": "Detail",
+      "type": "string"
+    },
+    "name": {
+      "description": "e.g. max_exposure, cooldown, paused, max_open_positions",
+      "title": "Name",
+      "type": "string"
+    },
+    "passed": {
+      "title": "Passed",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "name",
+    "passed"
+  ],
+  "title": "RiskCheck",
+  "type": "object"
+}

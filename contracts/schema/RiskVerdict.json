@@ -1,0 +1,84 @@
+{
+  "$defs": {
+    "RiskCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "default": "",
+          "title": "Detail",
+          "type": "string"
+        },
+        "name": {
+          "description": "e.g. max_exposure, cooldown, paused, max_open_positions",
+          "title": "Name",
+          "type": "string"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "passed"
+      ],
+      "title": "RiskCheck",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "adjusted_notional": {
+      "default": 0.0,
+      "minimum": 0,
+      "title": "Adjusted Notional",
+      "type": "number"
+    },
+    "adjusted_size_pct": {
+      "default": 0.0,
+      "maximum": 100,
+      "minimum": 0,
+      "title": "Adjusted Size Pct",
+      "type": "number"
+    },
+    "approved": {
+      "title": "Approved",
+      "type": "boolean"
+    },
+    "checks": {
+      "items": {
+        "$ref": "#/$defs/RiskCheck"
+      },
+      "title": "Checks",
+      "type": "array"
+    },
+    "reasons": {
+      "description": "Human readable; required when blocked",
+      "items": {
+        "type": "string"
+      },
+      "title": "Reasons",
+      "type": "array"
+    },
+    "requires_confirmation": {
+      "default": false,
+      "title": "Requires Confirmation",
+      "type": "boolean"
+    },
+    "signal_id": {
+      "title": "Signal Id",
+      "type": "string"
+    },
+    "timestamp": {
+      "format": "date-time",
+      "title": "Timestamp",
+      "type": "string"
+    }
+  },
+  "required": [
+    "signal_id",
+    "approved"
+  ],
+  "title": "RiskVerdict",
+  "type": "object"
+}

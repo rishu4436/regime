@@ -1,0 +1,182 @@
+{
+  "$defs": {
+    "Position": {
+      "additionalProperties": false,
+      "properties": {
+        "avg_entry_price": {
+          "exclusiveMinimum": 0,
+          "title": "Avg Entry Price",
+          "type": "number"
+        },
+        "current_price": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Current Price"
+        },
+        "highest_price": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "High-water mark since entry (trailing stop)",
+          "title": "Highest Price"
+        },
+        "opened_at": {
+          "format": "date-time",
+          "title": "Opened At",
+          "type": "string"
+        },
+        "quantity": {
+          "exclusiveMinimum": 0,
+          "title": "Quantity",
+          "type": "number"
+        },
+        "stop_loss_price": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stop Loss Price"
+        },
+        "strategy": {
+          "description": "Strategy that opened it: preset name or 'MANUAL:<strategy name>'",
+          "title": "Strategy",
+          "type": "string"
+        },
+        "symbol": {
+          "title": "Symbol",
+          "type": "string"
+        },
+        "take_profit_price": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Take Profit Price"
+        },
+        "trailing_stop_pct": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Trailing Stop Pct"
+        },
+        "unrealized_pnl": {
+          "default": 0.0,
+          "title": "Unrealized Pnl",
+          "type": "number"
+        }
+      },
+      "required": [
+        "symbol",
+        "quantity",
+        "avg_entry_price",
+        "strategy"
+      ],
+      "title": "Position",
+      "type": "object"
+    },
+    "TradingMode": {
+      "description": "Execution environment. SIM = mocks/offline, PAPER = real market data + simulated fills, LIVE = real money.",
+      "enum": [
+        "SIM",
+        "PAPER",
+        "LIVE"
+      ],
+      "title": "TradingMode",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "bars_since_exit": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "description": "Per symbol, bars since last exit (cooldown)",
+      "title": "Bars Since Exit",
+      "type": "object"
+    },
+    "cash": {
+      "minimum": 0,
+      "title": "Cash",
+      "type": "number"
+    },
+    "daily_pnl": {
+      "default": 0.0,
+      "title": "Daily Pnl",
+      "type": "number"
+    },
+    "equity": {
+      "description": "cash + market value of positions",
+      "minimum": 0,
+      "title": "Equity",
+      "type": "number"
+    },
+    "mode": {
+      "$ref": "#/$defs/TradingMode",
+      "default": "SIM"
+    },
+    "positions": {
+      "items": {
+        "$ref": "#/$defs/Position"
+      },
+      "title": "Positions",
+      "type": "array"
+    },
+    "realized_pnl": {
+      "default": 0.0,
+      "title": "Realized Pnl",
+      "type": "number"
+    },
+    "starting_capital": {
+      "exclusiveMinimum": 0,
+      "title": "Starting Capital",
+      "type": "number"
+    },
+    "trades_today": {
+      "default": 0,
+      "title": "Trades Today",
+      "type": "integer"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "starting_capital",
+    "cash",
+    "equity"
+  ],
+  "title": "Portfolio",
+  "type": "object"
+}

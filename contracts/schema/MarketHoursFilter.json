@@ -1,0 +1,32 @@
+{
+  "additionalProperties": false,
+  "description": "sim:marketHours. Real engine: only trade when bar time is within [start, end) UTC (weekdays if set).\nThe simulator fakes this as bar_index % 24 < 16.",
+  "properties": {
+    "enabled": {
+      "default": false,
+      "title": "Enabled",
+      "type": "boolean"
+    },
+    "end_hour_utc": {
+      "default": 20,
+      "maximum": 24,
+      "minimum": 0,
+      "title": "End Hour Utc",
+      "type": "integer"
+    },
+    "start_hour_utc": {
+      "default": 13,
+      "maximum": 23,
+      "minimum": 0,
+      "title": "Start Hour Utc",
+      "type": "integer"
+    },
+    "weekdays_only": {
+      "default": true,
+      "title": "Weekdays Only",
+      "type": "boolean"
+    }
+  },
+  "title": "MarketHoursFilter",
+  "type": "object"
+}

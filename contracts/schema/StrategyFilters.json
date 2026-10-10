@@ -1,0 +1,79 @@
+{
+  "$defs": {
+    "MarketHoursFilter": {
+      "additionalProperties": false,
+      "description": "sim:marketHours. Real engine: only trade when bar time is within [start, end) UTC (weekdays if set).\nThe simulator fakes this as bar_index % 24 < 16.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "end_hour_utc": {
+          "default": 20,
+          "maximum": 24,
+          "minimum": 0,
+          "title": "End Hour Utc",
+          "type": "integer"
+        },
+        "start_hour_utc": {
+          "default": 13,
+          "maximum": 23,
+          "minimum": 0,
+          "title": "Start Hour Utc",
+          "type": "integer"
+        },
+        "weekdays_only": {
+          "default": true,
+          "title": "Weekdays Only",
+          "type": "boolean"
+        }
+      },
+      "title": "MarketHoursFilter",
+      "type": "object"
+    },
+    "MinVolumeFilter": {
+      "additionalProperties": false,
+      "description": "sim:minVol ('Require above-average volume'). Hard gate: volume > multiplier * average volume\n(same average as VolumeAboveAverageCondition) and, if set, volume >= min_volume (absolute, PDF).",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "min_volume": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Volume"
+        },
+        "multiplier": {
+          "default": 1.1,
+          "exclusiveMinimum": 0,
+          "title": "Multiplier",
+          "type": "number"
+        }
+      },
+      "title": "MinVolumeFilter",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "market_hours": {
+      "$ref": "#/$defs/MarketHoursFilter"
+    },
+    "min_volume": {
+      "$ref": "#/$defs/MinVolumeFilter"
+    }
+  },
+  "title": "StrategyFilters",
+  "type": "object"
+}

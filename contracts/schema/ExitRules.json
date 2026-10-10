@@ -1,0 +1,118 @@
+{
+  "$defs": {
+    "MacdCrossCondition": {
+      "additionalProperties": false,
+      "description": "Entry (sim:useMACD): line crosses ABOVE signal this bar (line[i] > sig[i] and line[i-1] <= sig[i-1]).\nExit (sim:useMacdExit): line crosses BELOW signal (line[i] < sig[i] and line[i-1] > sig[i-1]).",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "params": {
+          "$ref": "#/$defs/MacdParams"
+        }
+      },
+      "title": "MacdCrossCondition",
+      "type": "object"
+    },
+    "MacdParams": {
+      "additionalProperties": false,
+      "properties": {
+        "fast": {
+          "default": 12,
+          "minimum": 1,
+          "title": "Fast",
+          "type": "integer"
+        },
+        "signal": {
+          "default": 9,
+          "description": "Simulator approximates a 9-period signal EMA with alpha=0.15",
+          "minimum": 1,
+          "title": "Signal",
+          "type": "integer"
+        },
+        "slow": {
+          "default": 26,
+          "minimum": 2,
+          "title": "Slow",
+          "type": "integer"
+        }
+      },
+      "title": "MacdParams",
+      "type": "object"
+    },
+    "RsiExitRule": {
+      "additionalProperties": false,
+      "description": "sim:useRsiExit / sim:rsiExit. Exit when RSI(period) > threshold.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "period": {
+          "default": 14,
+          "minimum": 2,
+          "title": "Period",
+          "type": "integer"
+        },
+        "threshold": {
+          "default": 70.0,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Threshold",
+          "type": "number"
+        }
+      },
+      "title": "RsiExitRule",
+      "type": "object"
+    },
+    "TrailingStopRule": {
+      "additionalProperties": false,
+      "description": "sim:useTrail / sim:trail. Stop starts at entry*(1-pct/100), ratchets up to close*(1-pct/100);\nexit when close < stop.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "pct": {
+          "default": 4.0,
+          "exclusiveMinimum": 0,
+          "title": "Pct",
+          "type": "number"
+        }
+      },
+      "title": "TrailingStopRule",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Evaluated on each bar's close BEFORE entries, first match wins, in this order (simulator):\nTRAILING_STOP -> TAKE_PROFIT (pnl >= tp) -> STOP_LOSS (pnl <= -sl) -> RSI_EXIT -> MACD_EXIT.\nOpen positions are closed with reason END at the end of a backtest.",
+  "properties": {
+    "macd_bearish_cross": {
+      "$ref": "#/$defs/MacdCrossCondition"
+    },
+    "rsi_above": {
+      "$ref": "#/$defs/RsiExitRule"
+    },
+    "stop_loss_pct": {
+      "default": 6.0,
+      "exclusiveMinimum": 0,
+      "title": "Stop Loss Pct",
+      "type": "number"
+    },
+    "take_profit_pct": {
+      "default": 12.0,
+      "exclusiveMinimum": 0,
+      "title": "Take Profit Pct",
+      "type": "number"
+    },
+    "trailing_stop": {
+      "$ref": "#/$defs/TrailingStopRule"
+    }
+  },
+  "title": "ExitRules",
+  "type": "object"
+}

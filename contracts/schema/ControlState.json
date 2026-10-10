@@ -1,0 +1,55 @@
+{
+  "$defs": {
+    "TradingMode": {
+      "description": "Execution environment. SIM = mocks/offline, PAPER = real market data + simulated fills, LIVE = real money.",
+      "enum": [
+        "SIM",
+        "PAPER",
+        "LIVE"
+      ],
+      "title": "TradingMode",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "confirmation_mode": {
+      "default": true,
+      "title": "Confirmation Mode",
+      "type": "boolean"
+    },
+    "emergency_stopped": {
+      "default": false,
+      "title": "Emergency Stopped",
+      "type": "boolean"
+    },
+    "paused": {
+      "default": false,
+      "title": "Paused",
+      "type": "boolean"
+    },
+    "reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reason"
+    },
+    "trading_mode": {
+      "$ref": "#/$defs/TradingMode",
+      "default": "SIM"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    }
+  },
+  "title": "ControlState",
+  "type": "object"
+}

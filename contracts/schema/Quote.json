@@ -1,0 +1,86 @@
+{
+  "$defs": {
+    "ExecutionPath": {
+      "enum": [
+        "SWAP",
+        "RFQ"
+      ],
+      "title": "ExecutionPath",
+      "type": "string"
+    },
+    "OrderSide": {
+      "enum": [
+        "BUY",
+        "SELL"
+      ],
+      "title": "OrderSide",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "expires_at": {
+      "format": "date-time",
+      "title": "Expires At",
+      "type": "string"
+    },
+    "fee": {
+      "default": 0.0,
+      "minimum": 0,
+      "title": "Fee",
+      "type": "number"
+    },
+    "notional": {
+      "description": "Quote-currency amount (USDT) to spend (BUY) or receive (SELL)",
+      "exclusiveMinimum": 0,
+      "title": "Notional",
+      "type": "number"
+    },
+    "path": {
+      "$ref": "#/$defs/ExecutionPath",
+      "default": "SWAP"
+    },
+    "price": {
+      "exclusiveMinimum": 0,
+      "title": "Price",
+      "type": "number"
+    },
+    "quantity": {
+      "description": "Token quantity bought/sold at this quote",
+      "exclusiveMinimum": 0,
+      "title": "Quantity",
+      "type": "number"
+    },
+    "quote_id": {
+      "title": "Quote Id",
+      "type": "string"
+    },
+    "side": {
+      "$ref": "#/$defs/OrderSide"
+    },
+    "slippage_bps": {
+      "default": 50,
+      "minimum": 0,
+      "title": "Slippage Bps",
+      "type": "integer"
+    },
+    "symbol": {
+      "title": "Symbol",
+      "type": "string"
+    }
+  },
+  "required": [
+    "symbol",
+    "side",
+    "notional",
+    "quantity",
+    "price"
+  ],
+  "title": "Quote",
+  "type": "object"
+}

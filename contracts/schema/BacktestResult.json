@@ -1,0 +1,177 @@
+{
+  "$defs": {
+    "BacktestTrade": {
+      "additionalProperties": false,
+      "properties": {
+        "entry_price": {
+          "title": "Entry Price",
+          "type": "number"
+        },
+        "entry_time": {
+          "format": "date-time",
+          "title": "Entry Time",
+          "type": "string"
+        },
+        "exit_price": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exit Price"
+        },
+        "exit_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExitReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "exit_time": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exit Time"
+        },
+        "pnl": {
+          "default": 0.0,
+          "title": "Pnl",
+          "type": "number"
+        },
+        "pnl_pct": {
+          "default": 0.0,
+          "title": "Pnl Pct",
+          "type": "number"
+        },
+        "quantity": {
+          "title": "Quantity",
+          "type": "number"
+        },
+        "symbol": {
+          "title": "Symbol",
+          "type": "string"
+        }
+      },
+      "required": [
+        "symbol",
+        "entry_time",
+        "entry_price",
+        "quantity"
+      ],
+      "title": "BacktestTrade",
+      "type": "object"
+    },
+    "EquityPoint": {
+      "additionalProperties": false,
+      "properties": {
+        "equity": {
+          "title": "Equity",
+          "type": "number"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        }
+      },
+      "required": [
+        "timestamp",
+        "equity"
+      ],
+      "title": "EquityPoint",
+      "type": "object"
+    },
+    "ExitReason": {
+      "description": "Why a position was closed. First five mirror the simulator's reasons in priority order.",
+      "enum": [
+        "TRAILING_STOP",
+        "TAKE_PROFIT",
+        "STOP_LOSS",
+        "RSI_EXIT",
+        "MACD_EXIT",
+        "END",
+        "MAX_LOSS",
+        "MANUAL",
+        "EMERGENCY_STOP"
+      ],
+      "title": "ExitReason",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "equity_curve": {
+      "items": {
+        "$ref": "#/$defs/EquityPoint"
+      },
+      "title": "Equity Curve",
+      "type": "array"
+    },
+    "final_equity": {
+      "title": "Final Equity",
+      "type": "number"
+    },
+    "initial_capital": {
+      "title": "Initial Capital",
+      "type": "number"
+    },
+    "max_drawdown_pct": {
+      "title": "Max Drawdown Pct",
+      "type": "number"
+    },
+    "num_trades": {
+      "title": "Num Trades",
+      "type": "integer"
+    },
+    "strategy_name": {
+      "title": "Strategy Name",
+      "type": "string"
+    },
+    "symbol": {
+      "title": "Symbol",
+      "type": "string"
+    },
+    "total_return_pct": {
+      "title": "Total Return Pct",
+      "type": "number"
+    },
+    "trades": {
+      "items": {
+        "$ref": "#/$defs/BacktestTrade"
+      },
+      "title": "Trades",
+      "type": "array"
+    },
+    "win_rate_pct": {
+      "title": "Win Rate Pct",
+      "type": "number"
+    }
+  },
+  "required": [
+    "strategy_name",
+    "symbol",
+    "initial_capital",
+    "final_equity",
+    "total_return_pct",
+    "max_drawdown_pct",
+    "win_rate_pct",
+    "num_trades"
+  ],
+  "title": "BacktestResult",
+  "type": "object"
+}

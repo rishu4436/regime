@@ -1,0 +1,44 @@
+{
+  "$defs": {
+    "MacdParams": {
+      "additionalProperties": false,
+      "properties": {
+        "fast": {
+          "default": 12,
+          "minimum": 1,
+          "title": "Fast",
+          "type": "integer"
+        },
+        "signal": {
+          "default": 9,
+          "description": "Simulator approximates a 9-period signal EMA with alpha=0.15",
+          "minimum": 1,
+          "title": "Signal",
+          "type": "integer"
+        },
+        "slow": {
+          "default": 26,
+          "minimum": 2,
+          "title": "Slow",
+          "type": "integer"
+        }
+      },
+      "title": "MacdParams",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Entry (sim:useMACD): line crosses ABOVE signal this bar (line[i] > sig[i] and line[i-1] <= sig[i-1]).\nExit (sim:useMacdExit): line crosses BELOW signal (line[i] < sig[i] and line[i-1] > sig[i-1]).",
+  "properties": {
+    "enabled": {
+      "default": false,
+      "title": "Enabled",
+      "type": "boolean"
+    },
+    "params": {
+      "$ref": "#/$defs/MacdParams"
+    }
+  },
+  "title": "MacdCrossCondition",
+  "type": "object"
+}

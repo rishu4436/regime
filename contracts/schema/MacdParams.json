@@ -1,0 +1,26 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "fast": {
+      "default": 12,
+      "minimum": 1,
+      "title": "Fast",
+      "type": "integer"
+    },
+    "signal": {
+      "default": 9,
+      "description": "Simulator approximates a 9-period signal EMA with alpha=0.15",
+      "minimum": 1,
+      "title": "Signal",
+      "type": "integer"
+    },
+    "slow": {
+      "default": 26,
+      "minimum": 2,
+      "title": "Slow",
+      "type": "integer"
+    }
+  },
+  "title": "MacdParams",
+  "type": "object"
+}

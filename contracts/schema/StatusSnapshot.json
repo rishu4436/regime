@@ -1,0 +1,769 @@
+{
+  "$defs": {
+    "Action": {
+      "enum": [
+        "BUY",
+        "SELL",
+        "STAY_OUT"
+      ],
+      "title": "Action",
+      "type": "string"
+    },
+    "AgentMode": {
+      "description": "Which brain produced a signal: the user's rule set (MANUAL) or the regime-driven preset selector (AUTO).",
+      "enum": [
+        "MANUAL",
+        "AUTO"
+      ],
+      "title": "AgentMode",
+      "type": "string"
+    },
+    "ControlState": {
+      "additionalProperties": false,
+      "properties": {
+        "confirmation_mode": {
+          "default": true,
+          "title": "Confirmation Mode",
+          "type": "boolean"
+        },
+        "emergency_stopped": {
+          "default": false,
+          "title": "Emergency Stopped",
+          "type": "boolean"
+        },
+        "paused": {
+          "default": false,
+          "title": "Paused",
+          "type": "boolean"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "trading_mode": {
+          "$ref": "#/$defs/TradingMode",
+          "default": "SIM"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        }
+      },
+      "title": "ControlState",
+      "type": "object"
+    },
+    "Decision": {
+      "additionalProperties": false,
+      "description": "Final, fully explainable record of one evaluation cycle (regime + strategy + reason).",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/Action"
+        },
+        "agent_mode": {
+          "$ref": "#/$defs/AgentMode"
+        },
+        "execution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutionResult"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "explanation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Plain-language text from the LLM layer (Bot 5)",
+          "title": "Explanation"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/TradingMode"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "regime": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Regime"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "risk_verdict": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RiskVerdict"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "signal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "strategy": {
+          "title": "Strategy",
+          "type": "string"
+        },
+        "symbol": {
+          "title": "Symbol",
+          "type": "string"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode",
+        "agent_mode",
+        "symbol",
+        "strategy",
+        "action",
+        "reason"
+      ],
+      "title": "Decision",
+      "type": "object"
+    },
+    "ExecutionPath": {
+      "enum": [
+        "SWAP",
+        "RFQ"
+      ],
+      "title": "ExecutionPath",
+      "type": "string"
+    },
+    "ExecutionResult": {
+      "additionalProperties": false,
+      "properties": {
+        "avg_price": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Avg Price"
+        },
+        "client_order_id": {
+          "title": "Client Order Id",
+          "type": "string"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error"
+        },
+        "fee": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Fee",
+          "type": "number"
+        },
+        "filled_quantity": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Filled Quantity",
+          "type": "number"
+        },
+        "mode": {
+          "$ref": "#/$defs/TradingMode"
+        },
+        "notional": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Notional",
+          "type": "number"
+        },
+        "order_id": {
+          "title": "Order Id",
+          "type": "string"
+        },
+        "path": {
+          "$ref": "#/$defs/ExecutionPath"
+        },
+        "side": {
+          "$ref": "#/$defs/OrderSide"
+        },
+        "status": {
+          "$ref": "#/$defs/OrderStatus"
+        },
+        "symbol": {
+          "title": "Symbol",
+          "type": "string"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        },
+        "tx_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tx Hash"
+        }
+      },
+      "required": [
+        "client_order_id",
+        "symbol",
+        "side",
+        "status",
+        "path",
+        "mode"
+      ],
+      "title": "ExecutionResult",
+      "type": "object"
+    },
+    "OrderSide": {
+      "enum": [
+        "BUY",
+        "SELL"
+      ],
+      "title": "OrderSide",
+      "type": "string"
+    },
+    "OrderStatus": {
+      "enum": [
+        "FILLED",
+        "PARTIALLY_FILLED",
+        "PENDING_CONFIRMATION",
+        "REJECTED",
+        "EXPIRED",
+        "FAILED"
+      ],
+      "title": "OrderStatus",
+      "type": "string"
+    },
+    "Portfolio": {
+      "additionalProperties": false,
+      "properties": {
+        "bars_since_exit": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "description": "Per symbol, bars since last exit (cooldown)",
+          "title": "Bars Since Exit",
+          "type": "object"
+        },
+        "cash": {
+          "minimum": 0,
+          "title": "Cash",
+          "type": "number"
+        },
+        "daily_pnl": {
+          "default": 0.0,
+          "title": "Daily Pnl",
+          "type": "number"
+        },
+        "equity": {
+          "description": "cash + market value of positions",
+          "minimum": 0,
+          "title": "Equity",
+          "type": "number"
+        },
+        "mode": {
+          "$ref": "#/$defs/TradingMode",
+          "default": "SIM"
+        },
+        "positions": {
+          "items": {
+            "$ref": "#/$defs/Position"
+          },
+          "title": "Positions",
+          "type": "array"
+        },
+        "realized_pnl": {
+          "default": 0.0,
+          "title": "Realized Pnl",
+          "type": "number"
+        },
+        "starting_capital": {
+          "exclusiveMinimum": 0,
+          "title": "Starting Capital",
+          "type": "number"
+        },
+        "trades_today": {
+          "default": 0,
+          "title": "Trades Today",
+          "type": "integer"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "starting_capital",
+        "cash",
+        "equity"
+      ],
+      "title": "Portfolio",
+      "type": "object"
+    },
+    "Position": {
+      "additionalProperties": false,
+      "properties": {
+        "avg_entry_price": {
+          "exclusiveMinimum": 0,
+          "title": "Avg Entry Price",
+          "type": "number"
+        },
+        "current_price": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Current Price"
+        },
+        "highest_price": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "High-water mark since entry (trailing stop)",
+          "title": "Highest Price"
+        },
+        "opened_at": {
+          "format": "date-time",
+          "title": "Opened At",
+          "type": "string"
+        },
+        "quantity": {
+          "exclusiveMinimum": 0,
+          "title": "Quantity",
+          "type": "number"
+        },
+        "stop_loss_price": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stop Loss Price"
+        },
+        "strategy": {
+          "description": "Strategy that opened it: preset name or 'MANUAL:<strategy name>'",
+          "title": "Strategy",
+          "type": "string"
+        },
+        "symbol": {
+          "title": "Symbol",
+          "type": "string"
+        },
+        "take_profit_price": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Take Profit Price"
+        },
+        "trailing_stop_pct": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Trailing Stop Pct"
+        },
+        "unrealized_pnl": {
+          "default": 0.0,
+          "title": "Unrealized Pnl",
+          "type": "number"
+        }
+      },
+      "required": [
+        "symbol",
+        "quantity",
+        "avg_entry_price",
+        "strategy"
+      ],
+      "title": "Position",
+      "type": "object"
+    },
+    "PresetName": {
+      "enum": [
+        "DCA",
+        "SMART_DCA",
+        "BUY_THE_DIP",
+        "TREND_FOLLOWING",
+        "GRID"
+      ],
+      "title": "PresetName",
+      "type": "string"
+    },
+    "Regime": {
+      "description": "The six market regimes from spec section 3.1.",
+      "enum": [
+        "STRONG_UPTREND",
+        "MILD_UPTREND",
+        "SIDEWAYS",
+        "OVERSOLD_PULLBACK",
+        "HIGH_VOLATILITY",
+        "DOWNTREND"
+      ],
+      "title": "Regime",
+      "type": "string"
+    },
+    "RiskCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "default": "",
+          "title": "Detail",
+          "type": "string"
+        },
+        "name": {
+          "description": "e.g. max_exposure, cooldown, paused, max_open_positions",
+          "title": "Name",
+          "type": "string"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "passed"
+      ],
+      "title": "RiskCheck",
+      "type": "object"
+    },
+    "RiskVerdict": {
+      "additionalProperties": false,
+      "properties": {
+        "adjusted_notional": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Adjusted Notional",
+          "type": "number"
+        },
+        "adjusted_size_pct": {
+          "default": 0.0,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Adjusted Size Pct",
+          "type": "number"
+        },
+        "approved": {
+          "title": "Approved",
+          "type": "boolean"
+        },
+        "checks": {
+          "items": {
+            "$ref": "#/$defs/RiskCheck"
+          },
+          "title": "Checks",
+          "type": "array"
+        },
+        "reasons": {
+          "description": "Human readable; required when blocked",
+          "items": {
+            "type": "string"
+          },
+          "title": "Reasons",
+          "type": "array"
+        },
+        "requires_confirmation": {
+          "default": false,
+          "title": "Requires Confirmation",
+          "type": "boolean"
+        },
+        "signal_id": {
+          "title": "Signal Id",
+          "type": "string"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        }
+      },
+      "required": [
+        "signal_id",
+        "approved"
+      ],
+      "title": "RiskVerdict",
+      "type": "object"
+    },
+    "Signal": {
+      "additionalProperties": false,
+      "description": "Proposed action from the strategy engine (Bot 2). Never executed without a RiskVerdict.",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/Action"
+        },
+        "conditions_failed": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Conditions Failed",
+          "type": "array"
+        },
+        "conditions_met": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Conditions Met",
+          "type": "array"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "preset": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PresetName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "price": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Price"
+        },
+        "proposed_notional": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Proposed Notional",
+          "type": "number"
+        },
+        "proposed_size_pct": {
+          "default": 0.0,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Proposed Size Pct",
+          "type": "number"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "regime": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Regime"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "source": {
+          "$ref": "#/$defs/AgentMode"
+        },
+        "strategy": {
+          "description": "Preset name (AUTO) or 'MANUAL:<name>'",
+          "title": "Strategy",
+          "type": "string"
+        },
+        "symbol": {
+          "title": "Symbol",
+          "type": "string"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        }
+      },
+      "required": [
+        "symbol",
+        "action",
+        "source",
+        "strategy",
+        "reason"
+      ],
+      "title": "Signal",
+      "type": "object"
+    },
+    "TradingMode": {
+      "description": "Execution environment. SIM = mocks/offline, PAPER = real market data + simulated fills, LIVE = real money.",
+      "enum": [
+        "SIM",
+        "PAPER",
+        "LIVE"
+      ],
+      "title": "TradingMode",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Everything the dashboard / explainer needs in one object.",
+  "properties": {
+    "active_strategy": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Active Strategy"
+    },
+    "active_symbol": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Active Symbol"
+    },
+    "agent_mode": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AgentMode"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "control": {
+      "$ref": "#/$defs/ControlState"
+    },
+    "current_regime": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Regime"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "last_decision": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Decision"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "portfolio": {
+      "$ref": "#/$defs/Portfolio"
+    },
+    "recent_decisions": {
+      "items": {
+        "$ref": "#/$defs/Decision"
+      },
+      "title": "Recent Decisions",
+      "type": "array"
+    },
+    "timestamp": {
+      "format": "date-time",
+      "title": "Timestamp",
+      "type": "string"
+    }
+  },
+  "required": [
+    "control",
+    "portfolio"
+  ],
+  "title": "StatusSnapshot",
+  "type": "object"
+}

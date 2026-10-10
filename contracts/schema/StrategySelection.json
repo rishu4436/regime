@@ -1,0 +1,78 @@
+{
+  "$defs": {
+    "PresetName": {
+      "enum": [
+        "DCA",
+        "SMART_DCA",
+        "BUY_THE_DIP",
+        "TREND_FOLLOWING",
+        "GRID"
+      ],
+      "title": "PresetName",
+      "type": "string"
+    },
+    "Regime": {
+      "description": "The six market regimes from spec section 3.1.",
+      "enum": [
+        "STRONG_UPTREND",
+        "MILD_UPTREND",
+        "SIDEWAYS",
+        "OVERSOLD_PULLBACK",
+        "HIGH_VOLATILITY",
+        "DOWNTREND"
+      ],
+      "title": "Regime",
+      "type": "string"
+    },
+    "TraderStyle": {
+      "enum": [
+        "PATIENT",
+        "BALANCED",
+        "ACTIVE"
+      ],
+      "title": "TraderStyle",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Result of map(regime, style) -> exactly one strategy (or none => stay out).",
+  "properties": {
+    "preset": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PresetName"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "None means 'pause / stay out' for this regime"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    },
+    "regime": {
+      "$ref": "#/$defs/Regime"
+    },
+    "size_multiplier": {
+      "default": 1.0,
+      "description": "e.g. 0.5 in high volatility",
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Size Multiplier",
+      "type": "number"
+    },
+    "style": {
+      "$ref": "#/$defs/TraderStyle"
+    }
+  },
+  "required": [
+    "regime",
+    "style",
+    "reason"
+  ],
+  "title": "StrategySelection",
+  "type": "object"
+}

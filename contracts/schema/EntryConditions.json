@@ -1,0 +1,245 @@
+{
+  "$defs": {
+    "BollingerLowerCondition": {
+      "additionalProperties": false,
+      "description": "sim:useBB. True when close < lower_band * (1 + proximity_pct/100) (i.e. near OR below the band).",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "period": {
+          "default": 20,
+          "minimum": 2,
+          "title": "Period",
+          "type": "integer"
+        },
+        "proximity_pct": {
+          "default": 2.0,
+          "description": "Simulator uses close < lower * 1.02",
+          "minimum": 0,
+          "title": "Proximity Pct",
+          "type": "number"
+        },
+        "std_dev": {
+          "default": 2.0,
+          "exclusiveMinimum": 0,
+          "title": "Std Dev",
+          "type": "number"
+        }
+      },
+      "title": "BollingerLowerCondition",
+      "type": "object"
+    },
+    "BreakoutCondition": {
+      "additionalProperties": false,
+      "description": "PDF-only (not in the simulator). HIGH: close > max(high of previous `lookback` bars);\nLOW: close < min(low of previous `lookback` bars).",
+      "properties": {
+        "direction": {
+          "$ref": "#/$defs/BreakoutDirection",
+          "default": "HIGH"
+        },
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "lookback": {
+          "default": 20,
+          "minimum": 2,
+          "title": "Lookback",
+          "type": "integer"
+        }
+      },
+      "title": "BreakoutCondition",
+      "type": "object"
+    },
+    "BreakoutDirection": {
+      "description": "Price-action breakout: break of the recent HIGH (bullish) or recent LOW.",
+      "enum": [
+        "HIGH",
+        "LOW"
+      ],
+      "title": "BreakoutDirection",
+      "type": "string"
+    },
+    "ConditionLogic": {
+      "enum": [
+        "AND",
+        "OR"
+      ],
+      "title": "ConditionLogic",
+      "type": "string"
+    },
+    "MacdCrossCondition": {
+      "additionalProperties": false,
+      "description": "Entry (sim:useMACD): line crosses ABOVE signal this bar (line[i] > sig[i] and line[i-1] <= sig[i-1]).\nExit (sim:useMacdExit): line crosses BELOW signal (line[i] < sig[i] and line[i-1] > sig[i-1]).",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "params": {
+          "$ref": "#/$defs/MacdParams"
+        }
+      },
+      "title": "MacdCrossCondition",
+      "type": "object"
+    },
+    "MacdParams": {
+      "additionalProperties": false,
+      "properties": {
+        "fast": {
+          "default": 12,
+          "minimum": 1,
+          "title": "Fast",
+          "type": "integer"
+        },
+        "signal": {
+          "default": 9,
+          "description": "Simulator approximates a 9-period signal EMA with alpha=0.15",
+          "minimum": 1,
+          "title": "Signal",
+          "type": "integer"
+        },
+        "slow": {
+          "default": 26,
+          "minimum": 2,
+          "title": "Slow",
+          "type": "integer"
+        }
+      },
+      "title": "MacdParams",
+      "type": "object"
+    },
+    "PriceAboveEmaCondition": {
+      "additionalProperties": false,
+      "description": "sim:useEMA / sim:emaPeriod. True when close > EMA(period).",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "period": {
+          "default": 20,
+          "minimum": 2,
+          "title": "Period",
+          "type": "integer"
+        }
+      },
+      "title": "PriceAboveEmaCondition",
+      "type": "object"
+    },
+    "PriceAboveSmaCondition": {
+      "additionalProperties": false,
+      "description": "sim:useSMA / sim:smaPeriod. True when close > SMA(period).",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "period": {
+          "default": 50,
+          "minimum": 2,
+          "title": "Period",
+          "type": "integer"
+        }
+      },
+      "title": "PriceAboveSmaCondition",
+      "type": "object"
+    },
+    "RsiBelowCondition": {
+      "additionalProperties": false,
+      "description": "sim:useRSI / sim:rsiEntry. True when RSI(period) < threshold.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "period": {
+          "default": 14,
+          "minimum": 2,
+          "title": "Period",
+          "type": "integer"
+        },
+        "threshold": {
+          "default": 35.0,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Threshold",
+          "type": "number"
+        }
+      },
+      "title": "RsiBelowCondition",
+      "type": "object"
+    },
+    "VolumeAboveAverageCondition": {
+      "additionalProperties": false,
+      "description": "sim:useVolume. True when volume > multiplier * average volume.\nperiod=None means 'average over all candles passed to the evaluator' (simulator behaviour).",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "multiplier": {
+          "default": 1.1,
+          "exclusiveMinimum": 0,
+          "title": "Multiplier",
+          "type": "number"
+        },
+        "period": {
+          "anyOf": [
+            {
+              "minimum": 2,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Period"
+        }
+      },
+      "title": "VolumeAboveAverageCondition",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Combination semantics (simulator): each ENABLED condition whose indicator is available (not in warm-up)\ncontributes one boolean; conditions whose indicator is still null are skipped, not counted as false.\nIf no booleans were produced -> no entry. AND = all true (sim: every), OR = at least one true (sim: some).\nCanonical names for Signal.conditions_met/failed are the field names below.",
+  "properties": {
+    "bollinger_lower": {
+      "$ref": "#/$defs/BollingerLowerCondition"
+    },
+    "breakout": {
+      "$ref": "#/$defs/BreakoutCondition"
+    },
+    "logic": {
+      "$ref": "#/$defs/ConditionLogic",
+      "default": "AND"
+    },
+    "macd_bullish_cross": {
+      "$ref": "#/$defs/MacdCrossCondition"
+    },
+    "price_above_ema": {
+      "$ref": "#/$defs/PriceAboveEmaCondition"
+    },
+    "price_above_sma": {
+      "$ref": "#/$defs/PriceAboveSmaCondition"
+    },
+    "rsi_below": {
+      "$ref": "#/$defs/RsiBelowCondition"
+    },
+    "volume_above_avg": {
+      "$ref": "#/$defs/VolumeAboveAverageCondition"
+    }
+  },
+  "title": "EntryConditions",
+  "type": "object"
+}

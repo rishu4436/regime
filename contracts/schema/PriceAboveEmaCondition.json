@@ -1,0 +1,19 @@
+{
+  "additionalProperties": false,
+  "description": "sim:useEMA / sim:emaPeriod. True when close > EMA(period).",
+  "properties": {
+    "enabled": {
+      "default": false,
+      "title": "Enabled",
+      "type": "boolean"
+    },
+    "period": {
+      "default": 20,
+      "minimum": 2,
+      "title": "Period",
+      "type": "integer"
+    }
+  },
+  "title": "PriceAboveEmaCondition",
+  "type": "object"
+}

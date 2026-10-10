@@ -1,0 +1,94 @@
+{
+  "$defs": {
+    "ExitReason": {
+      "description": "Why a position was closed. First five mirror the simulator's reasons in priority order.",
+      "enum": [
+        "TRAILING_STOP",
+        "TAKE_PROFIT",
+        "STOP_LOSS",
+        "RSI_EXIT",
+        "MACD_EXIT",
+        "END",
+        "MAX_LOSS",
+        "MANUAL",
+        "EMERGENCY_STOP"
+      ],
+      "title": "ExitReason",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "entry_price": {
+      "title": "Entry Price",
+      "type": "number"
+    },
+    "entry_time": {
+      "format": "date-time",
+      "title": "Entry Time",
+      "type": "string"
+    },
+    "exit_price": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Exit Price"
+    },
+    "exit_reason": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExitReason"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "exit_time": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Exit Time"
+    },
+    "pnl": {
+      "default": 0.0,
+      "title": "Pnl",
+      "type": "number"
+    },
+    "pnl_pct": {
+      "default": 0.0,
+      "title": "Pnl Pct",
+      "type": "number"
+    },
+    "quantity": {
+      "title": "Quantity",
+      "type": "number"
+    },
+    "symbol": {
+      "title": "Symbol",
+      "type": "string"
+    }
+  },
+  "required": [
+    "symbol",
+    "entry_time",
+    "entry_price",
+    "quantity"
+  ],
+  "title": "BacktestTrade",
+  "type": "object"
+}

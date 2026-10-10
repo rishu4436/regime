@@ -1,0 +1,32 @@
+{
+  "additionalProperties": false,
+  "description": "sim:useVolume. True when volume > multiplier * average volume.\nperiod=None means 'average over all candles passed to the evaluator' (simulator behaviour).",
+  "properties": {
+    "enabled": {
+      "default": false,
+      "title": "Enabled",
+      "type": "boolean"
+    },
+    "multiplier": {
+      "default": 1.1,
+      "exclusiveMinimum": 0,
+      "title": "Multiplier",
+      "type": "number"
+    },
+    "period": {
+      "anyOf": [
+        {
+          "minimum": 2,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Period"
+    }
+  },
+  "title": "VolumeAboveAverageCondition",
+  "type": "object"
+}

@@ -1,0 +1,20 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "equity": {
+      "title": "Equity",
+      "type": "number"
+    },
+    "timestamp": {
+      "format": "date-time",
+      "title": "Timestamp",
+      "type": "string"
+    }
+  },
+  "required": [
+    "timestamp",
+    "equity"
+  ],
+  "title": "EquityPoint",
+  "type": "object"
+}

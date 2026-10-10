@@ -1,0 +1,44 @@
+{
+  "additionalProperties": false,
+  "description": "Entry allowed only if open_positions < max_open_positions AND bars_since_last_exit > cooldown_bars.",
+  "properties": {
+    "cooldown_bars": {
+      "default": 5,
+      "description": "sim:cooldown",
+      "minimum": 0,
+      "title": "Cooldown Bars",
+      "type": "integer"
+    },
+    "max_loss_per_trade_pct": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "PDF-only; % of capital",
+      "title": "Max Loss Per Trade Pct"
+    },
+    "max_open_positions": {
+      "default": 1,
+      "description": "sim:maxPos (UI allows 1-3)",
+      "minimum": 1,
+      "title": "Max Open Positions",
+      "type": "integer"
+    },
+    "position_size_pct": {
+      "default": 15.0,
+      "description": "% of current capital per entry (sim:size)",
+      "exclusiveMinimum": 0,
+      "maximum": 100,
+      "title": "Position Size Pct",
+      "type": "number"
+    }
+  },
+  "title": "PositionRiskRules",
+  "type": "object"
+}

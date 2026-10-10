@@ -1,0 +1,39 @@
+{
+  "$defs": {
+    "EventType": {
+      "description": "WebSocket / log event kinds pushed from backend/app to the frontend.",
+      "enum": [
+        "DECISION",
+        "EXECUTION",
+        "CONTROL",
+        "PRICE",
+        "ALERT",
+        "STATUS"
+      ],
+      "title": "EventType",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Envelope for WebSocket messages and structured logs.",
+  "properties": {
+    "payload": {
+      "additionalProperties": true,
+      "title": "Payload",
+      "type": "object"
+    },
+    "timestamp": {
+      "format": "date-time",
+      "title": "Timestamp",
+      "type": "string"
+    },
+    "type": {
+      "$ref": "#/$defs/EventType"
+    }
+  },
+  "required": [
+    "type"
+  ],
+  "title": "Event",
+  "type": "object"
+}

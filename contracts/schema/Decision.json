@@ -1,0 +1,469 @@
+{
+  "$defs": {
+    "Action": {
+      "enum": [
+        "BUY",
+        "SELL",
+        "STAY_OUT"
+      ],
+      "title": "Action",
+      "type": "string"
+    },
+    "AgentMode": {
+      "description": "Which brain produced a signal: the user's rule set (MANUAL) or the regime-driven preset selector (AUTO).",
+      "enum": [
+        "MANUAL",
+        "AUTO"
+      ],
+      "title": "AgentMode",
+      "type": "string"
+    },
+    "ExecutionPath": {
+      "enum": [
+        "SWAP",
+        "RFQ"
+      ],
+      "title": "ExecutionPath",
+      "type": "string"
+    },
+    "ExecutionResult": {
+      "additionalProperties": false,
+      "properties": {
+        "avg_price": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Avg Price"
+        },
+        "client_order_id": {
+          "title": "Client Order Id",
+          "type": "string"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error"
+        },
+        "fee": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Fee",
+          "type": "number"
+        },
+        "filled_quantity": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Filled Quantity",
+          "type": "number"
+        },
+        "mode": {
+          "$ref": "#/$defs/TradingMode"
+        },
+        "notional": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Notional",
+          "type": "number"
+        },
+        "order_id": {
+          "title": "Order Id",
+          "type": "string"
+        },
+        "path": {
+          "$ref": "#/$defs/ExecutionPath"
+        },
+        "side": {
+          "$ref": "#/$defs/OrderSide"
+        },
+        "status": {
+          "$ref": "#/$defs/OrderStatus"
+        },
+        "symbol": {
+          "title": "Symbol",
+          "type": "string"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        },
+        "tx_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tx Hash"
+        }
+      },
+      "required": [
+        "client_order_id",
+        "symbol",
+        "side",
+        "status",
+        "path",
+        "mode"
+      ],
+      "title": "ExecutionResult",
+      "type": "object"
+    },
+    "OrderSide": {
+      "enum": [
+        "BUY",
+        "SELL"
+      ],
+      "title": "OrderSide",
+      "type": "string"
+    },
+    "OrderStatus": {
+      "enum": [
+        "FILLED",
+        "PARTIALLY_FILLED",
+        "PENDING_CONFIRMATION",
+        "REJECTED",
+        "EXPIRED",
+        "FAILED"
+      ],
+      "title": "OrderStatus",
+      "type": "string"
+    },
+    "PresetName": {
+      "enum": [
+        "DCA",
+        "SMART_DCA",
+        "BUY_THE_DIP",
+        "TREND_FOLLOWING",
+        "GRID"
+      ],
+      "title": "PresetName",
+      "type": "string"
+    },
+    "Regime": {
+      "description": "The six market regimes from spec section 3.1.",
+      "enum": [
+        "STRONG_UPTREND",
+        "MILD_UPTREND",
+        "SIDEWAYS",
+        "OVERSOLD_PULLBACK",
+        "HIGH_VOLATILITY",
+        "DOWNTREND"
+      ],
+      "title": "Regime",
+      "type": "string"
+    },
+    "RiskCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "default": "",
+          "title": "Detail",
+          "type": "string"
+        },
+        "name": {
+          "description": "e.g. max_exposure, cooldown, paused, max_open_positions",
+          "title": "Name",
+          "type": "string"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "passed"
+      ],
+      "title": "RiskCheck",
+      "type": "object"
+    },
+    "RiskVerdict": {
+      "additionalProperties": false,
+      "properties": {
+        "adjusted_notional": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Adjusted Notional",
+          "type": "number"
+        },
+        "adjusted_size_pct": {
+          "default": 0.0,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Adjusted Size Pct",
+          "type": "number"
+        },
+        "approved": {
+          "title": "Approved",
+          "type": "boolean"
+        },
+        "checks": {
+          "items": {
+            "$ref": "#/$defs/RiskCheck"
+          },
+          "title": "Checks",
+          "type": "array"
+        },
+        "reasons": {
+          "description": "Human readable; required when blocked",
+          "items": {
+            "type": "string"
+          },
+          "title": "Reasons",
+          "type": "array"
+        },
+        "requires_confirmation": {
+          "default": false,
+          "title": "Requires Confirmation",
+          "type": "boolean"
+        },
+        "signal_id": {
+          "title": "Signal Id",
+          "type": "string"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        }
+      },
+      "required": [
+        "signal_id",
+        "approved"
+      ],
+      "title": "RiskVerdict",
+      "type": "object"
+    },
+    "Signal": {
+      "additionalProperties": false,
+      "description": "Proposed action from the strategy engine (Bot 2). Never executed without a RiskVerdict.",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/Action"
+        },
+        "conditions_failed": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Conditions Failed",
+          "type": "array"
+        },
+        "conditions_met": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Conditions Met",
+          "type": "array"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "preset": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PresetName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "price": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Price"
+        },
+        "proposed_notional": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Proposed Notional",
+          "type": "number"
+        },
+        "proposed_size_pct": {
+          "default": 0.0,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Proposed Size Pct",
+          "type": "number"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "regime": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Regime"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "source": {
+          "$ref": "#/$defs/AgentMode"
+        },
+        "strategy": {
+          "description": "Preset name (AUTO) or 'MANUAL:<name>'",
+          "title": "Strategy",
+          "type": "string"
+        },
+        "symbol": {
+          "title": "Symbol",
+          "type": "string"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        }
+      },
+      "required": [
+        "symbol",
+        "action",
+        "source",
+        "strategy",
+        "reason"
+      ],
+      "title": "Signal",
+      "type": "object"
+    },
+    "TradingMode": {
+      "description": "Execution environment. SIM = mocks/offline, PAPER = real market data + simulated fills, LIVE = real money.",
+      "enum": [
+        "SIM",
+        "PAPER",
+        "LIVE"
+      ],
+      "title": "TradingMode",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Final, fully explainable record of one evaluation cycle (regime + strategy + reason).",
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action"
+    },
+    "agent_mode": {
+      "$ref": "#/$defs/AgentMode"
+    },
+    "execution": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExecutionResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "explanation": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Plain-language text from the LLM layer (Bot 5)",
+      "title": "Explanation"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "mode": {
+      "$ref": "#/$defs/TradingMode"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    },
+    "regime": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Regime"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "risk_verdict": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RiskVerdict"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "signal": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Signal"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "strategy": {
+      "title": "Strategy",
+      "type": "string"
+    },
+    "symbol": {
+      "title": "Symbol",
+      "type": "string"
+    },
+    "timestamp": {
+      "format": "date-time",
+      "title": "Timestamp",
+      "type": "string"
+    }
+  },
+  "required": [
+    "mode",
+    "agent_mode",
+    "symbol",
+    "strategy",
+    "action",
+    "reason"
+  ],
+  "title": "Decision",
+  "type": "object"
+}

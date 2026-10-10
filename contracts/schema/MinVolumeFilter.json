@@ -1,0 +1,32 @@
+{
+  "additionalProperties": false,
+  "description": "sim:minVol ('Require above-average volume'). Hard gate: volume > multiplier * average volume\n(same average as VolumeAboveAverageCondition) and, if set, volume >= min_volume (absolute, PDF).",
+  "properties": {
+    "enabled": {
+      "default": false,
+      "title": "Enabled",
+      "type": "boolean"
+    },
+    "min_volume": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Min Volume"
+    },
+    "multiplier": {
+      "default": 1.1,
+      "exclusiveMinimum": 0,
+      "title": "Multiplier",
+      "type": "number"
+    }
+  },
+  "title": "MinVolumeFilter",
+  "type": "object"
+}

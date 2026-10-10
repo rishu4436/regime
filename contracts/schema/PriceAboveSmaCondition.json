@@ -1,0 +1,19 @@
+{
+  "additionalProperties": false,
+  "description": "sim:useSMA / sim:smaPeriod. True when close > SMA(period).",
+  "properties": {
+    "enabled": {
+      "default": true,
+      "title": "Enabled",
+      "type": "boolean"
+    },
+    "period": {
+      "default": 50,
+      "minimum": 2,
+      "title": "Period",
+      "type": "integer"
+    }
+  },
+  "title": "PriceAboveSmaCondition",
+  "type": "object"
+}

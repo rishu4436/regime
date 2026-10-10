@@ -1,0 +1,138 @@
+{
+  "$defs": {
+    "ExecutionPath": {
+      "enum": [
+        "SWAP",
+        "RFQ"
+      ],
+      "title": "ExecutionPath",
+      "type": "string"
+    },
+    "OrderSide": {
+      "enum": [
+        "BUY",
+        "SELL"
+      ],
+      "title": "OrderSide",
+      "type": "string"
+    },
+    "OrderStatus": {
+      "enum": [
+        "FILLED",
+        "PARTIALLY_FILLED",
+        "PENDING_CONFIRMATION",
+        "REJECTED",
+        "EXPIRED",
+        "FAILED"
+      ],
+      "title": "OrderStatus",
+      "type": "string"
+    },
+    "TradingMode": {
+      "description": "Execution environment. SIM = mocks/offline, PAPER = real market data + simulated fills, LIVE = real money.",
+      "enum": [
+        "SIM",
+        "PAPER",
+        "LIVE"
+      ],
+      "title": "TradingMode",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "avg_price": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Avg Price"
+    },
+    "client_order_id": {
+      "title": "Client Order Id",
+      "type": "string"
+    },
+    "error": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Error"
+    },
+    "fee": {
+      "default": 0.0,
+      "minimum": 0,
+      "title": "Fee",
+      "type": "number"
+    },
+    "filled_quantity": {
+      "default": 0.0,
+      "minimum": 0,
+      "title": "Filled Quantity",
+      "type": "number"
+    },
+    "mode": {
+      "$ref": "#/$defs/TradingMode"
+    },
+    "notional": {
+      "default": 0.0,
+      "minimum": 0,
+      "title": "Notional",
+      "type": "number"
+    },
+    "order_id": {
+      "title": "Order Id",
+      "type": "string"
+    },
+    "path": {
+      "$ref": "#/$defs/ExecutionPath"
+    },
+    "side": {
+      "$ref": "#/$defs/OrderSide"
+    },
+    "status": {
+      "$ref": "#/$defs/OrderStatus"
+    },
+    "symbol": {
+      "title": "Symbol",
+      "type": "string"
+    },
+    "timestamp": {
+      "format": "date-time",
+      "title": "Timestamp",
+      "type": "string"
+    },
+    "tx_hash": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Tx Hash"
+    }
+  },
+  "required": [
+    "client_order_id",
+    "symbol",
+    "side",
+    "status",
+    "path",
+    "mode"
+  ],
+  "title": "ExecutionResult",
+  "type": "object"
+}

@@ -1,0 +1,110 @@
+{
+  "$defs": {
+    "TokenType": {
+      "description": "Issuer family of a tokenized stock.",
+      "enum": [
+        "ONDO",
+        "XSTOCK",
+        "BSTOCK",
+        "OTHER"
+      ],
+      "title": "TokenType",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "chain": {
+      "description": "Chain name, e.g. BSC, Ethereum, Solana",
+      "title": "Chain",
+      "type": "string"
+    },
+    "chain_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Chain Id"
+    },
+    "contract_address": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Contract Address"
+    },
+    "decimals": {
+      "default": 18,
+      "title": "Decimals",
+      "type": "integer"
+    },
+    "name": {
+      "title": "Name",
+      "type": "string"
+    },
+    "price": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Last known price in USDT",
+      "title": "Price"
+    },
+    "symbol": {
+      "description": "Trading symbol, e.g. NVDAon, TSLAx, AAPLB",
+      "title": "Symbol",
+      "type": "string"
+    },
+    "token_type": {
+      "$ref": "#/$defs/TokenType",
+      "default": "OTHER"
+    },
+    "underlying": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Underlying equity ticker, e.g. NVDA",
+      "title": "Underlying"
+    },
+    "volume_24h": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Volume 24H"
+    }
+  },
+  "required": [
+    "symbol",
+    "name",
+    "chain"
+  ],
+  "title": "TokenInfo",
+  "type": "object"
+}

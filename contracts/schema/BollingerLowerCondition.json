@@ -1,0 +1,32 @@
+{
+  "additionalProperties": false,
+  "description": "sim:useBB. True when close < lower_band * (1 + proximity_pct/100) (i.e. near OR below the band).",
+  "properties": {
+    "enabled": {
+      "default": false,
+      "title": "Enabled",
+      "type": "boolean"
+    },
+    "period": {
+      "default": 20,
+      "minimum": 2,
+      "title": "Period",
+      "type": "integer"
+    },
+    "proximity_pct": {
+      "default": 2.0,
+      "description": "Simulator uses close < lower * 1.02",
+      "minimum": 0,
+      "title": "Proximity Pct",
+      "type": "number"
+    },
+    "std_dev": {
+      "default": 2.0,
+      "exclusiveMinimum": 0,
+      "title": "Std Dev",
+      "type": "number"
+    }
+  },
+  "title": "BollingerLowerCondition",
+  "type": "object"
+}

@@ -1,0 +1,103 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "avg_entry_price": {
+      "exclusiveMinimum": 0,
+      "title": "Avg Entry Price",
+      "type": "number"
+    },
+    "current_price": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Current Price"
+    },
+    "highest_price": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "High-water mark since entry (trailing stop)",
+      "title": "Highest Price"
+    },
+    "opened_at": {
+      "format": "date-time",
+      "title": "Opened At",
+      "type": "string"
+    },
+    "quantity": {
+      "exclusiveMinimum": 0,
+      "title": "Quantity",
+      "type": "number"
+    },
+    "stop_loss_price": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Stop Loss Price"
+    },
+    "strategy": {
+      "description": "Strategy that opened it: preset name or 'MANUAL:<strategy name>'",
+      "title": "Strategy",
+      "type": "string"
+    },
+    "symbol": {
+      "title": "Symbol",
+      "type": "string"
+    },
+    "take_profit_price": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Take Profit Price"
+    },
+    "trailing_stop_pct": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Trailing Stop Pct"
+    },
+    "unrealized_pnl": {
+      "default": 0.0,
+      "title": "Unrealized Pnl",
+      "type": "number"
+    }
+  },
+  "required": [
+    "symbol",
+    "quantity",
+    "avg_entry_price",
+    "strategy"
+  ],
+  "title": "Position",
+  "type": "object"
+}

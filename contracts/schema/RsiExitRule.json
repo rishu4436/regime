@@ -1,0 +1,26 @@
+{
+  "additionalProperties": false,
+  "description": "sim:useRsiExit / sim:rsiExit. Exit when RSI(period) > threshold.",
+  "properties": {
+    "enabled": {
+      "default": true,
+      "title": "Enabled",
+      "type": "boolean"
+    },
+    "period": {
+      "default": 14,
+      "minimum": 2,
+      "title": "Period",
+      "type": "integer"
+    },
+    "threshold": {
+      "default": 70.0,
+      "maximum": 100,
+      "minimum": 0,
+      "title": "Threshold",
+      "type": "number"
+    }
+  },
+  "title": "RsiExitRule",
+  "type": "object"
+}

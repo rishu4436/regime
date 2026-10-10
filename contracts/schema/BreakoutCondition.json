@@ -1,0 +1,34 @@
+{
+  "$defs": {
+    "BreakoutDirection": {
+      "description": "Price-action breakout: break of the recent HIGH (bullish) or recent LOW.",
+      "enum": [
+        "HIGH",
+        "LOW"
+      ],
+      "title": "BreakoutDirection",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "PDF-only (not in the simulator). HIGH: close > max(high of previous `lookback` bars);\nLOW: close < min(low of previous `lookback` bars).",
+  "properties": {
+    "direction": {
+      "$ref": "#/$defs/BreakoutDirection",
+      "default": "HIGH"
+    },
+    "enabled": {
+      "default": false,
+      "title": "Enabled",
+      "type": "boolean"
+    },
+    "lookback": {
+      "default": 20,
+      "minimum": 2,
+      "title": "Lookback",
+      "type": "integer"
+    }
+  },
+  "title": "BreakoutCondition",
+  "type": "object"
+}
