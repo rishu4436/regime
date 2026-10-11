@@ -18,6 +18,7 @@ export interface LiveState {
   isLive: boolean;
   refresh: () => void;
 }
+const WALLET_POLL_MS = 60_000, WALLET_ACTION_GAP_MS = 10_000;
 const noHb: Heartbeat = { runningSince: null, lastTick: null, nextTick: null, stale: false, observed: true };
 export const LiveContext = createContext<LiveState>({ system: null, gate: null, gateSource: null, wallet: null, walletEndpoint: null, loop: null, hb: noHb, now: 0, isLive: false, refresh: () => {} });
 export const useLive = () => useContext(LiveContext);
@@ -71,18 +72,35 @@ export function useLiveState(status: StatusSnapshot | null, tick: number): LiveS
     if (!L.running) s.since = null;
     setLoop(L);
   }).catch(() => {});
-  const load = () => {
+  // GET /api/wallet makes the backend run `baw wallet status`, and baw drops its session on network blips, so the wallet
+  // is fetched at most once a minute (never while the tab is hidden); explicit refresh() after a user action: at most every 10 s.
+  const lastWallet = useRef(0);
+  const loadWallet = (minGapMs: number) => {
+    if (typeof document !== "undefined" && document.hidden) return;
+    if (lastWallet.current && Date.now() - lastWallet.current < minGapMs) return;
+    lastWallet.current = Date.now();
+    api.getWallet().then((w) => { setWallet(w); setWalletEndpoint(w != null || api.kind === "mock"); }).catch(() => setWalletEndpoint(null));
+  };
+  const loadRest = () => {
     lastFull.current = Date.now();
     api.system().then(setSystem).catch(() => {});
     api.getLiveGate().then(setGateRaw).catch(() => setGateRaw(null));
-    api.getWallet().then((w) => { setWallet(w); setWalletEndpoint(w != null || api.kind === "mock"); }).catch(() => setWalletEndpoint(null));
     loadLoop();
   };
+  const load = () => { loadRest(); loadWallet(WALLET_POLL_MS); };
+  /** After a user action (connect wallet, controls, limits): re-read now, wallet throttled to >= 10 s. */
+  const refresh = () => { loadRest(); loadWallet(WALLET_ACTION_GAP_MS); };
   useEffect(load, []);
-  // balances / caps move after fills: refresh with the loop at most every 4 s, and on control changes
+  // status / gate / loop move after fills: refresh with the loop at most every 4 s, and on control changes (wallet: 60 s cap)
   useEffect(() => { if (Date.now() - lastFull.current > 4000) load(); else loadLoop(); }, [tick, status?.control.updated_at]);
   // heartbeat clock: keeps "last tick 12 s ago" and the stale warning honest even when no events arrive
-  useEffect(() => { const t = window.setInterval(() => { setNow(Date.now()); loadLoop(); }, 5000); return () => window.clearInterval(t); }, []);
+  useEffect(() => { const t = window.setInterval(() => { setNow(Date.now()); loadLoop(); loadWallet(WALLET_POLL_MS); }, 5000); return () => window.clearInterval(t); }, []);
+  // back to the tab: refetch the wallet only if the last fetch is older than a minute
+  useEffect(() => {
+    const onVis = () => { if (!document.hidden) loadWallet(WALLET_POLL_MS); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, []);
 
   const iv = (loop?.interval_seconds ?? 5) * 1000;
   const H = loop?.heartbeat;
@@ -93,7 +111,7 @@ export function useLiveState(status: StatusSnapshot | null, tick: number): LiveS
   const hb: Heartbeat = { runningSince, lastTick, nextTick, stale, observed: !H?.started_at && !loop?.started_at };
   const gate = gateRaw ?? deriveGate(system, status, wallet);
   const isLive = system?.trading_mode === "LIVE" || status?.control.trading_mode === "LIVE";
-  return { system, gate, gateSource: gateRaw ? "backend" : gate ? "derived" : null, wallet, walletEndpoint, loop, hb, now, isLive, refresh: load };
+  return { system, gate, gateSource: gateRaw ? "backend" : gate ? "derived" : null, wallet, walletEndpoint, loop, hb, now, isLive, refresh };
 }
 
 export const ago = (t: number | null, now: number) => {
