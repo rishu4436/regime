@@ -103,7 +103,7 @@ Alert codes: `EMERGENCY_STOP`, `PAUSED`, `CONSECUTIVE_LOSSES` (≥3), `DAILY_LOS
 ## LLM (Bot 5, never trades)
 | Method | Path | Body | Response |
 |---|---|---|---|
-| POST | `/api/llm/parse` | `{text, default_symbol?}` | `{kind: "MANUAL", strategy: ManualStrategy}` or `{kind: "AUTO", config: AutoConfig}` |
+| POST | `/api/llm/parse` | `{text, default_symbol?}` | `{kind: "MANUAL", strategy: ManualStrategy}` or `{kind: "AUTO", config: AutoConfig}`, plus `notes: string[]` (Bot 5 parser notes, e.g. the default entry rule it filled in; `[]` if none) |
 | POST | `/api/llm/ask` | `{question}` | `{answer}` |
 | GET | `/api/llm/summary` | – | `{summary}` |
 
@@ -162,6 +162,12 @@ are unchanged except where noted (positions always carry `pending`).
 in-flight buys), `daily_remaining_usdt`, `per_order_cap_usdt`, `allowed_tokens`, `tradable_tokens`, `warnings` (list,
 default `[]`, passed through unchanged; a new code raises alert `LIVE_LIMIT_<CODE>`, e.g. `exit_quota_shortfall`,
 `wallet_limits_stale`).
+- Token-aware: `live_limits()` gets a `LiveContext` with the **active (or `DEFAULT_AGENT_SYMBOL`) token's status**, so
+`min_order_usdt` / `min_wallet_usdt` / `min_wallet_usdt_note` follow that token (NVDAon: 20 USDT minimum). `limits_symbol`
+names it. `per_token: {SYMBOL: {min_order_usdt, min_wallet_usdt, min_wallet_usdt_note}}` covers every tradable token
+(only `min_order_usdt` when risk has no `min_wallet_info`).
+- Each tick (and each `/api/wallet` read) passes the same limits to the explainer's `set_live_limits(limits)` (Bot 5) for
+small-wallet / gas hints.
 - `allowed_tokens` is the **wallet/risk-side** restriction only, passed through as-is: a list of symbols, the string
   `'ALL'` (no restriction) or `'LIMITED'` (the wallet restricts tokens but did not list them), or `null` (unknown).
   It is never filled from the exchange token list.
