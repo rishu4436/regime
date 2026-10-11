@@ -66,7 +66,13 @@ export interface LiveGate {
   wallet_connected?: boolean | null;         // baw wallet status CONNECTED
   can_trade: boolean;
   blocked_reasons: string[];
+  /** API.md v0.7: per-token cooldowns after an exchange error (until = ISO time) */
+  cooldowns?: LiveCooldown[] | null;
+  /** API.md v0.7: BUYs submitted and still waiting on chain */
+  chain_pending?: ChainPending[] | null;
 }
+export interface LiveCooldown { symbol: string; code?: string | number | null; until: string; reason?: string | null }
+export interface ChainPending { order_id?: string | null; client_order_id?: string | null; symbol: string; notional?: number | null; tx_hash?: string | null; since?: string | null; held_exit?: { code?: string } | null }
 /** ExecutionResult as the LIVE backend sends it (extra optional fields until they are in the contract). */
 export interface LiveExecutionFields { price_impact_pct?: number | null; tx_hash?: string | null; explorer_url?: string | null; route?: string | null; quote_expires_at?: string | null; real_funds?: boolean | null }
 /** LoopState extras requested for the 24/7 monitor (optional; the UI falls back to what it observes). */

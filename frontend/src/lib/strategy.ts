@@ -44,7 +44,7 @@ export function defaultStrategy(): FullStrategy {
       market_hours: { enabled: false, start_hour_utc: 13, end_hour_utc: 20, weekdays_only: true },
       min_volume: { enabled: false, multiplier: 1.1, min_volume: null as unknown as number },
     },
-    activation: "CONFIRMATION",
+    activation: "AUTO_EXECUTE",
     version: 1,
   };
 }

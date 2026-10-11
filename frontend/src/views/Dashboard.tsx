@@ -94,7 +94,7 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
         <div className="banner blue">
           <span className="grow">No strategy is running. Build rules in <b>Manual Builder</b> or let the agent choose in <b>Auto Mode</b>.</span>
           <button className="btn ghost" onClick={() => go("manual")}>Open builder</button>
-          <button className="btn" onClick={() => isLive ? go("auto") : api.activateAuto({ symbol: "NVDAB", style: "BALANCED", capital: 10000, activation: "CONFIRMATION" }).then(ensureLoop).then(() => { toast("Auto mode started (Balanced, NVDAB)", "success"); refresh(); }).catch((e) => toast(e instanceof Error ? e.message : String(e), "error"))}>⚡ Quick start Auto</button>
+          <button className="btn" onClick={() => isLive ? go("auto") : api.activateAuto({ symbol: "NVDAB", style: "BALANCED", capital: 10000, activation: "AUTO_EXECUTE" }).then(ensureLoop).then(() => { toast("Auto mode started (Balanced, NVDAB)", "success"); refresh(); }).catch((e) => toast(e instanceof Error ? e.message : String(e), "error"))}>⚡ Quick start Auto</button>
         </div>
       )}
 

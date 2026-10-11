@@ -269,3 +269,6 @@ td.trunc { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
 .pill.fam-xStock { opacity: .6; }
 tr.settling td { opacity: .78; }
 tr.settling td:first-child { opacity: 1; }
+.chip.warn { color: #fcd34d; background: rgba(245,158,11,0.08); border-color: rgba(245,158,11,0.3); }
+.inflight { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border, rgba(148,163,184,0.15)); }
+.inflight-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }

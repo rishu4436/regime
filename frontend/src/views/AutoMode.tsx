@@ -59,7 +59,7 @@ export function AutoMode({ config: c, setConfig, status, onActivated, tick }: Pr
                 <select value={c.timeframe ?? "1h"} onChange={(e) => setConfig({ ...c, timeframe: e.target.value as Timeframe })}>{TimeframeValues.map((t) => <option key={t}>{t}</option>)}</select></div>
               <div><span className="lbl">Capital allocated</span><NumberInput value={c.capital} min={1} step={500} suffix="USDT" onChange={(v) => setConfig({ ...c, capital: v ?? 1 })} /></div>
               <div><span className="lbl">Execution</span>
-                <Segmented value={c.activation ?? "CONFIRMATION"} onChange={(v) => setConfig({ ...c, activation: v })} options={[{ value: "CONFIRMATION", label: "Confirm" }, { value: "AUTO_EXECUTE", label: "Auto" }]} /></div>
+                <Segmented value={c.activation ?? "AUTO_EXECUTE"} onChange={(v) => setConfig({ ...c, activation: v })} options={[{ value: "AUTO_EXECUTE", label: "Autonomous" }, { value: "CONFIRMATION", label: "Ask me first" }]} /></div>
             </div>
             <div>
               <span className="lbl">Trader style</span>

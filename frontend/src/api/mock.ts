@@ -10,7 +10,7 @@ import { detectRegime, presetWantsBuy, STYLE_MAP } from "../lib/auto";
 import { appendCandle, generateMixedCandles, rng } from "../lib/candles";
 import { parseStrategyText } from "../lib/parseText";
 import { backtest, conditionLabel, evaluateLast, fillStrategy, type FullStrategy } from "../lib/strategy";
-import { ApiError, type ActivateManualBody, type ApiClient, type LiveGate, type LiveLimits, type ParseResult, type PresetsTable, type WalletInfo } from "./types";
+import { ApiError, type ActivateManualBody, type ApiClient, type LiveCooldown, type LiveGate, type LiveLimits, type ParseResult, type PresetsTable, type WalletInfo } from "./types";
 
 /** Mock-only demo scenario: "LIVE" pretends to be a LIVE (mainnet) backend with an Agentic Wallet so the LIVE UI can be
  * shown without funds. Nothing leaves the browser; tx hashes are random and labelled as demo. Persisted; switching reloads. */
@@ -48,7 +48,7 @@ export class MockApi implements ApiClient {
   private listeners = new Set<(e: Event) => void>();
   private timer: number | undefined;
   private loop: LoopState = { running: false, interval_seconds: 3, ticks: 0, agent_mode: null, active_symbol: null, active_strategy: null, replay_finished: false };
-  private control: ControlState = { paused: false, emergency_stopped: false, confirmation_mode: true, trading_mode: MODE, reason: null, updated_at: now() };
+  private control: ControlState = { paused: false, emergency_stopped: false, confirmation_mode: false, trading_mode: MODE, reason: null, updated_at: now() };
   private portfolio: Portfolio = { starting_capital: LIVE ? LIVE_CAPITAL : DEFAULT_INITIAL_CAPITAL, cash: LIVE ? LIVE_CAPITAL : DEFAULT_INITIAL_CAPITAL, positions: [], realized_pnl: 0, equity: LIVE ? LIVE_CAPITAL : DEFAULT_INITIAL_CAPITAL, bars_since_exit: {}, trades_today: 0, daily_pnl: 0, mode: MODE, updated_at: now() };
   private agentMode: "MANUAL" | "AUTO" | null = null;
   private manual: FullStrategy | null = null;
@@ -101,13 +101,21 @@ export class MockApi implements ApiClient {
       daily_remaining_usdt: Math.max(0, LIVE_DAILY_NOTIONAL - this.dailyNotional), warnings: exposure > Math.max(0, LIVE_DAILY_NOTIONAL - this.dailyNotional) ? [`Exit reserve: ${Math.max(0, LIVE_DAILY_NOTIONAL - this.dailyNotional).toFixed(2)} USDT of daily quota left can't cover selling all open positions (${exposure.toFixed(2)} USDT)`] : [], limit_source: { per_order_cap_usdt: "risk", daily_limit_usdt: "risk" },
       allowed_tokens: "ALL", tradable_tokens: TOKENS.filter((t) => !/x$/.test(t.symbol)).map((t) => t.symbol), wallet: { daily_limit_usdt: 200, per_order_cap_usdt: 50, allowed_tokens: null } };
   }
+  /** demo cooldown (API.md v0.7 shape): an Ondo token cooling down after an exchange off-hours error (40367) */
+  private mockCooldowns: LiveCooldown[] = [{ symbol: "NVDAon", code: 40367, until: new Date(Date.now() + 20 * 60_000).toISOString(), reason: "BUY not executed: NVDAon cooling down after exchange error 40367" }];
   private gate(): LiveGate {
     const reasons: string[] = [];
     if (this.control.emergency_stopped) reasons.push(onePrefix("Emergency stop", this.control.reason || "active"));
     else if (this.control.paused) reasons.push(onePrefix("Paused", this.control.reason));
     if (this.bnb < LIVE_GAS_RESERVE) reasons.push(`BNB ${this.bnb.toFixed(4)} below the gas reserve ${LIVE_GAS_RESERVE}`);
     if (this.dailyNotional >= LIVE_DAILY_NOTIONAL) reasons.push(`Daily LIVE notional ${this.dailyNotional.toFixed(2)} of ${LIVE_DAILY_NOTIONAL} USDT used`);
-    return { live_trading_enabled: true, binance_live_enabled: true, risk_allow_live: true, wallet_connected: true, can_trade: reasons.length === 0, blocked_reasons: reasons };
+    const t = Date.now();
+    const cooldowns = this.mockCooldowns.filter((c) => Date.parse(c.until) > t);
+    const chain_pending = (this.portfolio.positions ?? []).filter((p) => (p as { pending?: boolean }).pending).map((p) => {
+      const q = p as typeof p & { client_order_id?: string | null; held_exit?: { code?: string } | null };
+      return { order_id: null, client_order_id: q.client_order_id ?? null, symbol: p.symbol, notional: p.quantity * p.avg_entry_price, tx_hash: null, since: p.opened_at, held_exit: q.held_exit ?? null };
+    });
+    return { live_trading_enabled: true, binance_live_enabled: true, risk_allow_live: true, wallet_connected: true, can_trade: reasons.length === 0, blocked_reasons: reasons, cooldowns, chain_pending };
   }
   getLiveGate() { return ok<LiveGate | null>(LIVE ? this.gate() : null); }
   getWallet() {
@@ -201,7 +209,7 @@ export class MockApi implements ApiClient {
     this.auto = { ...c }; this.manual = null; this.agentMode = "AUTO"; this.symbol = c.symbol;
     this.regime = this.analyse(c.symbol);
     this.activeStrategy = this.select(this.regime, c.style ?? "BALANCED", c.enabled_presets ?? [...PresetNameValues]).preset ?? "NONE";
-    this.setControl({ confirmation_mode: (c.activation ?? "CONFIRMATION") === "CONFIRMATION" });
+    this.setControl({ confirmation_mode: c.activation === "CONFIRMATION" });
     this.rejectAllPending("agent switched");
     this.syncLoop(); this.emitStatus();
     return ok(this.snapshot());
