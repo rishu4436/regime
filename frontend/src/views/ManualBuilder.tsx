@@ -16,6 +16,9 @@ interface Props {
 }
 
 /** Strip UI-only fields and send exactly the contract's ManualStrategy JSON. */
+
+/** Bars per backtest; also the limit of the history candles request for its chart. */
+const BACKTEST_BARS = 500;
 export function toContract(s: FullStrategy, keepId = false): ManualStrategy {
   const { id, created_at, ...rest } = s;
   return structuredClone(keepId && id ? { ...rest, id, created_at } : rest);
@@ -61,9 +64,10 @@ export function ManualBuilder({ strategy: s, setStrategy, capital, setCapital, r
   const runBacktest = async () => {
     setBusy("bt");
     try {
+      // same timeframe + limit for both, so /api/candles?history=true returns exactly the bars the backtest ran on
       const [result, candles] = await Promise.all([
-        api.backtest({ strategy: toContract(s), initial_capital: capital, limit: 500 }),
-        api.backtestCandles(s.symbol, s.timeframe, 500),
+        api.backtest({ strategy: toContract(s), initial_capital: capital, limit: BACKTEST_BARS }),
+        api.backtestCandles(s.symbol, s.timeframe, BACKTEST_BARS),
       ]);
       setRun({ result, candles, strategy: structuredClone(s), ranAt: new Date().toISOString() });
       toast(`Backtest done: ${result.total_return_pct >= 0 ? "+" : ""}${result.total_return_pct.toFixed(2)}% over ${result.num_trades} trades`, result.total_return_pct >= 0 ? "success" : "warn");
