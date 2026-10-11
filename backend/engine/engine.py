@@ -5,6 +5,8 @@ Pure: no I/O, no execution, no risk decisions.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from datetime import datetime
 from typing import Any, Callable, Mapping, Optional, Sequence
 
@@ -84,6 +86,21 @@ class DefaultStrategyEngine:
         self._market: dict[str, dict] = {}
         for sym, ctx in (market_context or {}).items():
             self.set_market_context(sym, ctx)
+
+    def set_live_limits(self, max_order_usdt: Optional[float] = None, max_size_pct: Optional[float] = None) -> None:
+        """Apply user-set trading limits at runtime (no restart). ``max_order_usdt``: the per-order USDT cap, kept
+        equal to risk's live per-order cap (the 25 USDT default); ``max_size_pct``: the Auto-mode size cap in % of
+        equity. ``None`` leaves a value unchanged. Risk still enforces every hard cap; this only stops the engine
+        from proposing less than the user allowed."""
+        upd: dict[str, float] = {}
+        if max_order_usdt is not None:
+            upd["max_order_usdt"] = float(max_order_usdt)
+        if max_size_pct is not None:
+            if not 0 < float(max_size_pct) <= 100:
+                raise ValueError("max_size_pct must be in (0, 100]")
+            upd["max_size_pct"] = float(max_size_pct)
+        if upd:
+            self.live_config = replace(self.live_config, **upd)  # __post_init__ re-validates
 
     def set_market_context(self, symbol: str, ctx: Optional[Mapping[str, Any]]) -> None:
         """Latest market info for ``symbol`` (``None`` clears it). Keys: ``status`` ('trading'|'open'|'off-hours'|
