@@ -23,6 +23,7 @@ from .enums import (
     AgentMode,
     BreakoutDirection,
     ConditionLogic,
+    AlertLevel,
     EventType,
     ExitReason,
     ExecutionPath,
@@ -36,7 +37,7 @@ from .enums import (
     TradingMode,
 )
 
-CONTRACTS_VERSION = "0.1.0"
+CONTRACTS_VERSION = "0.2.0"
 QUOTE_TTL_SECONDS = 30
 
 
@@ -133,13 +134,17 @@ class ExecutionResult(ContractModel):
 
 
 class Position(ContractModel):
+    """An open position. `highest_price` is maintained by backend/app: after RiskManager.check_exits runs for a bar,
+    the app sets highest_price = max(highest_price or avg_entry_price, bar.high) for every still-open position."""
+
+    id: str = Field(default_factory=new_id)
     symbol: str
     quantity: float = Field(gt=0)
     avg_entry_price: float = Field(gt=0)
     opened_at: datetime = Field(default_factory=utc_now)
     strategy: str = Field(description="Strategy that opened it: preset name or 'MANUAL:<strategy name>'")
     current_price: Optional[float] = None
-    highest_price: Optional[float] = Field(default=None, description="High-water mark since entry (trailing stop)")
+    highest_price: Optional[float] = Field(default=None, description="High-water mark since entry (trailing stop); updated by the app from bar.high AFTER check_exits")
     stop_loss_price: Optional[float] = None
     take_profit_price: Optional[float] = None
     trailing_stop_pct: Optional[float] = None
@@ -268,9 +273,16 @@ class RsiExitRule(ContractModel):
 
 
 class ExitRules(ContractModel):
-    """Evaluated on each bar's close BEFORE entries, first match wins, in this order (simulator):
+    """Evaluated on each bar BEFORE entries; first match wins. Simulator order:
     TRAILING_STOP -> TAKE_PROFIT (pnl >= tp) -> STOP_LOSS (pnl <= -sl) -> RSI_EXIT -> MACD_EXIT.
-    Open positions are closed with reason END at the end of a backtest."""
+
+    Intrabar rules for the engine / risk layer (contract v0.2, deviates from the close-only simulator):
+    - If the bar's range hits BOTH the stop-loss and the take-profit level, STOP_LOSS wins (conservative).
+    - SL / TP / trailing fill AT the level, or at the bar OPEN if the bar gapped through the level
+      (SL/trailing: fill = min(level, open) when open < level; TP: fill = max(level, open) when open > level).
+    - The trailing level uses Position.highest_price as of the PREVIOUS bar (the app updates it from bar.high after
+      check_exits), so a bar's own high never tightens its own stop.
+    - Open positions are closed with reason END at the end of a backtest."""
 
     take_profit_pct: float = Field(default=12.0, gt=0)  # sim:tp
     stop_loss_pct: float = Field(default=6.0, gt=0)  # sim:sl
@@ -358,7 +370,9 @@ class StrategySelection(ContractModel):
 
 # --------------------------------------------------------------------------- decision pipeline
 class Signal(ContractModel):
-    """Proposed action from the strategy engine (Bot 2). Never executed without a RiskVerdict."""
+    """Proposed action from the strategy engine (Bot 2) or an exit from RiskManager.check_exits (Bot 3).
+    Never executed without a RiskVerdict. For SELL signals `price` is the intended fill price (e.g. the SL/TP level
+    or gap-open price per ExitRules), `exit_reason` says why, and `position_id` targets a specific Position."""
 
     id: str = Field(default_factory=new_id)
     symbol: str
@@ -370,7 +384,9 @@ class Signal(ContractModel):
     reason: str
     conditions_met: list[str] = Field(default_factory=list)
     conditions_failed: list[str] = Field(default_factory=list)
-    price: Optional[float] = None
+    price: Optional[float] = Field(default=None, description="BUY: reference price; SELL: fill price (level or gap open)")
+    exit_reason: Optional[ExitReason] = None
+    position_id: Optional[str] = Field(default=None, description="Position.id this SELL closes")
     proposed_size_pct: float = Field(default=0.0, ge=0, le=100)
     proposed_notional: float = Field(default=0.0, ge=0)
     timestamp: datetime = Field(default_factory=utc_now)
@@ -465,6 +481,54 @@ class StatusSnapshot(ContractModel):
     timestamp: datetime = Field(default_factory=utc_now)
 
 
+class Alert(ContractModel):
+    id: str = Field(default_factory=new_id)
+    level: AlertLevel
+    code: str = Field(description="EMERGENCY_STOP, PAUSED, CONSECUTIVE_LOSSES, DAILY_LOSS, QUOTE_EXPIRED, EXECUTION_FAILED, RISK_BLOCKED, LIVE_MODE, COMPONENT_FALLBACK")
+    message: str
+    symbol: Optional[str] = None
+    timestamp: datetime = Field(default_factory=utc_now)
+
+
+class PerformanceSummary(ContractModel):
+    starting_capital: float
+    equity: float
+    realized_pnl: float
+    unrealized_pnl: float
+    total_return_pct: float
+    max_drawdown_pct: float = Field(description="Over the mark-to-market equity curve (open positions included)")
+    win_rate_pct: float
+    num_trades: int = Field(description="Closed trades")
+    wins: int
+    losses: int
+    consecutive_losses: int
+    equity_curve: list[EquityPoint] = Field(default_factory=list)
+
+
+class SystemInfo(ContractModel):
+    trading_mode: TradingMode
+    live_enabled: bool
+    contracts_version: str
+    sim_seed: Optional[int] = None
+    components: dict[str, str]
+
+
+class LoopState(ContractModel):
+    running: bool
+    interval_seconds: float
+    ticks: int
+    agent_mode: Optional[AgentMode] = None
+    active_symbol: Optional[str] = None
+    active_strategy: Optional[str] = None
+    replay_finished: bool = False
+
+
+class BacktestRequest(ContractModel):
+    strategy: ManualStrategy
+    initial_capital: float = Field(default=DEFAULT_INITIAL_CAPITAL, gt=0)
+    limit: int = Field(default=500, ge=61, le=5000)
+
+
 class Event(ContractModel):
     """Envelope for WebSocket messages and structured logs."""
 
@@ -479,5 +543,6 @@ ALL_MODELS: list[type[BaseModel]] = [
     BollingerLowerCondition, VolumeAboveAverageCondition, BreakoutCondition, EntryConditions,
     TrailingStopRule, RsiExitRule, ExitRules, PositionRiskRules, MarketHoursFilter, MinVolumeFilter, StrategyFilters,
     ManualStrategy, AutoConfig, RegimeAnalysis, StrategySelection, Signal, RiskCheck, RiskVerdict,
-    Decision, ControlState, BacktestTrade, EquityPoint, BacktestResult, StatusSnapshot, Event,
+    Decision, ControlState, BacktestTrade, EquityPoint, BacktestResult, StatusSnapshot,
+    Alert, PerformanceSummary, SystemInfo, LoopState, BacktestRequest, Event,
 ]

@@ -70,3 +70,8 @@ Exit reasons map to `ExitReason`: `Trailing Stop`→`TRAILING_STOP`, `Take Profi
    (default `CONFIRMATION`); the simulator has no activation (backtest only).
 10. **Tokens:** simulator offers NVDAon/TSLAx/AAPLB only; the PDF also mentions token search with price/type/chain (Bot 4 `search_tokens`).
 11. **Fees/slippage:** none in the simulator; real/SIM execution via Bot 4 includes them, so live PnL will differ from backtests.
+12. **Intrabar exits (contract v0.2):** the simulator checks exits on the close only, trailing → TP → SL. The contract
+    (`ExitRules` docstring) now specifies intrabar handling for the engine/risk layer: if a bar hits both SL and TP,
+    **SL wins**; SL/TP/trailing fill **at the level**, or at the **bar open** on a gap through the level; the trailing stop
+    uses `Position.highest_price` from previous bars (the app updates it from `bar.high` after `check_exits`).
+    Backtests using these rules will not reproduce the simulator trade-for-trade on bars where this matters.

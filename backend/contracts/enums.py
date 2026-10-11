@@ -129,3 +129,9 @@ class ExitReason(str, Enum):
     MAX_LOSS = "MAX_LOSS"  # risk layer: max loss per trade
     MANUAL = "MANUAL"  # user override
     EMERGENCY_STOP = "EMERGENCY_STOP"
+
+
+class AlertLevel(str, Enum):
+    INFO = "INFO"
+    WARNING = "WARNING"
+    CRITICAL = "CRITICAL"

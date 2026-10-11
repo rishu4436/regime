@@ -70,3 +70,21 @@ def test_enums_complete():
 def test_protocols_are_runtime_checkable():
     for p in (ExchangeClient, StrategyEngine, RiskManager, Explainer):
         assert hasattr(p, "__protocol_attrs__") or hasattr(p, "_is_protocol")
+
+
+def test_v02_additions_backward_compatible():
+    from backend.contracts import (
+        Alert, AlertLevel, BacktestRequest, ExitReason, LoopState, PerformanceSummary, Position, SystemInfo,
+    )
+    p1, p2 = Position(symbol="NVDAon", quantity=1, avg_entry_price=140, strategy="GRID"), Position(symbol="NVDAon", quantity=1, avg_entry_price=140, strategy="GRID")
+    assert p1.id and p1.id != p2.id
+    s = Signal(symbol="NVDAon", action=Action.SELL, source=AgentMode.AUTO, strategy="GRID", reason="sl",
+               exit_reason=ExitReason.STOP_LOSS, position_id=p1.id, price=131.6)
+    assert Signal.model_validate_json(s.model_dump_json()) == s
+    assert Signal(symbol="X", action=Action.BUY, source=AgentMode.MANUAL, strategy="MANUAL:x", reason="r").exit_reason is None
+    assert Alert(level=AlertLevel.CRITICAL, code="EMERGENCY_STOP", message="stop").id
+    assert BacktestRequest(strategy=ManualStrategy()).initial_capital == 10000 and BacktestRequest(strategy=ManualStrategy()).limit == 500
+    LoopState(running=False, interval_seconds=1.0, ticks=0)
+    SystemInfo(trading_mode=TradingMode.SIM, live_enabled=False, contracts_version="0.2.0", components={"engine": "mock"})
+    PerformanceSummary(starting_capital=1, equity=1, realized_pnl=0, unrealized_pnl=0, total_return_pct=0, max_drawdown_pct=0,
+                       win_rate_pct=0, num_trades=0, wins=0, losses=0, consecutive_losses=0)

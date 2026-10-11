@@ -17,9 +17,11 @@ Implement `backend.contracts.RiskManager` in `manager.py` (`DefaultRiskManager`)
 
 ```python
 check(signal, portfolio, control) -> RiskVerdict        # can always force STAY_OUT (approved=False + reasons)
-check_exits(portfolio, prices: dict[str, float]) -> list[Signal]   # SL / TP / trailing -> SELL signals
+check_exits(portfolio, prices: dict[str, float], bars: dict[str, Candle] | None = None) -> list[Signal]
+    # SL / TP / trailing -> SELL signals with exit_reason, position_id, price = fill (SL wins if both hit; level or gap open)
 get_control_state() -> ControlState
-pause(reason="") / resume() / emergency_stop(reason="") / set_confirmation_mode(enabled) -> ControlState
+pause(reason="") / resume() / emergency_stop(reason="") / reset_emergency_stop() / set_confirmation_mode(enabled) -> ControlState
+# resume() clears `paused` only; it does NOT clear an emergency stop
 ```
 Every check must appear in `RiskVerdict.checks` (name, passed, detail) so decisions are explainable.
 `requires_confirmation=True` when `ControlState.confirmation_mode` is on. Emergency stop blocks everything until reset.

@@ -2,7 +2,7 @@
 // Change backend/contracts/*.py (coordinator only) and re-run: python scripts/gen_contracts.py
 /* eslint-disable */
 
-export const CONTRACTS_VERSION = "0.1.0";
+export const CONTRACTS_VERSION = "0.2.0";
 export const QUOTE_TTL_SECONDS = 30;
 export const SIM_WARMUP_BARS = 60;
 export const DEFAULT_INITIAL_CAPITAL = 10000;
@@ -55,6 +55,9 @@ export const EventTypeValues = ["DECISION", "EXECUTION", "CONTROL", "PRICE", "AL
 
 export type ExitReason = "TRAILING_STOP" | "TAKE_PROFIT" | "STOP_LOSS" | "RSI_EXIT" | "MACD_EXIT" | "END" | "MAX_LOSS" | "MANUAL" | "EMERGENCY_STOP";
 export const ExitReasonValues = ["TRAILING_STOP", "TAKE_PROFIT", "STOP_LOSS", "RSI_EXIT", "MACD_EXIT", "END", "MAX_LOSS", "MANUAL", "EMERGENCY_STOP"] as const;
+
+export type AlertLevel = "INFO" | "WARNING" | "CRITICAL";
+export const AlertLevelValues = ["INFO", "WARNING", "CRITICAL"] as const;
 
 // ---------- models (optional `?` = has a backend default; responses always include it)
 export interface Candle {
@@ -132,7 +135,9 @@ export interface ExecutionResult {
   timestamp?: string;
 }
 
+/** An open position. `highest_price` is maintained by backend/app: after RiskManager.check_exits runs for a bar, */
 export interface Position {
+  id?: string;
   symbol: string;
   quantity: number;
   avg_entry_price: number;
@@ -140,7 +145,7 @@ export interface Position {
   /** Strategy that opened it: preset name or 'MANUAL:<strategy name>' */
   strategy: string;
   current_price?: number | null;
-  /** High-water mark since entry (trailing stop) */
+  /** High-water mark since entry (trailing stop); updated by the app from bar.high AFTER check_exits */
   highest_price?: number | null;
   stop_loss_price?: number | null;
   take_profit_price?: number | null;
@@ -243,7 +248,7 @@ export interface RsiExitRule {
   threshold?: number;
 }
 
-/** Evaluated on each bar's close BEFORE entries, first match wins, in this order (simulator): */
+/** Evaluated on each bar BEFORE entries; first match wins. Simulator order: */
 export interface ExitRules {
   take_profit_pct?: number;
   stop_loss_pct?: number;
@@ -330,7 +335,7 @@ export interface StrategySelection {
   reason: string;
 }
 
-/** Proposed action from the strategy engine (Bot 2). Never executed without a RiskVerdict. */
+/** Proposed action from the strategy engine (Bot 2) or an exit from RiskManager.check_exits (Bot 3). */
 export interface Signal {
   id?: string;
   symbol: string;
@@ -343,7 +348,11 @@ export interface Signal {
   reason: string;
   conditions_met?: string[];
   conditions_failed?: string[];
+  /** BUY: reference price; SELL: fill price (level or gap open) */
   price?: number | null;
+  exit_reason?: ExitReason | null;
+  /** Position.id this SELL closes */
+  position_id?: string | null;
   proposed_size_pct?: number;
   proposed_notional?: number;
   timestamp?: string;
@@ -436,6 +445,57 @@ export interface StatusSnapshot {
   last_decision?: Decision | null;
   recent_decisions?: Decision[];
   timestamp?: string;
+}
+
+export interface Alert {
+  id?: string;
+  level: AlertLevel;
+  /** EMERGENCY_STOP, PAUSED, CONSECUTIVE_LOSSES, DAILY_LOSS, QUOTE_EXPIRED, EXECUTION_FAILED, RISK_BLOCKED, LIVE_MODE, COMPONENT_FALLBACK */
+  code: string;
+  message: string;
+  symbol?: string | null;
+  timestamp?: string;
+}
+
+export interface PerformanceSummary {
+  starting_capital: number;
+  equity: number;
+  realized_pnl: number;
+  unrealized_pnl: number;
+  total_return_pct: number;
+  /** Over the mark-to-market equity curve (open positions included) */
+  max_drawdown_pct: number;
+  win_rate_pct: number;
+  /** Closed trades */
+  num_trades: number;
+  wins: number;
+  losses: number;
+  consecutive_losses: number;
+  equity_curve?: EquityPoint[];
+}
+
+export interface SystemInfo {
+  trading_mode: TradingMode;
+  live_enabled: boolean;
+  contracts_version: string;
+  sim_seed?: number | null;
+  components: Record<string, string>;
+}
+
+export interface LoopState {
+  running: boolean;
+  interval_seconds: number;
+  ticks: number;
+  agent_mode?: AgentMode | null;
+  active_symbol?: string | null;
+  active_strategy?: string | null;
+  replay_finished?: boolean;
+}
+
+export interface BacktestRequest {
+  strategy: ManualStrategy;
+  initial_capital?: number;
+  limit?: number;
 }
 
 /** Envelope for WebSocket messages and structured logs. */

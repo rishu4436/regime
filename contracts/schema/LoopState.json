@@ -1,0 +1,75 @@
+{
+  "$defs": {
+    "AgentMode": {
+      "description": "Which brain produced a signal: the user's rule set (MANUAL) or the regime-driven preset selector (AUTO).",
+      "enum": [
+        "MANUAL",
+        "AUTO"
+      ],
+      "title": "AgentMode",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "active_strategy": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Active Strategy"
+    },
+    "active_symbol": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Active Symbol"
+    },
+    "agent_mode": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AgentMode"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "interval_seconds": {
+      "title": "Interval Seconds",
+      "type": "number"
+    },
+    "replay_finished": {
+      "default": false,
+      "title": "Replay Finished",
+      "type": "boolean"
+    },
+    "running": {
+      "title": "Running",
+      "type": "boolean"
+    },
+    "ticks": {
+      "title": "Ticks",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "running",
+    "interval_seconds",
+    "ticks"
+  ],
+  "title": "LoopState",
+  "type": "object"
+}
