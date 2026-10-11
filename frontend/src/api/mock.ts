@@ -143,6 +143,7 @@ export class MockApi implements ApiClient {
     const age = Date.now() - t0;
     return ok<WalletConnectStatus>(age > 120_000 ? { status: "expired" } : age > 6000 ? { status: "connected", address: DEMO_WALLET, wallet_changed: false } : { status: "pending" }, 150);
   }
+  reconcileWallet() { return ok({ address: DEMO_WALLET, was_blocked: false, kept: [], dropped: [], wallet_blocked: false }, 300); }
   getTokens(q = "") {
     const ql = q.toLowerCase();
     return ok(TOKENS.filter((t) => !ql || t.symbol.toLowerCase().includes(ql) || t.name.toLowerCase().includes(ql))

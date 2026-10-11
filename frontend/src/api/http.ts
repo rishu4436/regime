@@ -1,7 +1,7 @@
 // Real client for Bot 6's FastAPI (backend/app). Paths and payloads follow backend/app/API.md exactly.
 import type { Alert, AutoConfig, BacktestRequest, BacktestResult, Candle, ControlState, Decision, Event, LoopState, ManualStrategy,
   PerformanceSummary, Portfolio, RegimeAnalysis, StatusSnapshot, StrategySelection, SystemInfo, Timeframe, TokenInfo, TraderStyle } from "../contracts";
-import { ApiError, type ActivateManualBody, type ApiClient, type LiveGate, type ParseResult, type PresetsTable, type WalletInfo, type WalletConnectStart, type WalletConnectStatus } from "./types";
+import { ApiError, type ActivateManualBody, type ApiClient, type LiveGate, type ParseResult, type PresetsTable, type WalletInfo, type WalletConnectStart, type WalletConnectStatus, type WalletReconcileResult } from "./types";
 
 const enc = encodeURIComponent;
 
@@ -86,6 +86,7 @@ export class HttpApi implements ApiClient {
   }
   startWalletConnect() { return this.post<WalletConnectStart>("/api/wallet/connect"); }
   getWalletConnect(session_id: string) { return this.get<WalletConnectStatus>(`/api/wallet/connect?session_id=${enc(session_id)}`); }
+  reconcileWallet() { return this.post<WalletReconcileResult>("/api/wallet/reconcile"); }
   approve(id: string) { return this.post<Decision>(`/api/confirmations/${enc(id)}/approve`); }
   reject(id: string, reason?: string) { return this.post<Decision>(`/api/confirmations/${enc(id)}/reject`, reason ? { reason } : {}); }
   closePositionById(id: string) { return this.post<Decision>(`/api/positions/by-id/${enc(id)}/close`); }

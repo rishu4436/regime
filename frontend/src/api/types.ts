@@ -100,6 +100,8 @@ export interface WalletConnectStatus {
   wallet_changed?: boolean | null;
   error?: string | null;
 }
+/** POST /api/wallet/reconcile (localhost only; 409 while orders settle or balances are unavailable). */
+export interface WalletReconcileResult { address?: string | null; was_blocked?: boolean; kept?: unknown[]; dropped?: unknown[]; wallet_blocked?: boolean }
 export type ActivateManualBody = { strategy_id: string } | { strategy: ManualStrategy };
 
 /** Error from the API: 404 unknown id/symbol, 409 invalid state, 422 validation. */
@@ -153,6 +155,7 @@ export interface ApiClient {
   getWallet(): Promise<WalletInfo | null>;
   startWalletConnect(): Promise<WalletConnectStart>;
   getWalletConnect(session_id: string): Promise<WalletConnectStatus>;
+  reconcileWallet(): Promise<WalletReconcileResult>;
   approve(decisionId: string): Promise<Decision>;
   reject(decisionId: string, reason?: string): Promise<Decision>;
   /** Manual override: close ONE lot by Position.id at the last price (signal.exit_reason MANUAL). 404 if not open. */

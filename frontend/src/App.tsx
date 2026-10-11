@@ -4,7 +4,7 @@ import { API_MODE } from "./api";
 import { MOCK_SCENARIO, setMockScenario } from "./api/mock";
 import { LiveBanner, SessionBanner } from "./components/Live";
 import { LiveContext, useLiveState } from "./lib/live";
-import { WalletButton, WalletConnectProvider } from "./components/WalletConnect";
+import { WalletButton, WalletChangedBanner, WalletConnectProvider } from "./components/WalletConnect";
 import { ModeBadge, RegimeBadge } from "./components/Badges";
 import { Toggle, ToastProvider } from "./components/ui";
 import { useStatus } from "./lib/useStatus";
@@ -91,6 +91,7 @@ function Shell() {
           <b>Mock data:</b> this dashboard isn't connected to the Regime backend, so nothing here is real. Start it with <code>VITE_API_MODE=http</code> to see the live agent.</span></div>}
         <LiveBanner />
         <SessionBanner />
+        <WalletChangedBanner />
         {error && <div className="banner amber"><span className="grow">Backend unreachable: {error}</span><span className="small muted">Start the API or run with VITE_API_MODE=mock</span></div>}
         {tab === "dashboard" && <Dashboard status={status} refresh={refresh} tick={tick} alertsVersion={alertsVersion} go={go} />}
         {tab === "manual" && <ManualBuilder strategy={strategy} setStrategy={setStrategy} capital={capital} setCapital={setCapital} run={run} setRun={setRun}

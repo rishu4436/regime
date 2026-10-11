@@ -93,7 +93,7 @@ export function WalletConnectProvider({ children }: { children: ReactNode }) {
             {phase === "verifying" && <div className="small"><span className="spin" /> Signed in. Re-reading the wallet's balances and limits before trading resumes…</div>}
             {phase === "connected" && <>
               {result?.wallet_changed
-                ? <div className="banner amber" style={{ marginBottom: 10 }}><span className="grow small"><b>Different wallet connected.</b> Live trading stays blocked until the saved positions and today's counters are checked against this wallet.</span></div>
+                ? <div className="banner amber" style={{ marginBottom: 10 }}><span className="grow small"><b>Different wallet connected.</b> Live trading stays blocked until you click <b>Check positions</b> in the banner, which matches the saved positions to this wallet.</span></div>
                 : <div className="banner green" style={{ marginBottom: 10 }}><span className="grow small"><b>Wallet connected.</b> {gate?.can_trade ? "Regime can trade again." : "Limits refreshed. The live status panel shows anything still blocking trades."}</span></div>}
               {addr && <div className="kv"><span className="k">Address</span><a className="mono small" href={bscAddr(addr)} target="_blank" rel="noreferrer">{shortHex(addr)} ↗</a></div>}
             </>}
@@ -107,6 +107,30 @@ export function WalletConnectProvider({ children }: { children: ReactNode }) {
         </div>
       )}
     </Ctx.Provider>
+  );
+}
+
+/** "Different wallet connected": LIVE places no orders until saved positions are checked against the new wallet. */
+export function WalletChangedBanner() {
+  const { gate, refresh } = useLive();
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const blocked = gate?.blocked_reasons?.some((r) => /different wallet connected/i.test(r));
+  if (!blocked) return null;
+  const run = async () => {
+    setBusy(true);
+    try {
+      const r = await api.reconcileWallet();
+      const kept = r.kept?.length ?? 0, dropped = r.dropped?.length ?? 0;
+      toast(`Positions checked: ${kept} kept${dropped ? `, ${dropped} not in this wallet and removed` : ""}. Trading can resume.`, "success"); refresh();
+    } catch (e) {
+      toast(e instanceof ApiError && e.status === 409 ? "Can't check yet: an order is still settling or balances aren't available. Try again in a minute."
+        : e instanceof ApiError && e.status === 403 ? "This check only works on the PC running the Regime backend." : e instanceof Error ? e.message : String(e), "error");
+    } finally { setBusy(false); }
+  };
+  return (
+    <div className="banner amber" role="alert"><span className="grow small"><b>Different wallet connected.</b> Regime places no orders, exits included, until its saved positions are checked against this wallet.</span>
+      <button className="btn" style={{ padding: "5px 12px" }} disabled={busy} onClick={run}>{busy ? <span className="spin" /> : null}Check positions</button></div>
   );
 }
 
