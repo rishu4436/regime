@@ -29,11 +29,11 @@ def big_ctx(usdt=10_000.0, **kw):
 def test_defaults_unchanged_and_settings_shape(clock):
     lp = LiveRiskProfile()
     assert (lp.max_order_notional_usdt, lp.max_daily_loss_usdt, lp.max_daily_notional_usdt, lp.max_open_exposure_usdt) == (25, 25, 100, 50)
-    assert lp.order_mode == "fixed" and lp.order_usdt is None and lp.order_pct is None and lp.max_token_exposure_usdt is None
+    assert lp.order_mode == "strategy" and lp.order_usdt is None and lp.order_pct is None and lp.max_token_exposure_usdt is None
     s = live_rm(clock).live_limits_settings()
     assert PANEL_KEYS | {"defaults", "wallet_daily_limit_usdt", "notes"} == set(s)
     assert {k: s[k] for k in PANEL_KEYS} == s["defaults"] == dict(
-        order_mode="fixed", order_usdt=None, order_pct=None, max_order_usdt=25.0, max_total_usdt=50.0,
+        order_mode="strategy", order_usdt=None, order_pct=None, max_order_usdt=25.0, max_total_usdt=50.0,
         max_per_token_usdt=50.0, daily_loss_usdt=25.0, daily_buy_usdt=100.0)
     assert s["wallet_daily_limit_usdt"] is None and s["notes"] == []
     assert live_rm(clock).live_limits_settings(WalletLimits(daily_limit_usdt=300))["wallet_daily_limit_usdt"] == 300
@@ -129,7 +129,7 @@ def test_reset_restores_startup_values(clock):
     rm.set_live_limits(dict(order_mode="pct", order_pct=2, **RAISED, daily_loss_usdt=300))
     out = rm.reset_live_limits()
     assert {k: out[k] for k in PANEL_KEYS} == out["defaults"]
-    assert out["max_order_usdt"] == 20 and out["order_mode"] == "fixed" and out["order_pct"] is None
+    assert out["max_order_usdt"] == 20 and out["order_mode"] == "strategy" and out["order_pct"] is None
     assert rm.config.live.max_token_exposure_usdt is None and out["notes"]
 
 
@@ -233,3 +233,84 @@ def test_concurrent_set_and_check_see_consistent_snapshots(clock):
         t.join()
     assert not errors
     assert set(sizes) <= {25.0, 200.0}
+
+
+# ------------------------------------------------------------------ order_mode "strategy" (= "Strategy decides")
+STRATEGY_BODY = dict(order_mode="strategy", order_usdt=None, order_pct=None)
+
+
+def test_get_returns_strategy_by_default(clock):
+    rm = live_rm(clock)
+    s = rm.live_limits_settings()
+    assert s["order_mode"] == s["defaults"]["order_mode"] == "strategy"
+    assert s["order_usdt"] is None and s["order_pct"] is None
+    assert rm.live_limits()["order_mode"] == "strategy"
+    assert DefaultRiskManager(RiskConfig.from_env()).live_limits_settings()["order_mode"] == "strategy"
+
+
+@pytest.mark.parametrize("body", [STRATEGY_BODY, dict(order_mode=None, order_usdt=None, order_pct=None),
+                                  dict(order_mode="Strategy"), dict(order_mode=None)])
+def test_strategy_mode_via_string_or_null(clock, body):
+    rm = live_rm(clock)
+    rm.set_live_limits(dict(order_mode="pct", order_pct=2, **RAISED))
+    out = rm.set_live_limits(body)
+    assert (out["order_mode"], out["order_usdt"], out["order_pct"]) == ("strategy", None, None)
+    lp = rm.config.live
+    assert (lp.order_mode, lp.order_usdt, lp.order_pct) == ("strategy", None, None)
+    assert out["max_order_usdt"] == 500  # caps untouched
+
+
+def test_strategy_mode_from_fixed_clears_order_usdt(clock):
+    rm = live_rm(clock)
+    rm.set_live_limits(dict(order_mode="fixed", order_usdt=40, max_order_usdt=100, max_total_usdt=200))
+    out = rm.set_live_limits(STRATEGY_BODY)
+    assert (out["order_mode"], out["order_usdt"]) == ("strategy", None) and out["notes"] == []
+    # non-null sizes sent with 'strategy' are not validated, just ignored (with a note)
+    out = rm.set_live_limits(dict(order_mode="strategy", order_usdt=0, order_pct=5))
+    assert (out["order_mode"], out["order_usdt"], out["order_pct"]) == ("strategy", None, None)
+    assert out["notes"] and "ignored" in out["notes"][0]
+
+
+def test_pct_to_strategy_restores_strategy_sizing(clock):
+    rm = live_rm(clock)
+    base = rm.check(lbuy(), big_pf(), lctl(), context=big_ctx())
+    rm.set_live_limits(dict(order_mode="pct", order_pct=2, **RAISED))
+    v = rm.check(lbuy(), big_pf(), lctl(), context=big_ctx())
+    assert v.approved and v.adjusted_notional == pytest.approx(200.0)
+    rm.set_live_limits(STRATEGY_BODY)
+    assert rm.config.live.order_pct is None
+    v = rm.check(lbuy(), big_pf(), lctl(), context=big_ctx())
+    # back to the strategy's own size: same as an untouched manager with the same (raised) caps
+    ref = live_rm(clock)
+    ref.set_live_limits(dict(RAISED))
+    r = ref.check(lbuy(), big_pf(), lctl(), context=big_ctx())
+    assert v.approved and v.adjusted_notional == pytest.approx(r.adjusted_notional)
+    assert v.adjusted_notional != pytest.approx(200.0)
+    assert "order size setting" not in names(v)["position_size"].detail
+    assert base.approved
+
+
+def test_fixed_requires_order_usdt_and_null_means_strategy(clock):
+    rm = live_rm(clock)
+    with pytest.raises(ValueError) as e:  # explicit 'fixed', no amount anywhere
+        rm.set_live_limits(dict(order_mode="fixed"))
+    assert "required when the order size mode is 'fixed'" in str(e.value)
+    assert rm.live_limits_settings()["order_mode"] == "strategy"
+    # 'fixed' + explicit null (pre-'strategy' saved settings) = strategy size, accepted
+    out = rm.set_live_limits(dict(order_mode="fixed", order_usdt=None, order_pct=None))
+    assert (out["order_mode"], out["order_usdt"]) == ("strategy", None)
+    # back-compat: a bare order_usdt (old default mode 'fixed') sets a fixed size
+    out = rm.set_live_limits(dict(order_usdt=20))
+    assert (out["order_mode"], out["order_usdt"]) == ("fixed", 20)
+    # fixed mode already stored: switching only the amount to null falls back to strategy
+    out = rm.set_live_limits(dict(order_usdt=None))
+    assert out["order_mode"] == "strategy"
+
+
+def test_profile_model_normalizes_order_mode():
+    assert LiveRiskProfile(order_usdt=40).order_mode == "fixed"  # old default mode
+    assert LiveRiskProfile(order_mode="fixed").order_mode == "strategy"
+    assert LiveRiskProfile(order_mode="pct").order_mode == "strategy"
+    lp = LiveRiskProfile(order_mode="strategy", order_usdt=40, order_pct=2)
+    assert (lp.order_usdt, lp.order_pct) == (None, None)
+    assert LiveRiskProfile(**LiveRiskProfile(order_mode="pct", order_pct=3).model_dump()).order_pct == 3

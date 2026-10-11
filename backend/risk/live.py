@@ -14,7 +14,7 @@ import os
 from datetime import datetime, time, timedelta, timezone
 from typing import Any, Literal, Mapping, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from backend.contracts import QUOTE_TTL_SECONDS, Candle, Quote
 
@@ -33,10 +33,30 @@ class LiveRiskProfile(BaseModel):
         "Max value held in ONE token incl. the new order. None = same as max_open_exposure_usdt (no extra limit)"))
 
     # Order sizing set by the user (dashboard 'Trading limits' panel). Default = the strategy's own size (unchanged).
-    order_mode: Literal["fixed", "pct"] = Field(default="fixed", description=(
-        "'fixed' = order_usdt per LIVE BUY (None = use the strategy's size); 'pct' = order_pct % of the wallet stablecoin"))
+    order_mode: Literal["strategy", "fixed", "pct"] = Field(default="strategy", description=(
+        "'strategy' = the strategy's own size (only the caps trim it; order_usdt/order_pct are None); 'fixed' = "
+        "order_usdt per LIVE BUY; 'pct' = order_pct % of the wallet stablecoin"))
     order_usdt: Optional[float] = Field(default=None, gt=0, description="Fixed LIVE BUY size in USDT (fixed mode)")
     order_pct: Optional[float] = Field(default=None, gt=0, le=100, description="LIVE BUY size as % of wallet USDT (pct mode)")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _infer_order_mode(cls, data: Any) -> Any:
+        # Back-compat: before 'strategy' existed the default mode was 'fixed', so LiveRiskProfile(order_usdt=40) meant a
+        # fixed 40 USDT order. A missing / None mode is therefore 'fixed' when order_usdt is set, else 'strategy'.
+        if isinstance(data, dict) and data.get("order_mode") is None:
+            data = {**data, "order_mode": "fixed" if data.get("order_usdt") is not None else "strategy"}
+        return data
+
+    @model_validator(mode="after")
+    def _normalize_order_mode(self) -> "LiveRiskProfile":
+        # 'fixed' without order_usdt / 'pct' without order_pct size nothing themselves = the strategy's size.
+        if (self.order_mode == "fixed" and self.order_usdt is None) or (self.order_mode == "pct" and self.order_pct is None):
+            self.order_mode = "strategy"
+        if self.order_mode == "strategy":
+            self.order_usdt = None
+            self.order_pct = None
+        return self
 
     max_data_age_seconds: float = Field(default=900.0, gt=0, description="BUY blocked if the latest price/bar is older")
     max_future_skew_seconds: float = Field(default=60.0, ge=0, description="BUY blocked if the data timestamp is this far in the future")

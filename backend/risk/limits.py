@@ -2,8 +2,8 @@
 
 The panel's shape (Bot 1) maps onto ``LiveRiskProfile`` fields:
 
-    order_mode          -> order_mode            'fixed' | 'pct'
-    order_usdt          -> order_usdt            fixed LIVE BUY size (None = use the strategy's size)
+    order_mode          -> order_mode            'strategy' (default) | 'fixed' | 'pct'; null = 'strategy'
+    order_usdt          -> order_usdt            fixed LIVE BUY size (fixed mode; None in strategy mode)
     order_pct           -> order_pct             % of the wallet stablecoin per LIVE BUY (pct mode)
     max_order_usdt      -> max_order_notional_usdt
     max_total_usdt      -> max_open_exposure_usdt
@@ -95,16 +95,35 @@ def apply_live_settings(lp: LiveRiskProfile, settings: Mapping[str, Any],
         return k in settings
 
     mode = lp.order_mode
-    if given("order_mode"):
+    mode_given = given("order_mode")
+    mode_ok = True
+    if mode_given:
         raw = settings["order_mode"]
         m = raw.strip().lower() if isinstance(raw, str) else raw
-        if m not in ("fixed", "pct"):
-            errors.append(f"Order size mode must be 'fixed' or 'pct' (got {raw!r})")
-        else:
+        if m is None or m == "":
+            mode = "strategy"  # null = "Strategy decides"
+        elif m in ("strategy", "fixed", "pct"):
             mode = m
+        else:
+            mode_ok = False
+            errors.append(f"Order size mode must be 'strategy', 'fixed' or 'pct' (got {raw!r})")
+    elif mode == "strategy" and given("order_usdt") and settings["order_usdt"] not in (None, ""):
+        mode = "fixed"  # back-compat: a bare order_usdt (old default mode was 'fixed') sets a fixed size
 
-    order_usdt = _number("order_usdt", settings["order_usdt"], errors, optional=True) if given("order_usdt") else lp.order_usdt
-    order_pct = _number("order_pct", settings["order_pct"], errors, optional=True) if given("order_pct") else lp.order_pct
+    if mode_ok and mode == "strategy":
+        # "Strategy decides": neither size is used, so whatever was sent for them is not validated, just cleared.
+        order_usdt = order_pct = None
+        ignored = [k for k in ("order_usdt", "order_pct") if given(k) and settings[k] not in (None, "")]
+        if ignored:
+            notes.append(", ".join(LABELS[k] for k in ignored) + " ignored: the order size mode is 'strategy' "
+                         "(the strategy decides the size; the limits still cap it)")
+    else:
+        order_usdt = _number("order_usdt", settings["order_usdt"], errors, optional=True) if given("order_usdt") else lp.order_usdt
+        order_pct = _number("order_pct", settings["order_pct"], errors, optional=True) if given("order_pct") else lp.order_pct
+        if (mode_ok and mode == "fixed" and order_usdt is None and mode_given and not given("order_usdt")
+                and not any(LABELS["order_usdt"] in e for e in errors)):
+            errors.append(f"{LABELS['order_usdt']} is required when the order size mode is 'fixed' "
+                          "(or choose 'strategy' to let the strategy decide the size)")
     max_order = _number("max_order_usdt", settings["max_order_usdt"], errors) if given("max_order_usdt") else lp.max_order_notional_usdt
     max_total = _number("max_total_usdt", settings["max_total_usdt"], errors) if given("max_total_usdt") else lp.max_open_exposure_usdt
     if given("max_per_token_usdt"):
@@ -149,6 +168,8 @@ def apply_live_settings(lp: LiveRiskProfile, settings: Mapping[str, Any],
         notes.append(f"Daily buy limit {_fmt(daily_buy)} USDT is above the wallet's daily limit of {_fmt(wl_daily)} USDT; "
                      "the wallet limit (the lower one) applies")
 
+    if mode == "fixed" and order_usdt is None:
+        mode = "strategy"  # 'fixed' with order_usdt explicitly null = the strategy's size (pre-'strategy' meaning)
     upd = dict(order_mode=mode, order_usdt=order_usdt, order_pct=order_pct, max_order_notional_usdt=max_order,
                max_open_exposure_usdt=max_total, max_token_exposure_usdt=per_token, max_daily_loss_usdt=daily_loss,
                max_daily_notional_usdt=daily_buy)
