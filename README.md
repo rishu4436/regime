@@ -157,6 +157,7 @@ Every rule above is covered by tests in [`backend/risk/tests/`](backend/risk/tes
 |---|---|
 | ![Trade explanation](docs/screenshots/trade-explanation.png)<br/>**Trade explanation:** every decision with its plain-English reason. | ![Auto mode](docs/screenshots/auto-mode.png)<br/>**Auto mode:** the regime picks one preset for your trading style. |
 | ![Manual strategy builder](docs/screenshots/manual-builder.png)<br/>**Manual builder:** your own entry and exit rules, no code. | ![Backtest](docs/screenshots/backtest.png)<br/>**Backtest:** the same engine run on past candles before going live. |
+| ![Trading limits](docs/screenshots/limits.png)<br/>**Trading limits:** set order size and spending caps from the dashboard. | ![Agent Studio](docs/screenshots/agent-studio.png)<br/>**Agent Studio:** register Regime's public ERC-8004 identity on BNB Chain. |
 
 ## Architecture
 
