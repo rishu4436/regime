@@ -5,12 +5,13 @@
 Total length is 3:00. Timestamps are cumulative. Record at 1080p, browser zoom 110%, dark theme.
 Only show what is on the screen. If something isn't there on the day, skip it and say so.
 
-## Real mainnet trades (both verified on BscScan: status success, wallet `0xc44eddcffa4227d38bc92a7ca5990953aa7ff0cf`)
+## Real mainnet trades (all three verified on BscScan: status success, wallet `0xc44eddcffa4227d38bc92a7ca5990953aa7ff0cf`)
 
 | When (11 Oct 2026, IST) | What | Tx |
 |---|---|---|
 | 09:25 | First autonomous buy (Auto mode, Grid): 10 USDT of NVDAB at about 230.47 USDT | [0x228c02688cd2a8170b38dba6abfdb4f95fca9e9e22ae6bed6a191d0b88a19f22](https://bscscan.com/tx/0x228c02688cd2a8170b38dba6abfdb4f95fca9e9e22ae6bed6a191d0b88a19f22) |
 | 12:01 | Autonomous buy in Auto mode, Grid strategy: 10 USDT of NVDAB | [0x187fdc3e1023e1ecd37af1dc7bed4176a13e75e39a0b35727681538c0690bf7f](https://bscscan.com/tx/0x187fdc3e1023e1ecd37af1dc7bed4176a13e75e39a0b35727681538c0690bf7f) |
+| 12:45 | Autonomous buy in Auto mode, Grid strategy: 10 USDT of NVDAB at 230.62 | [0x53e13fd6abb79a9666e9d0adaec831ad8912625d1ac2f37e480cb44e8d2e0598](https://bscscan.com/tx/0x53e13fd6abb79a9666e9d0adaec831ad8912625d1ac2f37e480cb44e8d2e0598) |
 
 ## Before recording (checklist)
 
@@ -19,7 +20,7 @@ Only show what is on the screen. If something isn't there on the day, skip it an
   (The one-command `run.sh` / `run.ps1` does this. If the **Demo LIVE scenario** toggle is visible, you are on mock data.)
 - [ ] Wallet connected. If the top bar shows **Reconnect wallet**, click it and scan the QR in the Binance App.
   When it's connected, the top bar shows only the wallet address.
-- [ ] The agent is running **Auto** mode with **Grid** on **NVDAB**, and the two NVDAB lots show under **Open positions**.
+- [ ] The agent is running **Auto** mode with **Grid** on **NVDAB**, and the three NVDAB lots (about 30 USDT, the 3-position maximum) show under **Open positions**.
 - [ ] Two BscScan tabs open in the background, one for each tx above.
 - [ ] Trading limits panel visible on the dashboard (it is on main since PR #23).
 - [ ] Decide how to show Emergency stop (see 2:05). In LIVE it sells the open lots on the next bar.
@@ -39,7 +40,7 @@ Only show what is on the screen. If something isn't there on the day, skip it an
 | 0:15 | Point at the red **LIVE · MAINNET** tag and banner. | "This is live. Real money, on BNB Smart Chain mainnet." |
 | 0:22 | **Agent** card: market regime, active strategy (Grid), token NVDAB. | "Regime reads the market first. Right now NVDAB is in this regime, so Regime picked one strategy for it: Grid. It runs one strategy at a time." |
 | 0:32 | Autonomy monitor: running since, last tick, next tick. | "This shows it's alive. It checks the market every tick, around the clock." |
-| 0:38 | **Open positions**: the two NVDAB lots. | "These are the two NVDAB positions it holds now." |
+| 0:38 | **Open positions**: the three NVDAB lots. | "These are the three NVDAB positions it holds now, which is its maximum of three." |
 
 ## 0:45–1:10: A decision and its reason
 
@@ -56,7 +57,7 @@ Only show what is on the screen. If something isn't there on the day, skip it an
 | 1:22 | BscScan page: status Success, from the wallet address. | "It's on BscScan. Status success, from our Agentic Wallet. Anyone can check it." |
 | 1:32 | Switch to the 09:25 BscScan tab. | "And this was Regime's first autonomous trade, at 09:25 this morning." |
 
-**If there's no new trade during the demo:** that's normal. Regime often stays out. Say "No new trade right now, so here are the ones it already made," and show the two recorded txs above.
+**If there's no new trade during the demo:** that's normal. Regime often stays out. Say "No new trade right now, so here are the ones it already made," and show the three recorded txs above.
 
 ## 1:40–2:05: Trading limits
 
@@ -117,7 +118,7 @@ Time budget: 15 s. Take it from 2:25–2:45 (Agent Studio, cut to 10 s) and 2:45
 
 ## Facts to re-check right before recording
 
-- Mode: both trades are Auto mode with Grid, made by Regime on its own (confirmed from the PC decision log).
+- Mode: all three trades are Auto mode with Grid, made by Regime on its own (confirmed from the PC decision log).
 - Agent Studio: still not registered unless Rishu registers. If he does, fill in the placeholder above.
 - Watchlist: the picker is in the frontend, but the backend (PR #28) isn't merged yet. Keep that section commented
   out unless it merges by 13:45.
