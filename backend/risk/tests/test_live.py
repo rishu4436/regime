@@ -308,7 +308,7 @@ def test_quote_mismatch(clock):
     assert not v.approved
 
 
-@pytest.mark.parametrize("qprice,bps,ok", [(100.99, 50, True), (101.5, 50, False), (98.0, 50, False), (100.2, 150, False)])
+@pytest.mark.parametrize("qprice,bps,ok", [(100.99, 50, True), (101.5, 50, False), (98.0, 50, True), (96.0, 50, False), (100.2, 150, False)])
 def test_quote_slippage(clock, qprice, bps, ok):
     v = live_rm(clock).check(lbuy(), lpf(), lctl(), context=ctx(quote=quote(price=qprice, slippage_bps=bps)))
     assert names(v)["live_slippage"].passed is ok and v.approved is ok

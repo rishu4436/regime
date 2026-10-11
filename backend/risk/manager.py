@@ -45,6 +45,18 @@ def is_risk_exit(signal: Signal) -> bool:
     return signal.action == Action.SELL and signal.exit_reason in RISK_EXIT_REASONS
 
 
+
+def quote_impact_pct(side: OrderSide, quote_price: float, reference_price: float) -> tuple[float, float]:
+    """(adverse %, favorable %) of a quote vs a reference price; at most one is non-zero.
+
+    BUY: paying more than the reference is adverse. SELL: receiving less than the reference is adverse."""
+    if not reference_price or reference_price <= 0:
+        raise ValueError("reference_price must be > 0")
+    diff = (quote_price - reference_price) / reference_price * 100.0
+    if side == OrderSide.SELL:
+        diff = -diff
+    return (diff, 0.0) if diff > 0 else (0.0, -diff)
+
 class DefaultRiskManager:
     """Risk gate + exit enforcement + global controls. Thread-safe. The only in-memory state is the ControlState
     (and config); positions, trailing high-water marks (Position.highest_price), cooldowns and PnL are read from the
@@ -283,6 +295,7 @@ class DefaultRiskManager:
                 "source": wl.source, "fetched_at": wl.fetched_at.isoformat() if wl.fetched_at else None},
             "max_exposure_usdt": lp.max_open_exposure_usdt,
             "max_slippage_pct": lp.max_slippage_pct,
+            "max_favorable_impact_pct": lp.max_favorable_impact_pct,
             "stale_after_s": lp.max_data_age_seconds,
             "bnb_gas_reserve": lp.min_gas_reserve,
             "fee_buffer_usdt": lp.fee_buffer_usdt,
@@ -505,21 +518,39 @@ class DefaultRiskManager:
         ref = ctx.reference_price or signal.price or (ctx.bar.close if ctx.bar else None)
         ex_impact = self._exchange_impact(ctx)
         tol = q.slippage_bps / 100.0
+        tol_ok = tol <= lp.max_slippage_pct
+        tol_txt = f"slippage tolerance {tol:.2f}% (max {lp.max_slippage_pct:.2f}%)"
         if ex_impact is not None:
+            # Sign convention of Web3 `priceImpactPercent` is undocumented (only positive samples seen, and Bot 4's
+            # computed fallback uses positive = worse for us), so the exchange-reported figure stays sign-blind:
+            # its magnitude is treated as adverse.
             impact = abs(ex_impact)
-            ok = impact <= lp.max_slippage_pct and tol <= lp.max_slippage_pct
+            ok = impact <= lp.max_slippage_pct and tol_ok
             checks.append(RiskCheck(name="live_slippage", passed=ok, detail=(
-                f"Exchange-reported price impact {impact:.2f}%, slippage tolerance {tol:.2f}%; max {lp.max_slippage_pct}%"
+                f"Exchange-reported price impact {impact:.2f}% (direction not reported, counted as adverse; "
+                f"max {lp.max_slippage_pct:.2f}%), {tol_txt}"
                 + ("" if ok else " - too much slippage"))))
-        elif ref is None:
+        elif ref is None or ref <= 0:
             checks.append(RiskCheck(name="live_slippage", passed=False,
                                     detail="No reference price to measure the quote's price impact against"))
         else:
-            impact = abs(q.price - ref) / ref * 100.0
-            ok = impact <= lp.max_slippage_pct and tol <= lp.max_slippage_pct
-            checks.append(RiskCheck(name="live_slippage", passed=ok, detail=(
-                f"Quote price {q.price:.4f} vs reference {ref:.4f}: impact {impact:.2f}%, slippage tolerance {tol:.2f}%; "
-                f"max {lp.max_slippage_pct}%" + ("" if ok else " - too much slippage"))))
+            adverse, favorable = quote_impact_pct(q.side, q.price, ref)
+            prices = f"quote {q.price:.4f} vs reference {ref:.4f}"
+            if adverse > 0:
+                imp_ok = adverse <= lp.max_slippage_pct
+                txt = (f"Quote is {adverse:.2f}% worse than the reference price (adverse; {prices}), "
+                       f"max {lp.max_slippage_pct:.2f}%" + ("" if imp_ok else " - too much slippage"))
+            elif favorable > lp.max_favorable_impact_pct:
+                imp_ok = False
+                txt = (f"Quote is {favorable:.2f}% better than the reference price ({prices}), above the "
+                       f"{lp.max_favorable_impact_pct:.2f}% sanity limit; likely a bad quote")
+            else:
+                imp_ok = True
+                txt = (f"Quote is {favorable:.2f}% better than the reference price (favorable; {prices}), "
+                       f"allowed up to {lp.max_favorable_impact_pct:.2f}%")
+            ok = imp_ok and tol_ok
+            detail = f"{txt}; {tol_txt}" + ("" if tol_ok else " - slippage tolerance too high")
+            checks.append(RiskCheck(name="live_slippage", passed=ok, detail=detail))
 
         per = self._effective_caps(ctx)
         lim = min(notional, per["per_order"]) * (1 + 1e-9) + 1e-9

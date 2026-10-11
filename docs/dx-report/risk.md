@@ -1,6 +1,6 @@
 # Risk control
 
-*Part of the Developer Experience Report for team `teamwork` (BNB Hack: Tokenized Stocks). Written 11 Oct 2026.
+*Part of the Developer Experience Report for Regime by team `teamwork` (BNB Hack: Tokenized Stocks). Written 11 Oct 2026.
 Every claim below points at code on `bot3/live` (`04e0944`, `backend/risk`) or at our research notes. Anything we did
 not verify ourselves says so. The trade flow is in [ai-stack.md](ai-stack.md); exchange and `baw` details are in
 [exchange.md](exchange.md); the loop, in-flight handling and e2e tests are in [integration.md](integration.md).*
@@ -87,7 +87,7 @@ Exchange-side details are in [exchange.md](exchange.md). Here is only how each o
 | 3 | **Wallet limits are in USD**, our caps in USDT. | Treated 1:1. A stablecoin depeg would quietly skew the stricter-of-two comparison. | Report limits in the asset traded, or give the FX rate used. |
 | 4 | **Ondo off-hours:** tradable on a short list of names, but zero-volume bars that behave like a reference price. | `live_token_status` blocks a buy when the token isn't `trading` or is `reference_price_only`. | One status field that says "reference price only" for each token. |
 | 5 | **Ondo's 20 USD minimum** shows up only as error **40375**; no field gives it. | With a 25 USDT cap, wallet shrinking can push an Ondo buy below 20. Risk uses `max(10, token_status.min_order_usdt)`; the token value comes from Bot 4's `get_token_status`, whose 20 for Ondo is itself inferred from the error text. | Add `minOrderUsd` to token or market status. |
-| 6 | **`priceImpactPercent`** comes as a string (`"0.0001"`) and isn't always present. | Risk takes it as an optional float (`LiveContext.price_impact_pct`) and falls back to quote vs reference price when it's missing. | Always return a numeric field. |
+| 6 | **`priceImpactPercent`** comes as a string (`"0.0001"`), isn't always present, and its sign isn't documented. | Risk takes it as an optional float (`LiveContext.price_impact_pct`) and counts its magnitude as adverse. Without it, risk compares the quote with the reference price by direction: a worse price is capped at 1 %, and a better one is allowed up to a 3 % sanity cap. | Always return a numeric field, and document the sign (we suggest positive = worse for the trader). |
 | 7 | **Market hours vs 24/7:** bStock trades 24/7, Ondo 24/5 plus off-hours, and US hours shift with EDT/EST. | We switched the US-hours guard **off by default** (`7f33dd9`) and gate on each token's own status instead. Holidays were never modelled. | A per-asset `isTradableNow` flag next to the session. |
 | 8 | **Candle `timestamp` is the bar's open time.** | A 1h bar's open is always more than 900 s old, so a naive stale-data check blocks everything. Risk uses the fetch time, or `bar.timestamp + bar_interval` (the close). | Include the close time (or an `isClosed` flag) in candle rows. |
 | 9 | **Gaps in our own contracts:** `RiskManager.check` has no `context`, `Portfolio` has no wallet balances, `Quote` has no price impact. | We added an optional `context: LiveContext` (balances, wallet limits, token status, price impact, data time) as a Bot 3 extension. | For a hackathon starter kit: put balances, impact and token status in the shared models from day one. |
