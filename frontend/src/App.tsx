@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { CONTRACTS_VERSION, DEFAULT_INITIAL_CAPITAL, PresetNameValues, type AutoConfig } from "./contracts";
 import { API_MODE } from "./api";
 import { MOCK_SCENARIO, setMockScenario } from "./api/mock";
@@ -16,6 +16,7 @@ import type { BacktestRun } from "./views/BacktestResults";
 import { BacktestView } from "./views/BacktestView";
 import { Dashboard } from "./views/Dashboard";
 import { ManualBuilder } from "./views/ManualBuilder";
+import { AlertsView, AskView, IdentityView, LimitsView, WalletView } from "./views/Tabs";
 
 // v2: activation defaults to AUTO_EXECUTE everywhere; older saved drafts (CONFIRMATION default) are dropped
 const LS_KEY = "teamwork.strategy.v2";
@@ -23,12 +24,17 @@ function loadStrategy(): FullStrategy {
   try { const raw = localStorage.getItem(LS_KEY); return raw ? fillStrategy(JSON.parse(raw)) : defaultStrategy(); } catch { return defaultStrategy(); }
 }
 
-export type Tab = "dashboard" | "manual" | "auto" | "backtest";
-const TABS: { id: Tab; label: string; ico: string; title: string; sub: string }[] = [
-  { id: "dashboard", label: "Dashboard", ico: "◧", title: "Dashboard", sub: "Live agent state, positions and decisions" },
+export type Tab = "dashboard" | "manual" | "auto" | "backtest" | "wallet" | "limits" | "identity" | "ask" | "alerts";
+const TABS: { id: Tab; label: string; ico: string; title: string; sub: string; group?: string }[] = [
+  { id: "dashboard", label: "Dashboard", ico: "◧", title: "Dashboard", sub: "Agent status and controls, positions, chart and decisions", group: "Trade" },
   { id: "manual", label: "Manual Builder", ico: "⚙", title: "Manual Strategy Builder", sub: "Define entry, exit, risk and filters, then backtest and activate" },
   { id: "auto", label: "Auto Mode", ico: "✦", title: "Auto Mode", sub: "Pick a trader style; the agent maps the market regime to one preset" },
   { id: "backtest", label: "Backtest", ico: "◔", title: "Backtest results", sub: "Stats, price chart with trades, equity curve and trade list" },
+  { id: "wallet", label: "Wallet", ico: "◈", title: "Wallet", sub: "Agentic Wallet connection, balances and gas", group: "Agent" },
+  { id: "limits", label: "Trading limits", ico: "⛨", title: "Trading limits", sub: "Spending caps, decision loop and confirmation mode" },
+  { id: "identity", label: "Agent identity", ico: "⬢", title: "Agent identity", sub: "BNB Agent Studio (ERC-8004) identity and paid second opinions (x402)" },
+  { id: "ask", label: "Ask the agent", ico: "✉", title: "Ask the agent", sub: "Ask why it did something, in plain language" },
+  { id: "alerts", label: "Alerts", ico: "⚑", title: "Alerts", sub: "Stops, pauses, risk blocks and losing streaks" },
 ];
 
 export default function App() {
@@ -50,12 +56,18 @@ function Shell() {
   const [run, setRun] = useState<BacktestRun | null>(null);
   const [autoCfg, setAutoCfg] = useState<AutoConfig & WatchlistFields>({ symbol: "NVDAB", style: "BALANCED", enabled_presets: [...PresetNameValues], capital: DEFAULT_INITIAL_CAPITAL, timeframe: "1h", activation: "AUTO_EXECUTE" });
 
-  const nav = TABS.map((t) => (
-    <button key={t.id} className={`nav-item${tab === t.id ? " active" : ""}`} onClick={() => setTab(t.id)}>
-      <span className="ico">{t.ico}</span>{t.label}
+  // unread = alerts pushed over the socket since the Alerts tab was last open
+  const [alertsSeen, setAlertsSeen] = useState(0);
+  useEffect(() => { if (tab === "alerts") setAlertsSeen(alertsVersion); }, [tab, alertsVersion]);
+  const unread = tab === "alerts" ? 0 : Math.max(0, alertsVersion - alertsSeen);
+  const navItems = (withGroups: boolean) => TABS.flatMap((t) => [
+    ...(withGroups && t.group ? [<div key={`g-${t.group}`} className="nav-group">{t.group}</div>] : []),
+    <button key={t.id} className={`nav-item${tab === t.id ? " active" : ""}`} onClick={() => setTab(t.id)} title={t.title}>
+      <span className="ico">{t.ico}</span><span className="nav-label">{t.label}</span>
       {t.id === "dashboard" && pendingCount > 0 && <span className="count">{pendingCount}</span>}
-    </button>
-  ));
+      {t.id === "alerts" && unread > 0 && <span className="count" title={`${unread} new alert${unread > 1 ? "s" : ""}`}>{unread > 99 ? "99+" : unread}</span>}
+    </button>,
+  ]);
 
   return (
     <LiveContext.Provider value={live}>
@@ -63,7 +75,7 @@ function Shell() {
     <div className={`app${live.isLive ? " is-live" : ""}`}>
       <aside className="sidebar">
         <div className="brand"><div className="brand-logo">◆</div><div><b>Regime</b><small>Autonomous tokenized-stock agent</small></div></div>
-        {nav}
+        <nav className="side-nav">{navItems(true)}</nav>
         <div className="sidebar-foot">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>Mode <ModeBadge mode={mode} /></div>
           {live.isLive && <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>Network <span className="pill bad">BSC mainnet</span></div>}
@@ -98,14 +110,19 @@ function Shell() {
         </ErrorBoundary>
         {error && <div className="banner amber"><span className="grow">Backend unreachable: {error}</span><span className="small muted">Start the API or run with VITE_API_MODE=mock</span></div>}
         <ErrorBoundary key={tab} label={meta.title}>
-        {tab === "dashboard" && <Dashboard status={status} refresh={refresh} tick={tick} alertsVersion={alertsVersion} go={go} />}
+        {tab === "dashboard" && <Dashboard status={status} refresh={refresh} tick={tick} go={go} />}
         {tab === "manual" && <ManualBuilder strategy={strategy} setStrategy={setStrategy} capital={capital} setCapital={setCapital} run={run} setRun={setRun}
           onActivated={() => { refresh(); setTab("dashboard"); }} onAutoParsed={(c) => { setAutoCfg({ ...autoCfg, ...c, auto_pick: autoCfg.auto_pick, activation: autoCfg.activation }); setTab("auto"); }} />}
         {tab === "auto" && <AutoMode config={autoCfg} setConfig={setAutoCfg} status={status} tick={tick} onActivated={() => { refresh(); setTab("dashboard"); }} />}
         {tab === "backtest" && <BacktestView run={run} onOpenBuilder={() => setTab("manual")} />}
+        {tab === "wallet" && <WalletView />}
+        {tab === "limits" && <LimitsView status={status} refresh={refresh} tick={tick} />}
+        {tab === "identity" && <IdentityView status={status} refresh={refresh} tick={tick} />}
+        {tab === "ask" && <AskView tick={tick} />}
+        {tab === "alerts" && <AlertsView version={alertsVersion} />}
         </ErrorBoundary>
       </main>
-      <nav className="mobile-nav">{nav}</nav>
+      <nav className="mobile-nav">{navItems(false)}</nav>
     </div>
     </WalletConnectProvider>
     </LiveContext.Provider>

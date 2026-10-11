@@ -6,17 +6,13 @@ import { PriceChart, type TradeMarker } from "../components/Charts";
 import { Card, Segmented, Skeleton, StatCard, useToast } from "../components/ui";
 import { cls, humanize, num, time, usd } from "../lib/format";
 import { conditionLabel, controlReason, EXIT_LABEL, heldExit, isExitQueued, isPendingPos, strategyLabel, humanReason, TOKENS } from "../lib/strategy";
-import { Controls } from "./Controls";
-import { AlertsPanel, AskAgent } from "./Insights";
 import { ApiError, type PerformanceSummary } from "../api/types";
 import { ConfirmDialog } from "../components/ConfirmDialog";
-import { StockAgentCard } from "../components/StockAgent";
-import { ActivityFeed, AgentIdentityCard, AutonomyMonitor, CapsPanel, LiveGateCard, TxLink, WalletPanel } from "../components/Live";
+import { ActivityFeed, AutonomyMonitor, TxLink } from "../components/Live";
 import { useLive } from "../lib/live";
-import { TradingLimitsCard } from "../components/TradingLimits";
 import { WatchlistCard } from "../components/Watchlist";
 
-interface Props { status: StatusSnapshot | null; refresh: () => void; tick: number; alertsVersion: number; go: (tab: "manual" | "auto") => void }
+interface Props { status: StatusSnapshot | null; refresh: () => void; tick: number; alertsVersion?: number; go: (tab: "manual" | "auto") => void }
 
 /** Activate, then make sure the decision loop runs (the backend does not auto-start it). */
 export async function ensureLoop() {
@@ -24,14 +20,13 @@ export async function ensureLoop() {
   if (!l.running) await api.startLoop();
 }
 
-export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
+export function Dashboard({ status, refresh, tick, go }: Props) {
   const toast = useToast();
   const [candles, setCandles] = useState<Candle[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [filter, setFilter] = useState<"ALL" | "TRADES">("ALL");
   const [perf, setPerf] = useState<PerformanceSummary | null>(null);
   const [closeTarget, setCloseTarget] = useState<{ kind: "lot"; id: string; symbol: string } | { kind: "all"; symbol: string } | null>(null);
-  const [askReset, setAskReset] = useState(false);
   useEffect(() => { api.getPerformance().then(setPerf).catch(() => setPerf(null)); }, [tick]);
   const symbol = status?.active_symbol ?? "NVDAB";
 
@@ -98,7 +93,6 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
             <span className="small">Every cycle is <b>STAY OUT</b> (no new buys) and pending confirmations are rejected.{" "}
               {pf?.positions?.length ? <>The {pf.positions.length} open position{pf.positions.length > 1 ? "s close" : " closes"} on the next bar at that bar's close, logged as an emergency stop.</> : "Any positions left were closed with exit reason EMERGENCY_STOP."}</span>
           </span>
-          <button className="btn ghost" onClick={() => setAskReset(true)}>↺ Reset emergency stop</button>
         </div>
       )}
       {status && !status.agent_mode && (
@@ -127,7 +121,7 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
       ))}
       {pending.length > 0 && <div style={{ height: 16 }} />}
 
-      <div className="stats">
+      <div className="stats compact">
         <StatCard label="Equity" value={pf?.equity} format={(v) => usd(v)} delta={pf ? (totalPnl! / pf.starting_capital) * 100 : null} deltaLabel="all time" />
         <StatCard label="Total PnL" value={totalPnl} format={(v) => usd(v)} tone="auto" />
         <StatCard label="Realized" value={pf?.realized_pnl} format={(v) => usd(v)} tone="auto" />
@@ -143,11 +137,7 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
             extra={<>
               {lastPx != null && firstPx != null && <span className={`delta ${lastPx >= firstPx ? "pos" : "neg"}`}>{lastPx >= firstPx ? "▲" : "▼"} {Math.abs((lastPx / firstPx - 1) * 100).toFixed(2)}%</span>}
               <b style={{ fontSize: "1.1rem" }}>{usd(lastPx)}</b></>}>
-            {candles ? <PriceChart candles={candles} markers={markers} height={320} /> : <Skeleton h={320} />}
-          </Card>
-          <WatchlistCard status={status} tick={tick} />
-          <Card title="Last decision" extra={last && <ActionBadge action={last.action} />}>
-            {!status ? <><Skeleton h={14} /><Skeleton h={14} w="70%" style={{ marginTop: 8 }} /></> : last ? <DecisionDetail d={last} /> : <div className="empty">No decisions yet — the agent logs one every bar once a strategy is active.</div>}
+            {candles ? <PriceChart candles={candles} markers={markers} height={280} /> : <Skeleton h={280} />}
           </Card>
           <Card title="Open positions" pad={false} extra={<>{[...new Set((pf?.positions ?? []).map((p) => p.symbol))].filter((sym) => lotCount(sym) > 1).map((sym) => (
             <button key={sym} className="btn ghost" style={{ padding: "4px 10px" }} onClick={() => setCloseTarget({ kind: "all", symbol: sym })}>Close all {sym}</button>))}</>}>
@@ -188,13 +178,10 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
               </div>
             )}
           </Card>
-          {isLive && <><CapsPanel status={status} decisions={feed} /><WalletPanel /><LiveGateCard /></>}
-          <TradingLimitsCard refresh={refresh} />
-          <AgentIdentityCard />
-          <StockAgentCard symbol={symbol} tick={tick} />
-          <Controls status={status} onChange={refresh} tick={tick} />
-          <AskAgent tick={tick} />
-          <AlertsPanel version={alertsVersion} />
+          <Card title="Last decision" extra={last && <ActionBadge action={last.action} />}>
+            {!status ? <><Skeleton h={14} /><Skeleton h={14} w="70%" style={{ marginTop: 8 }} /></> : last ? <DecisionDetail d={last} /> : <div className="empty">No decisions yet — the agent logs one every bar once a strategy is active.</div>}
+          </Card>
+          <WatchlistCard status={status} tick={tick} />
         </div>
       </div>
 
@@ -231,17 +218,6 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
           }}>
           Manual override: sell {closeTarget.kind === "lot" ? "this lot" : `all ${lotCount(closeTarget.symbol)} open ${closeTarget.symbol} lots`} at the last price
           ({status?.control.trading_mode ?? "SIM"} mode), regardless of the strategy. Exit reason: MANUAL.
-        </ConfirmDialog>
-      )}
-      {askReset && (
-        <ConfirmDialog title="Reset emergency stop?" confirmLabel="Reset emergency stop" busy={busy === "reset"} onCancel={() => setAskReset(false)}
-          onConfirm={async () => {
-            setBusy("reset");
-            try { await api.resetEmergencyStop(); toast("Emergency stop reset", "success"); refresh(); }
-            catch (e) { toast(e instanceof Error ? e.message : String(e), "error"); }
-            finally { setBusy(null); setAskReset(false); }
-          }}>
-          New entries become possible again on the next cycle{status?.control.paused ? " once you also resume (the agent is still paused)" : ""}. Make sure the reason for the stop is resolved first.
         </ConfirmDialog>
       )}
     </>
