@@ -23,6 +23,13 @@ class PerformanceTracker:
                 self._curve.append(EquityPoint(timestamp=ts, equity=equity))
             del self._curve[:-self._max]
 
+    def rebase(self, ts: datetime, equity: float) -> None:
+        """Start the equity curve over at `equity` (the portfolio's starting capital). Used when the book's baseline is
+        set after the first point was recorded (LIVE/PAPER: restored state or the wallet balance), so drawdown and
+        return never mix two baselines (e.g. a 10000 placeholder and a 109.87 USDT wallet = a fake 98.9% drawdown)."""
+        with self._lock:
+            self._curve = [EquityPoint(timestamp=ts, equity=equity)]
+
     def record_trade(self, pnl: float) -> None:
         with self._lock:
             self._pnls.append(pnl)

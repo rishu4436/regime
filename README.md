@@ -18,17 +18,42 @@ US market hours; xStocks (`…x`) are off by default.
 with the templates as fallback). The BNB Agent Studio identity (ERC-8004) is prepared in
 [`backend/agent_studio/`](backend/agent_studio/) but not registered on-chain yet.
 
-## Quick start
+## Run Regime on your computer
 
-Requirements: Python 3.11+, Node 20+. Runs in SIM mode by default: no keys, no real money.
+**You need:** [Git](https://git-scm.com/downloads), [Python 3.11+](https://www.python.org/downloads/) and [Node.js 20+](https://nodejs.org/). Check them with `git --version`, `python --version` (`python3 --version` on macOS/Linux) and `node --version`.
 
-1. **Clone:** `git clone https://github.com/rishu4436/teamwork.git && cd teamwork`
-2. **Run:** `backend/app/deploy/run.sh` (macOS/Linux) or `.\backend\app\deploy\run.ps1` (Windows). It installs what's
-   missing and starts the backend on :8000 and the dashboard on http://localhost:5173.
-3. **Connect wallet:** click **Connect wallet** in the dashboard and scan the QR in the Binance app (in SIM a fake wallet
-   signs in, so the flow can be demoed).
+**1. Get the code**
+```bash
+git clone https://github.com/rishu4436/teamwork.git
+cd teamwork
+```
 
-For real funds, follow [GO_LIVE.md](backend/app/GO_LIVE.md): three opt-in switches, wallet setup and tiny default caps.
+**2. Start it.** One command, run from the repo root, installs everything on the first run (a `.venv` and the dashboard's npm packages) and starts both parts.
+- macOS / Linux: `backend/app/deploy/run.sh`
+- Windows (PowerShell): `.\backend\app\deploy\run.ps1`
+
+  If Windows refuses to run the script ("running scripts is disabled on this system"), allow it for this window only with `Set-ExecutionPolicy -Scope Process Bypass`, then run it again.
+
+**3. Open the dashboard** at http://localhost:5173. The backend's API docs are at http://localhost:8000/docs. Press Ctrl+C in the terminal to stop.
+
+**4. Try it safely.** Regime starts in SIM mode, which uses no keys, no wallet and no real money:
+- Choose a trading style in **Auto Mode** and Regime picks the strategy preset, or build your own rules in **Manual Builder** and backtest them.
+- Turn on the agent and watch the **Dashboard**. Every buy or stay-out decision comes with a plain-English reason.
+- There's no wallet to connect in SIM. The **Connect wallet** button appears only in LIVE mode, where it shows the Agentic Wallet's sign-in QR.
+
+**5. Choose a mode.** Copy `.env.example` to `.env` at the repo root and set `TRADING_MODE`, then restart:
+
+| Mode | What it does |
+|---|---|
+| `SIM` (default) | Offline sample market data, simulated trades |
+| `PAPER` | Real Binance market data, simulated trades (needs `BINANCE_API_KEY` and `BINANCE_API_SECRET` for the Binance Web3 API) |
+| `LIVE` | Real orders from your Binance Agentic Wallet on BNB Chain |
+
+Optional: set `XAI_API_KEY` to have xAI Grok write the explanations. Without it, Regime uses its built-in plain-English templates.
+
+**6. Go live (optional, real money).** Follow [GO_LIVE.md](backend/app/GO_LIVE.md). It covers installing the Agentic Wallet CLI, signing in with a QR code from the Binance App, the three wallet settings, funding (about 70 USDT minimum, 100 USDT is comfortable, plus ~0.005 BNB for gas) and the safety caps. Never commit `.env`. Keys go in environment variables or your git-ignored `.env` only.
+
+**Saved data:** your strategies, the agent's state and its logs live in `logs/` inside the repo (git-ignored; set `LOG_DIR` to move it), so they survive a restart.
 
 ## How Regime decides
 

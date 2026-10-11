@@ -123,6 +123,17 @@ class TradingLoop:
                 self._alert(AlertLevel.WARNING, "LIVE_MODE", "LIVE risk switch is off (allow_live=False, set RISK_ALLOW_LIVE=true): "
                             "every BUY will be blocked")
         self._restore()
+        if not self.sim:  # the curve starts at the SAME baseline as /api/portfolio (restored state / wallet USDT)
+            self._rebase_performance()
+
+    def _rebase_performance(self) -> None:
+        """LIVE/PAPER: equity curve, return % and drawdown measured from book.starting_capital (what /api/portfolio
+        shows), then the current equity. SIM keeps its configured capital and replay timeline."""
+        pf = self.book.portfolio()
+        now = utc_now()
+        self.perf.rebase(now, self.book.starting_capital)
+        if abs(pf.equity - self.book.starting_capital) > 1e-9:
+            self.perf.record_equity(now + timedelta(microseconds=1), pf.equity)
 
     @staticmethod
     def _live_starting_capital(settings: Settings, comps: Components) -> float:
