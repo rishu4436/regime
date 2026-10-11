@@ -51,7 +51,7 @@ def test_pending_exit_uses_intended_fill(make_sell):
 def test_failed_execution_is_not_reported_as_sold(make_sell):
     d = make_sell(None, {"status": OrderStatus.EXPIRED, "filled_quantity": 0.0, "avg_price": None, "error": "quote expired"})
     txt = templates.explain_decision(d)
-    assert "Sold" not in txt and "Selling position pos0001a" in txt and "EXPIRED" in txt and "quote expired" in txt
+    assert "Sold" not in txt and "Selling position pos0001a" in txt and "expired" in txt and "quote expired" in txt
 
 
 def test_blocked_exit(make_sell):
@@ -88,8 +88,8 @@ def test_summary_with_performance_and_alerts(status, perf, alerts):
     assert "Performance: equity $10,452.50 (+4.53% vs start $10,000.00)" in s
     assert "max drawdown 3.21%" in s and "win rate 62.5% over 8 closed trade(s) (5 won, 3 lost)" in s
     assert "2 loss(es) in a row" in s
-    assert "Recent alerts (+1 more): [CRITICAL] DAILY_LOSS: daily loss limit reached; trading paused;" in s
-    assert s.index("DAILY_LOSS") < s.index("CONSECUTIVE_LOSSES") < s.index("QUOTE_EXPIRED (TSLAx)")
+    assert "Recent alerts (+1 more): [CRITICAL] daily loss limit: daily loss limit reached; trading paused;" in s
+    assert s.index("[CRITICAL] daily loss limit") < s.index("losses in a row:") < s.index("quote expired (TSLAx)")
     assert "old info" not in s  # only the 3 most recent
 
 
@@ -103,7 +103,7 @@ def test_answer_uses_performance_and_alerts(status, perf, alerts):
     assert "max drawdown 3.21%" in templates.answer("what's my drawdown?", status, perf)
     assert "win rate 62.5%" in templates.answer("what is the win rate", status, perf)
     a = templates.answer("any alerts or problems?", status, perf, alerts)
-    assert a.startswith("Recent alerts") and "DAILY_LOSS" in a
+    assert a.startswith("Recent alerts") and "daily loss limit" in a and "DAILY_LOSS" not in a
     assert templates.answer("any warnings?", status) == "No recent alerts."
     assert "Performance:" in templates.answer("hmm", status, perf, alerts) and "Recent alerts" in templates.answer("hmm", status, perf, alerts)
 

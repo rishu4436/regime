@@ -26,6 +26,20 @@ LIVE_RULES = (
     "limits or the Agentic Wallet set it when stated. If the engine stayed out, explain LIVE FACTS.engine_reasons."
 )
 
+LIVE_CONFIRM_RULES = (
+    "This is LIVE trading: real funds on BNB Chain mainnet, with confirmation mode ON (the user opted in): trades are "
+    "proposed by the agent and only sent after the user's OK in the dashboard. If LIVE FACTS.awaiting_user_ok is true, "
+    "say the agent proposed the trade and it is waiting for the user's OK in the dashboard, that nothing was sent and "
+    "no real funds moved; never say it was submitted, bought, sold or done on its own. If an execution filled after "
+    "the user's OK, give the amount in USDT, the route, the fill price, the tx hash and the BscScan link exactly as "
+    "written in LIVE FACTS. If risk blocked the trade, say no real funds were spent and name the exact limit from "
+    "LIVE FACTS.block_reasons."
+)
+LIVE_STATUS_CONFIRM_RULES = (
+    "This is LIVE trading: real funds on BNB Chain mainnet, with confirmation mode ON (the user opted in): each trade "
+    "waits for the user's OK in the dashboard before anything is sent."
+)
+
 MAX_RECENT_DECISIONS = 5
 MAX_ALERTS = 10
 MAX_EQUITY_POINTS = 20
@@ -58,10 +72,14 @@ def live_facts_json(decision: Decision) -> str:
     facts = {
         "real_funds": True,
         "network": "BNB Chain mainnet",
-        "autonomous": True,
+        "autonomous": not templates.confirmation_on(decision),
+        "awaiting_user_ok": templates.awaiting_confirmation(decision),
+        "strategy": templates.strategy_label(decision.strategy),
+        "reason": templates.humanize_reason(decision.reason, keywords=True),
         "execution": live_facts.execution_facts(decision.execution) if decision.execution is not None else None,
         "block_reasons": templates.live_block_reasons(decision),
         "size_cuts": templates.live_size_cuts(decision),
+        "wallet_hints": templates.wallet_hints(decision),
         "engine_reasons": [live_facts.plain_reason(c) for c in (sig.conditions_failed if sig else [])
                            if c in live_facts.REASON_TEXT],
     }
@@ -70,10 +88,13 @@ def live_facts_json(decision: Decision) -> str:
 
 def explain_messages(decision: Decision) -> list[dict[str, str]]:
     if live_facts.is_live(decision):
+        from . import templates
+
+        rules = LIVE_CONFIRM_RULES if templates.confirmation_on(decision) else LIVE_RULES
         return [
-            {"role": "system", "content": SYSTEM_BASE + " " + LIVE_RULES},
+            {"role": "system", "content": SYSTEM_BASE + " " + rules},
             {"role": "user", "content": (
-                "Explain this LIVE trading decision to a non-expert in 2-5 sentences: what the agent did on its own "
+                "Explain this LIVE trading decision to a non-expert in 2-5 sentences: what the agent did or proposed "
                 "(BUY / SELL / STAY OUT), which strategy and market regime drove it, what the risk layer did and what "
                 "the on-chain execution did. Plain text only.\n\nLIVE FACTS JSON:\n" + live_facts_json(decision)
                 + "\n\nDECISION JSON:\n" + decision.model_dump_json(exclude={"explanation"}))},
@@ -83,7 +104,8 @@ def explain_messages(decision: Decision) -> list[dict[str, str]]:
         {"role": "user", "content": (
             "Explain this trading decision to a non-expert in 2-4 sentences: what the agent did (BUY / SELL / STAY OUT), "
             "which strategy and market regime drove it, which conditions were or were not met, and what the risk layer "
-            "and execution did. For exits (SELL), say which position (signal.position_id, first 8 chars), the fill price "
+            "and execution did. Use readable names (e.g. 'Smart DCA', 'strong uptrend'), never raw codes like "
+            "SMART_DCA or macd_above_signal. For exits (SELL), say which position (signal.position_id, first 8 chars), the fill price "
             "(execution.avg_price if filled, otherwise signal.price = intended fill) and why (signal.exit_reason, e.g. "
             "TRAILING_STOP -> 'the trailing stop was hit'), e.g. 'Sold position ab12cd34 at 151.2 because the trailing "
             "stop was hit.' Plain text only.\n\nDECISION JSON:\n" + decision.model_dump_json(exclude={"explanation"}))},
@@ -91,7 +113,9 @@ def explain_messages(decision: Decision) -> list[dict[str, str]]:
 
 
 def _system_for(status: StatusSnapshot) -> str:
-    return SYSTEM_BASE + (" " + LIVE_RULES if status.control.trading_mode == TradingMode.LIVE else "")
+    if status.control.trading_mode != TradingMode.LIVE:
+        return SYSTEM_BASE
+    return SYSTEM_BASE + " " + (LIVE_STATUS_CONFIRM_RULES if status.control.confirmation_mode else LIVE_RULES)
 
 
 def summary_messages(status: StatusSnapshot, performance: Optional[PerformanceSummary] = None,
