@@ -56,6 +56,7 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
       const d = await (ok ? api.approve(id) : api.reject(id, "rejected in UI"));
       if (ok && d.execution?.status !== "FILLED") toast(`Trade ${d.execution?.status?.toLowerCase() ?? "not filled"}: ${d.execution?.error ?? "quote expired"}`, "warn");
       else toast(ok ? "Trade approved and executed" : "Trade rejected", ok ? "success" : "info");
+      setGone((g) => new Set(g).add(id)); // handled: drop the card now, don't wait for the next snapshot
       refresh();
     }
     catch (e) {
