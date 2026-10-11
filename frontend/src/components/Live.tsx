@@ -274,7 +274,8 @@ export function WalletPanel() {
             <span className="k">Provider</span><span>{wallet.provider === "baw" ? "Binance Agentic Wallet (baw)" : wallet.provider ?? NA}</span>
             <span className="k">Network</span><span>{wallet.chain ?? "BSC"} · chain {wallet.chain_id ?? NA}{String(wallet.chain_id) === "56" ? " (mainnet)" : ""}</span>
             <span className="k">Minimum wallet</span><span>{minWallet != null ? usd(minWallet, 0) : NA}{wallet.limits?.min_wallet_usdt_note ? <span className="faint small"> · {wallet.limits.min_wallet_usdt_note}</span> : null}</span>
-            <span className="k">Total</span><span><b>{total ? usd(total) : NA}</b>{wallet.updated_at ? <span className="faint small"> · {time(wallet.updated_at)}</span> : null}</span>
+            <span className="k">Total</span><span><b>{total ? usd(total) : NA}</b>{wallet.stale ? <span className="small" style={{ color: "var(--amber)" }}> · balances may be out of date{wallet.age_s != null ? ` (read ${Math.round(wallet.age_s / 60)} min ago)` : ""}</span>
+              : (wallet.read_at ?? wallet.updated_at) ? <span className="faint small"> · read {time((wallet.read_at ?? wallet.updated_at)!)}</span> : null}</span>
           </div>
           <div className="table-wrap" style={{ marginTop: 10, maxHeight: 220 }}>
             <table>
