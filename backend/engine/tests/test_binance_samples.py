@@ -245,7 +245,12 @@ def test_price_impact_gate_matches_risk_1pct():
         sig = run({"status": "trading", **ctx})
         assert sig.action == Action.STAY_OUT and sig.conditions_failed == ["live_price_impact"]
     # <= 1% -> full live-safe size (20 USDT on 1000), strings parsed with float()
-    for imp in ("0.35", 0.35, "1", 1.0, "0.0001", 0, "0", -0.2):
+    # the exchange reports no sign: a large NEGATIVE impact is blocked by size, like Bot 3's risk
+    for imp in (-1.5, "-1.01", -3):
+        sig = run({"status": "trading", "priceImpactPercent": imp})
+        assert sig.action == Action.STAY_OUT and sig.conditions_failed == ["live_price_impact"], imp
+        assert "direction not reported" in sig.reason
+    for imp in ("0.35", 0.35, "1", 1.0, "0.0001", 0, "0", -0.2, "-1"):
         sig = run({"status": "trading", "priceImpactPercent": imp})
         assert sig.action == Action.BUY and sig.proposed_notional == pytest.approx(20.0), imp
         assert "impact" not in sig.reason

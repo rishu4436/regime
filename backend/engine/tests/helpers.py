@@ -48,3 +48,15 @@ def sma_entry_strategy(**exit_overrides) -> ManualStrategy:
     for k, v in exit_overrides.items():
         setattr(s.exit, k, v)
     return s
+
+
+def falling_after_entry(drop_pct_per_bar: float = 1.0, bars: int = 10) -> list[Candle]:
+    """Entry at ENTRY_PRICE (bar 60, same as entry_scenario), then ``bars`` bars that each close
+    ``drop_pct_per_bar``% lower, with the low a further 0.2% under the close. Any stop-loss tighter than the total fall
+    must fire: use it to test SL exits (a rising series never reaches the stop)."""
+    after, prev = [], ENTRY_PRICE
+    for _ in range(bars):
+        c = prev * (1 - drop_pct_per_bar / 100)
+        after.append((prev, prev, c * 0.998, c))
+        prev = c
+    return entry_scenario(after)

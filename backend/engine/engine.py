@@ -91,7 +91,7 @@ class DefaultStrategyEngine:
         ``reference_price_only``, ``price_impact_pct`` or ``priceImpactPercent`` (percent units, from a quote),
         ``reference_price``, ``equity`` (USDT hint), ``min_order_usdt`` / ``minOrderUsdt`` (token minimum order,
         overrides the per-family default). Applies to BUYs only: off-hours / closed / no liquidity /
-        paused / reference_price_only -> STAY_OUT 'live_token_paused'; impact > max_price_impact_pct (1%) ->
+        paused / reference_price_only -> STAY_OUT 'live_token_paused'; |impact| > max_price_impact_pct (1%) ->
         STAY_OUT 'live_price_impact' (impact None / unparseable = unknown: no block). SELLs are never blocked.
         """
         norm = normalize_market_context(ctx)

@@ -56,7 +56,8 @@ class LiveSafetyConfig:
     max_order_usdt: float = 25.0  # never propose more than this per BUY (Bot 3's live per-order cap)
     equity_hint_usdt: Optional[float] = None  # if set, size from min(equity, hint) (e.g. the real wallet balance)
     # Market context (DefaultStrategyEngine.set_market_context): quote price impact (percent units) above this ->
-    # STAY_OUT 'live_price_impact'. Same 1% limit as Bot 3's risk check. Unknown impact (None) never blocks.
+    # STAY_OUT 'live_price_impact'. Same 1% limit as Bot 3's risk check, on the SIZE of the impact (the exchange
+    # reports no sign, so risk counts it as adverse too). Unknown impact (None) never blocks.
     max_price_impact_pct: float = 1.0
 
     def __post_init__(self) -> None:
@@ -232,8 +233,15 @@ def market_blockers(
             )
         )
     imp = ctx.get("price_impact_pct")
-    if check_impact and imp is not None and imp > cfg.max_price_impact_pct:
-        out.append(("live_price_impact", f"quote price impact {imp:.4g}% > {cfg.max_price_impact_pct:g}%"))
+    # Binance's priceImpactPercent has no documented sign, so (like Bot 3's risk) its SIZE counts as adverse.
+    if check_impact and imp is not None and abs(imp) > cfg.max_price_impact_pct:
+        out.append(
+            (
+                "live_price_impact",
+                f"quote price impact {abs(imp):.4g}% > {cfg.max_price_impact_pct:g}% "
+                "(direction not reported, counted as adverse)",
+            )
+        )
     return out
 
 

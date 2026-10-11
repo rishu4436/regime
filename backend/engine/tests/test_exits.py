@@ -9,7 +9,7 @@ from backend.contracts import SIM_WARMUP_BARS, Candle, ExitReason, ManualStrateg
 from backend.engine import DefaultStrategyEngine
 from backend.engine.exits import check_price_exit, max_loss_level, trail_from_hwm
 
-from .helpers import ENTRY_BAR, ENTRY_PRICE, entry_scenario, sma_entry_strategy
+from .helpers import ENTRY_BAR, ENTRY_PRICE, entry_scenario, falling_after_entry, sma_entry_strategy
 
 ENG = DefaultStrategyEngine()
 TP = ENTRY_PRICE * 1.12  # 113.12
@@ -268,3 +268,12 @@ def test_bot6_parity_fixture_cases(case):
     assert idx[t.entry_time] == E and t.entry_price == pytest.approx(100.0)
     assert (idx[t.exit_time], t.exit_reason) == (want_bar, want_reason)
     assert t.exit_price == pytest.approx(want_px, rel=1e-9)
+
+
+@pytest.mark.parametrize("sl_pct", [0.5, 2.0, 5.0])
+def test_falling_series_fires_stop_loss(sl_pct):
+    """The falling-price helper (for the QA stop-loss scenario): a stop tighter than the total fall must fire."""
+    cs = falling_after_entry(drop_pct_per_bar=1.0, bars=10)
+    t = _only_trade(cs, sma_entry_strategy(stop_loss_pct=sl_pct, take_profit_pct=50.0))
+    assert t.exit_reason == ExitReason.STOP_LOSS
+    assert t.exit_price == pytest.approx(ENTRY_PRICE * (1 - sl_pct / 100))
