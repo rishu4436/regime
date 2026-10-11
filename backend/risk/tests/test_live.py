@@ -52,8 +52,9 @@ def ctx(**kw):
     return LiveContext(**base)
 
 
-def fill(notional, mode=TradingMode.LIVE, side=OrderSide.BUY, status=OrderStatus.FILLED, ts=T0):
-    return ExecutionResult(client_order_id="c", symbol="NVDAon", side=side, status=status, path=ExecutionPath.SWAP,
+def fill(notional, mode=TradingMode.LIVE, side=OrderSide.BUY, status=OrderStatus.FILLED, ts=T0, coid=None):
+    import uuid
+    return ExecutionResult(client_order_id=coid or uuid.uuid4().hex, symbol="NVDAon", side=side, status=status, path=ExecutionPath.SWAP,
                            mode=mode, notional=notional, timestamp=ts)
 
 
@@ -345,3 +346,17 @@ def test_live_limits_dict(clock):
     assert live_rm(clock, market_hours_enabled=True).live_limits()["market_hours_utc"] == "13:30-20:00 Mon-Fri"
     bare = DefaultRiskManager(config=RiskConfig()).live_limits()
     assert bare["daily_loss_usdt"] is None and bare["daily_used_usdt"] == 0 and not bare["live_allowed"]
+
+
+def test_pending_buy_counts_toward_daily_notional_then_settles(clock):
+    rm = live_rm(clock)
+    rm.record_execution(fill(0, status=OrderStatus.PENDING_CONFIRMATION, coid="p1"), quote_notional=20)
+    assert rm.daily_live_notional_used(now=T0) == pytest.approx(20)
+    rm.record_execution(fill(19.5, coid="p1"))  # real fill replaces the pending amount
+    assert rm.daily_live_notional_used(now=T0) == pytest.approx(19.5)
+    rm.record_execution(fill(19.5, coid="p1"))  # duplicate final result is not double-counted
+    assert rm.daily_live_notional_used(now=T0) == pytest.approx(19.5)
+    rm.record_execution(fill(15, status=OrderStatus.PENDING_CONFIRMATION, coid="p2"))
+    assert rm.daily_live_notional_used(now=T0) == pytest.approx(34.5)
+    rm.record_execution(fill(0, status=OrderStatus.FAILED, coid="p2"))  # failed swap releases it
+    assert rm.daily_live_notional_used(now=T0) == pytest.approx(19.5)

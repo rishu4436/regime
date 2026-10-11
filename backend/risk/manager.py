@@ -61,6 +61,8 @@ class DefaultRiskManager:
         self._control = control or ControlState(updated_at=clock())
         self._lock = threading.RLock()
         self._live_bought: dict[date, float] = {}  # UTC day -> LIVE BUY notional filled (from record_execution)
+        self._live_pending: dict[str, tuple[date, float]] = {}
+        self._live_filled_ids: set[str] = set()  # client_order_id -> (UTC day, quoted notional) in flight
 
     # ------------------------------------------------------------------ configuration
     @property
@@ -216,22 +218,36 @@ class DefaultRiskManager:
         """LIVE BUY notional filled today (UTC): max of the internal ledger and context.daily_live_notional_usdt."""
         day = as_utc(now or self._now(context)).date()
         with self._lock:
-            used = self._live_bought.get(day, 0.0)
+            used = self._live_bought.get(day, 0.0) + sum(a for d, a in self._live_pending.values() if d == day)
         if context and context.daily_live_notional_usdt is not None:
             used = max(used, context.daily_live_notional_usdt)
         return used
 
-    def record_execution(self, result: ExecutionResult) -> None:
-        """Feed every ExecutionResult here; LIVE BUY fills count towards the daily notional cap (keyed by UTC day)."""
+    def record_execution(self, result: ExecutionResult, quote_notional: Optional[float] = None) -> None:
+        """Feed every ExecutionResult here (including PENDING_CONFIRMATION); LIVE BUYs count towards the daily notional
+        cap (keyed by UTC day). A PENDING buy counts at once at ``result.notional`` or ``quote_notional`` (if notional is
+        0) and is keyed by ``client_order_id``; a later FILLED/PARTIALLY_FILLED result for the same id replaces it with the
+        real fill, and REJECTED/EXPIRED/FAILED releases it. Calling twice with the same final result is not double-counted."""
         if result.mode != TradingMode.LIVE or result.side != OrderSide.BUY:
             return
-        if result.status not in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED):
-            return
-        day = as_utc(result.timestamp).date()
+        coid = result.client_order_id
         with self._lock:
-            self._live_bought[day] = self._live_bought.get(day, 0.0) + result.notional
-            for d in [d for d in self._live_bought if d < day]:
+            prev = self._live_pending.pop(coid, None)
+            if result.status == OrderStatus.PENDING_CONFIRMATION:
+                amount = result.notional or (quote_notional or 0.0)
+                day = prev[0] if prev else as_utc(result.timestamp).date()
+                self._live_pending[coid] = (day, max(amount, prev[1] if prev else 0.0))
+            elif result.status in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED):
+                if coid in self._live_filled_ids:
+                    return
+                self._live_filled_ids.add(coid)
+                day = prev[0] if prev else as_utc(result.timestamp).date()
+                self._live_bought[day] = self._live_bought.get(day, 0.0) + result.notional
+            today = max([as_utc(result.timestamp).date(), *self._live_bought.keys()])
+            for d in [d for d in self._live_bought if d < today]:
                 del self._live_bought[d]
+            for k in [k for k, (d, _) in self._live_pending.items() if d < today]:
+                del self._live_pending[k]
 
     def _enforce_daily_loss_cap(self, portfolio: Portfolio, context: Optional[LiveContext]) -> None:
         cap = self._config.live.max_daily_loss_usdt
