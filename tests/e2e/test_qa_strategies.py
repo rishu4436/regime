@@ -62,7 +62,10 @@ def test_f3_no_duplicate_pending_confirmation_per_symbol():
     pend = c.get("/api/confirmations").json()
     assert len(pend) == 1, [p["reason"] for p in pend]
     waits = [d for d in ds if d["action"] == "STAY_OUT" and "awaiting your approval" in d["reason"]]
-    assert waits and pend[0]["id"] in waits[0]["reason"]
+    assert waits and "awaiting your approval of the pending buy;" in waits[0]["reason"]
+    assert pend[0]["id"] not in waits[0]["reason"] and waits[0]["awaiting_decision_id"] == pend[0]["id"]
+    assert c.get(f"/api/decisions/{waits[0]['id']}").json()["awaiting_decision_id"] == pend[0]["id"]
+    assert c.get("/api/status").json()["last_decision"]["awaiting_decision_id"] == pend[0]["id"]
     a = c.post(f"/api/confirmations/{pend[0]['id']}/approve").json()
     assert a["execution"]["status"] == "FILLED" and not c.get("/api/confirmations").json()
 

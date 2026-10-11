@@ -98,6 +98,7 @@ class TradingLoop:
         self.ticks = 0
         self.finished = False
         self._bar: Optional[Candle] = None
+        self._awaiting: "OrderedDict[str, str]" = OrderedDict()  # STAY_OUT decision id -> pending BUY decision id
         self.wallet_block: Optional[dict] = None  # {address, expected, since}: a different wallet signed in (v0.8)
         self.perf.record_equity(utc_now() if not self.sim else self.book.now, self.book.starting_capital)
         for k, v in comps.names().items():
@@ -281,9 +282,13 @@ class TradingLoop:
                 return self._end_tick(out)
             waiting = self._pending_buy_for(sym) if signal.action == Action.BUY else None
             if waiting is not None:  # one confirmation per symbol/agent at a time: no stale approval queue
-                out.append(self._finalize(Decision(action=Action.STAY_OUT, reason=(
-                    f"BUY not executed: awaiting your approval of the pending BUY ({waiting.decision.id}); "
-                    f"no new order until you approve or reject it"), **base)))
+                d = Decision(action=Action.STAY_OUT, reason=(
+                    "BUY not executed: awaiting your approval of the pending buy; "
+                    "no new order until you approve or reject it"), **base)
+                self._awaiting[d.id] = waiting.decision.id  # structured: DecisionView.awaiting_decision_id
+                while len(self._awaiting) > 2000:
+                    self._awaiting.popitem(last=False)
+                out.append(self._finalize(d))
                 return self._end_tick(out)
             verdict = self._risk_check(signal, pf, control)  # LIVE BUY: pass 1 with LiveContext (no quote yet)
             if not verdict.approved:
@@ -740,13 +745,16 @@ class TradingLoop:
         return val
 
     def daily_live_notional(self) -> float:
-        """Today's LIVE BUY notional: settled fills + in-flight buys."""
+        """Today's LIVE BUY spend: settled fills (gross, fee included) + in-flight buys (quote notional)."""
         done = float((self.state.get("live_bought") or {}).get(utc_now().date().isoformat(), 0.0))
         return done + sum(p["notional"] for p in self.chain_pending.values())
 
     def _record_live_buy(self, res: ExecutionResult) -> None:
+        """Settled LIVE buys today, gross: notional + fee (same as Bot 3's daily cap, 8773b0c). Only settled fills are
+        added; in-flight buys are counted separately by daily_live_notional() and must not be baked in here."""
         day = utc_now().date().isoformat()
-        self.state.update(live_bought={day: self.daily_live_notional() + res.notional})
+        done = float((self.state.get("live_bought") or {}).get(day, 0.0))
+        self.state.update(live_bought={day: done + res.notional + (res.fee or 0.0)})
 
     def wallet(self) -> dict:
         """GET /api/wallet (Bot 1 shape). LIVE/PAPER: from the exchange (get_wallet/get_balances); SIM: simulated from
@@ -988,8 +996,19 @@ class TradingLoop:
             self.bus.publish(EventType.STATUS, self.status())
             return {"address": address, "was_blocked": bool(was), "kept": kept, "dropped": dropped, "wallet_blocked": False}
 
+    def _add_awaiting(self, obj: Any) -> Any:
+        if isinstance(obj, list):
+            return [self._add_awaiting(v) for v in obj]
+        if isinstance(obj, dict):
+            for k in ("last_decision", "recent_decisions"):
+                if k in obj:
+                    obj[k] = self._add_awaiting(obj[k])
+            if "action" in obj and obj.get("id") in self._awaiting:
+                obj["awaiting_decision_id"] = self._awaiting[obj["id"]]
+        return obj
+
     def enrich_payload(self, payload: Any) -> Any:
-        out = livemod.enrich_payload(payload, self.exec_meta.get)
+        out = self._add_awaiting(livemod.enrich_payload(payload, self.exec_meta.get))
         if isinstance(out, dict) and isinstance(out.get("portfolio"), dict) and "control" in out:
             out["portfolio"] = self.portfolio_view()  # STATUS (HTTP + WS): pending flags on positions
         return out

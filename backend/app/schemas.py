@@ -95,6 +95,15 @@ class ExecutionView(ExecutionResult):
 
 class DecisionView(Decision):
     execution: Optional[ExecutionView] = None
+    awaiting_decision_id: Optional[str] = Field(default=None, description="STAY_OUT while a BUY waits for approval: "
+                                                "id of that pending BUY decision (the reason text has no id)")
+
+    @model_serializer(mode="wrap")
+    def _drop_unset_awaiting(self, handler):  # only emitted when set: other decisions stay contract-shaped
+        data = handler(self)
+        if isinstance(data, dict) and data.get("awaiting_decision_id") is None:
+            data.pop("awaiting_decision_id", None)
+        return data
 
 
 class StatusView(StatusSnapshot):
