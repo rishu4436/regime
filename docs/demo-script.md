@@ -1,108 +1,123 @@
-# Demo video script (≤ 4:00)
+# Regime demo script (3:00)
 
-*Regime, by team `teamwork`, BNB Hack: Tokenized Stocks Edition. Target length 3:45, leaving 15 s of slack.
-Record at 1080p, browser zoom 110 %, dark theme. Timestamps are cumulative.*
+*Regime, BNB Hack: Tokenized Stocks Edition. Repo: https://github.com/rishu4436/regime*
 
-**First real autonomous mainnet trade (done, 11 Oct 2026)**
-At 09:25 IST on 2026-10-11 the agent, in Auto mode running the Grid preset with no human approval, bought
-**0.0434 NVDAB for 10 USDT** at about **230.47 USDT** from the Agentic Wallet on BNB Smart Chain mainnet.
-Tx: [0x228c0268…a19f22](https://bscscan.com/tx/0x228c02688cd2a8170b38dba6abfdb4f95fca9e9e22ae6bed6a191d0b88a19f22)
-(verified on-chain: status success, block 126950367, from `0xc44eddcffa4227d38bc92a7ca5990953aa7ff0cf`).
-Use this tx for the 1:40–1:50 "real fill → BscScan" shot if no newer fill is in the feed.
+Total length is 3:00. Timestamps are cumulative. Record at 1080p, browser zoom 110%, dark theme.
+Only show what is on the screen. If something isn't there on the day, skip it and say so.
 
-**Before recording (checklist)**
-- Backend running LIVE on Rishu's PC with `baw` signed in (`baw wallet status --json` → `CONNECTED`), and
-  `GET /api/live/status` returns `can_trade: true`. See `backend/app/GO_LIVE.md`.
-- At least one real NVDAB fill with a tx hash in the activity feed (a few USDT is enough; the track rules say
-  "a few dollars is enough"). The first one is above (tx 0x228c0268…a19f22).
-- If the wallet session expired, sign in again from the dashboard's **Connect wallet** button (localhost only).
-- BscScan tab for that tx open in the background. 8004scan page for the agent open, if registered.
-- `abnormalTxnHandling = AutoReject` set in the Binance app (otherwise the wallet can lock mid-demo).
-- If any of this isn't ready, use the **fallback path** at the bottom.
+## Real mainnet trades (both verified on BscScan: status success, wallet `0xc44eddcffa4227d38bc92a7ca5990953aa7ff0cf`)
 
----
-
-## 0:00–0:25: The problem
-
-| Shot | Narration |
-|---|---|
-| Title card: "An autonomous agent for tokenized stocks on BNB Chain". | "Tokenized stocks like NVDAB trade on BNB Chain 24/7, but the stock market they track doesn't. Weekend prices move while the reference price is frozen." |
-| Quick cut: a raw `baw` JSON error with code 40367, next to a Binance error-code table. | "Trading them yourself means wallets, gas, session sign-ins and error codes like 40367. An autonomous agent can do it, but only if a normal person can see what it's doing and stop it." |
-
-## 0:25–0:50: One command to start
-
-| Shot | Narration |
-|---|---|
-| Terminal on the host PC. Type `.\backend\app\deploy\run.ps1 -Supervised` (Windows) or show `backend/app/deploy/run.sh --supervised` (macOS/Linux). | "One command starts it. Supervised mode runs a config preflight, autostarts the agent on NVDAB, and restarts it if it ever crashes." |
-| Show the `.env` with the three switches blurred except names: `LIVE_TRADING_ENABLED`, `BINANCE_LIVE_ENABLED`, `RISK_ALLOW_LIVE`. | "Live mode needs three separate switches. Without them it runs in simulation. Secrets stay in a git-ignored `.env`." |
-| Browser opens http://localhost:5173. | — |
-
-## 0:50–2:20: Dashboard tour
-
-| Time | Shot | Narration |
+| When (11 Oct 2026, IST) | What | Tx |
 |---|---|---|
-| 0:50 | **LIVE · MAINNET banner**, zoom in. | "The first thing you see is a red banner that never goes away: real funds, BNB Smart Chain mainnet, this wallet, and the hard caps in dollars." |
-| 1:00 | **Autonomy monitor**: "Agent running autonomously", running since, last tick, next tick. Wait for the last-tick counter to reset. | "Is it alive? This heartbeat answers that. Last tick a few seconds ago, next one in under a minute. If the loop stalls, this card turns red." |
-| 1:15 | **Wallet panel**: address → BscScan, "Binance Agentic Wallet (baw)", chain 56, USDT and BNB balances. | "It trades from a Binance Agentic Wallet. Our code never handles a trading private key; the wallet signs every swap." |
-| 1:25 | **Caps panel**: per-order, daily traded, daily loss, open exposure meters; point at the "set by agent" / "set by wallet" pills. | "Two layers of limits. Our risk layer's caps, and the limits Rishu set in the Binance app. The agent obeys whichever is stricter, and the dashboard tells you which one is in charge." |
-| 1:40 | **Activity feed**, filter "trades & blocks". Click a BUY row with a real tx. | "Every decision gets a plain-English explanation from Grok, with a template fallback. Here's a buy: route, price, fee, price impact…" |
-| 1:50 | Click **tx ↗** → BscScan tab with the swap. | "…and the transaction on BscScan. Nothing to take on trust." |
-| 2:00 | Back to the feed: a **risk block** or stay-out in plain English, e.g. a red chip "Ondo market not tradable now (off-hours)" or "Below Ondo 20 USD minimum order", or a failed risk check chip. | "And when it doesn't trade, it says why, in words, not error 40367. Here the Ondo market is in off-hours, so it stays out and cools that token down for 20 minutes." |
-| 2:10 | Token status badges (Trading / Off-hours · opens Mon / No liquidity) if present. | "Each token family behaves differently: bStocks trade 24/7, Ondo has off-hours sessions, xStock has no liquidity on BSC right now, so we exclude it." |
+| 09:25 | First autonomous buy (Auto mode, Grid): 10 USDT of NVDAB at about 230.47 USDT | [0x228c02688cd2a8170b38dba6abfdb4f95fca9e9e22ae6bed6a191d0b88a19f22](https://bscscan.com/tx/0x228c02688cd2a8170b38dba6abfdb4f95fca9e9e22ae6bed6a191d0b88a19f22) |
+| 12:01 | Autonomous buy in Auto mode, Grid strategy: 10 USDT of NVDAB | [0x187fdc3e1023e1ecd37af1dc7bed4176a13e75e39a0b35727681538c0690bf7f](https://bscscan.com/tx/0x187fdc3e1023e1ecd37af1dc7bed4176a13e75e39a0b35727681538c0690bf7f) |
 
-## 2:20–2:50: Kill switch
+## Before recording (checklist)
 
-| Shot | Narration |
-|---|---|
-| Click **❚❚ Pause** → monitor turns amber "Paused by kill switch". | "One click pauses it." |
-| Click **■ Emergency stop** → confirm dialog → banner "Emergency stopped". | "Emergency stop blocks every new buy, survives restarts, and closes open positions. A daily loss cap triggers the same stop automatically." |
-| Click **↺ Reset e-stop**, then **▶ Resume**. Monitor back to green. | "Resetting it is a deliberate second step." |
-
-## 2:50–3:15: Agent identity (BNB Agent Studio)
-
-| Shot | Narration |
-|---|---|
-| **Agent identity card**: ERC-8004 id, network, registry, "Executes with Agentic Wallet". | "The agent has an on-chain identity, registered with BNB Agent Studio's ERC-8004 registry, using a separate identity-only key that never holds trading funds." |
-| Click the id → 8004scan agent page. | "Anyone can look it up, and see which wallet it trades from." |
-| *(If not registered yet: the card reads "not registered yet"; say "registration is a one-command step in GO_LIVE.md" and skip the 8004scan cut.)* | |
-
-## 3:15–3:45: Why it matters
-
-| Shot | Narration |
-|---|---|
-| Slow pan over the whole dashboard. | "A non-crypto user doesn't want to learn gas, quotes or session QR codes. They want four answers: is it using real money, is it alive, why did it trade, and what's the most it can lose." |
-| Session-expired banner (trigger in mock if needed). | "Even the wallet signing out is a sentence, with the fix." |
-| End card: repo URL, "built on Binance Web3 API · Agentic Wallet · BNB Agent Studio · Grok". | "That's what brings people on-chain: an agent you can read, check on BscScan, and stop with one click." |
+- [ ] Backend running in **LIVE** mode on Rishu's PC. The red **LIVE · MAINNET** tag shows at the top of the dashboard.
+- [ ] Dashboard started with `VITE_API_MODE=http`, so it shows the real backend and not mock data.
+  (The one-command `run.sh` / `run.ps1` does this. If the **Demo LIVE scenario** toggle is visible, you are on mock data.)
+- [ ] Wallet connected. If the top bar shows **Reconnect wallet**, click it and scan the QR in the Binance App.
+  When it's connected, the top bar shows only the wallet address.
+- [ ] The agent is running **Auto** mode with **Grid** on **NVDAB**, and the two NVDAB lots show under **Open positions**.
+- [ ] Two BscScan tabs open in the background, one for each tx above.
+- [ ] Trading limits panel visible on the dashboard (it is on main since PR #23).
+- [ ] Decide how to show Emergency stop (see 2:05). In LIVE it sells the open lots on the next bar.
 
 ---
 
-## Fallback: mock "Demo LIVE scenario" (no funds, no backend)
+## 0:00–0:15: What Regime is
 
-Use this if the real trade, the `baw` session or the region-gated Web3 API isn't available at recording time.
-
-```bash
-backend/app/deploy/run.sh --mock              # or: cd frontend && npm install && npm run dev (mock is the npm default)
-```
-
-1. Turn on the **Demo LIVE scenario** toggle (shown only with the mock API; the page reloads).
-2. Everything above works the same: LIVE banner, autonomy monitor on NVDAB in AUTO_EXECUTE, wallet panel
-   with demo balances (BNB drains on each fill, so the low-gas warning appears), caps with an exit-reserve warning,
-   a settling buy ("⏳ waiting on chain" / "Exit queued until fill"), kill switches.
-3. **Say it on camera:** "This is our mock LIVE scenario. The banner shows *demo · no funds* and tx links are marked
-   *(demo)*, they are not on chain." Don't click a demo tx link through to BscScan; it won't resolve.
-4. If a real tx exists from any earlier run, cut to its BscScan page separately and say so.
-
-## Shots for the special-prize judges
-
-| Prize | Shots to watch |
+| Shot | Say |
 |---|---|
-| **Best Use of Agentic Wallet / Wallet Skills** | 0:25 (three LIVE switches), 1:15 wallet panel, 1:25 caps "set by wallet", 1:40–1:50 real fill → BscScan, 2:00 Binance error code turned into a stay-out, 3:15 session-expired banner. |
-| **Best Use of BNB Agent Studio** | 2:50–3:15 identity card and 8004scan page; the "Executes with Agentic Wallet" link between identity and wallet. |
+| Dashboard, full screen. | "This is Regime. It's an autonomous agent that trades tokenized stocks on BNB Chain. It trades through the Binance Agentic Wallet and gets its market data from the Binance Web3 API." |
+
+## 0:15–0:45: The dashboard
+
+| Time | Shot | Say |
+|---|---|---|
+| 0:15 | Point at the red **LIVE · MAINNET** tag and banner. | "This is live. Real money, on BNB Smart Chain mainnet." |
+| 0:22 | **Agent** card: market regime, active strategy (Grid), token NVDAB. | "Regime reads the market first. Right now NVDAB is in this regime, so Regime picked one strategy for it: Grid. It runs one strategy at a time." |
+| 0:32 | Autonomy monitor: running since, last tick, next tick. | "This shows it's alive. It checks the market every tick, around the clock." |
+| 0:38 | **Open positions**: the two NVDAB lots. | "These are the two NVDAB positions it holds now." |
+
+## 0:45–1:10: A decision and its reason
+
+| Time | Shot | Say |
+|---|---|---|
+| 0:45 | **Last decision** card, then a row in the **Activity** feed. Open the reason. | "Every decision comes with a reason in plain English. Buy, sell or stay out. It names the regime, the strategy and the numbers behind it." |
+| 0:58 | Keep the reason on screen. | "The explainer writes this. It uses Grok if a key is set, and built-in templates if not, so it works without any AI key. It only explains. It can never place a trade." |
+
+## 1:10–1:40: Real trades on BscScan
+
+| Time | Shot | Say |
+|---|---|---|
+| 1:10 | In the Activity feed, click **tx ↗** on the 12:01 buy, or switch to its BscScan tab. | "Here's a trade Regime made on its own today at 12:01, in Auto mode with Grid. 10 USDT of NVDAB." |
+| 1:22 | BscScan page: status Success, from the wallet address. | "It's on BscScan. Status success, from our Agentic Wallet. Anyone can check it." |
+| 1:32 | Switch to the 09:25 BscScan tab. | "And this was Regime's first autonomous trade, at 09:25 this morning." |
+
+**If there's no new trade during the demo:** that's normal. Regime often stays out. Say "No new trade right now, so here are the ones it already made," and show the two recorded txs above.
+
+## 1:40–2:05: Trading limits
+
+| Time | Shot | Say |
+|---|---|---|
+| 1:40 | **Trading limits** card. Click through **Order size**: Strategy decides, Fixed USDT, % of wallet. | "You set how much Regime may trade. Let the strategy decide the size, use a fixed amount in USDT, or a percent of the wallet." |
+| 1:50 | Point at Max per order, Max total invested, Max in one token, Daily loss limit, Daily buy limit. | "Then hard caps: per order, in total, per token, daily loss and daily buys. You can change them while it runs. The wallet's own daily limit in the Binance App stays the final cap." |
+| 1:58 | Optional: set Fixed USDT above Max per order, save, show the red message, then click **Undo changes**. | "A bad value gets a plain sentence, not an error code, and nothing changes." |
+
+## 2:05–2:25: Safety
+
+| Time | Shot | Say |
+|---|---|---|
+| 2:05 | A stay-out or a blocked risk check in the Activity feed, with its reason. | "Every trade goes through the risk layer first. It can block any trade, and it always says why." |
+| 2:12 | Click **❚❚ Pause**, show "Paused", then click **▶ Resume**. | "One click pauses it." |
+| 2:18 | Click **■ Emergency stop**. Show the confirm dialog, then click **Cancel**. | "Emergency stop blocks every new buy and closes open positions. It stays on until you reset it." |
+
+**Emergency stop in LIVE:** confirming it sells the open NVDAB lots on the next bar. Only confirm if Rishu wants that. Otherwise show the dialog and cancel, as above.
+
+## 2:25–2:45: Agent Studio identity
+
+| Time | Shot | Say |
+|---|---|---|
+| 2:25 | **Agent identity** card (BNB Agent Studio · ERC-8004). Show the three steps: create identity wallet, fund it with BNB for gas, register. | "Regime is ready for an on-chain identity with BNB Agent Studio, using ERC-8004. It uses a separate small wallet that never touches trading funds." |
+| 2:37 | Card reads "not registered yet". | "It's ready, but not registered yet." |
+
+<!-- AGENT STUDIO REGISTRATION: if Rishu registers before recording, replace the 2:37 row with:
+| 2:37 | Card shows the ERC-8004 id and network. Open the registration tx on BscScan. | "It's registered. Here's its ERC-8004 id, and the registration tx on BscScan." |
+Registration tx: https://bscscan.com/tx/<REGISTRATION_TX_HASH>
+ERC-8004 id: <ID>
+-->
+
+## 2:45–2:55: Manual Strategy Builder
+
+| Time | Shot | Say |
+|---|---|---|
+| 2:45 | **Manual Builder** tab. Scroll past the entry rules (RSI, SMA, EMA, MACD, Bollinger, volume, breakout, AND/OR) and exits (take-profit, stop-loss, trailing). | "If you want your own rules, build them here without code, backtest them, then run them live with the same engine." |
+
+## 2:55–3:00: Close
+
+| Shot | Say |
+|---|---|
+| Back to the dashboard. Repo link on screen: https://github.com/rishu4436/regime | "That's Regime. It trades by itself, explains every move, and stays inside your limits." |
+
+<!-- WATCHLIST: uncomment if merged by 13:45
+Time budget: 15 s. Take it from 2:25–2:45 (Agent Studio, cut to 10 s) and 2:45–2:55 (Manual Builder, cut to 5 s).
+
+## Watchlist and Auto-pick (15 s)
+
+| Shot | Say |
+|---|---|
+| **Auto Mode** tab: the watchlist picker. Search the full token list (about 680 tokenized stocks) and add tokens, up to 5. | "Regime can watch up to five tokens at once. Pick them from about 680 tokenized stocks." |
+| Turn on **Auto-pick** and choose a narrative, such as AI & chips. Show the picks. | "Or let Auto-pick choose them by theme, using momentum, trend and volume. The risk caps cover all of them together." |
+| Dashboard **Watchlist** card. | "It checks each one every tick." |
+-->
+
+---
 
 ## Facts to re-check right before recording
 
-- `run.ps1`, `GO_LIVE.md`, `/api/tokens.token_status` and `cooldowns` are merged; the dashboard **Connect wallet** flow
-  (API v0.8) comes with bot6/polish, so confirm it is merged before showing it.
-- Emergency stop from the UI sends `flatten: false`: positions close **on the next bar** at that bar's close, not instantly.
-  With 1 h bars, say "closes open positions" without "immediately", or demo with no open position.
-- Whether the ERC-8004 mainnet registration has been run (`ai-stack.md` §4 says it still has to be run from Rishu's PC).
+- Mode: both trades are Auto mode with Grid, made by Regime on its own (confirmed from the PC decision log).
+- Agent Studio: still not registered unless Rishu registers. If he does, fill in the placeholder above.
+- Watchlist: the picker is in the frontend, but the backend (PR #28) isn't merged yet. Keep that section commented
+  out unless it merges by 13:45.
