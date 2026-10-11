@@ -8,6 +8,8 @@ from typing import Optional
 
 from backend.contracts import Alert, AlertLevel, ControlState, Decision, ExecutionResult, OrderStatus
 
+from .text import one_prefix
+
 CONSECUTIVE_LOSS_ALERT = 3
 
 
@@ -32,9 +34,9 @@ class AlertManager:
         prev, self._last_control = self._last_control, c
         out = []
         if c.emergency_stopped and not (prev and prev.emergency_stopped):
-            out.append(self.raise_(AlertLevel.CRITICAL, "EMERGENCY_STOP", f"Emergency stop: {c.reason or 'no reason given'}"))
+            out.append(self.raise_(AlertLevel.CRITICAL, "EMERGENCY_STOP", one_prefix("Emergency stop", c.reason, "no reason given")))
         elif c.paused and not c.emergency_stopped and not (prev and prev.paused):
-            out.append(self.raise_(AlertLevel.WARNING, "PAUSED", f"Trading paused: {c.reason or 'no reason given'}"))
+            out.append(self.raise_(AlertLevel.WARNING, "PAUSED", one_prefix("Paused", c.reason, "no reason given")))
         return out
 
     def on_execution(self, r: ExecutionResult) -> list[Alert]:
@@ -47,7 +49,7 @@ class AlertManager:
     def on_decision(self, d: Decision) -> list[Alert]:
         v = d.risk_verdict
         if v is not None and not v.approved and d.signal is not None and d.signal.action.value != "STAY_OUT":
-            return [self.raise_(AlertLevel.INFO, "RISK_BLOCKED", f"{d.signal.action.value} {d.symbol} blocked: {'; '.join(v.reasons)}", d.symbol)]
+            return [self.raise_(AlertLevel.INFO, "RISK_BLOCKED", f"{d.signal.action.value} {d.symbol} not executed: {'; '.join(one_prefix('Blocked', r) for r in v.reasons)}", d.symbol)]
         return []
 
     def on_trade_closed(self, consecutive_losses: int, daily_pnl: float, daily_limit: float, symbol: str) -> list[Alert]:
