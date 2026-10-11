@@ -52,4 +52,11 @@ class Web3ApiError(ExchangeError):
 
 
 class QuoteUnavailable(ExchangeError):
-    """No executable quote (market closed, below minimum, no liquidity, unknown token...)."""
+    """No executable quote (market closed, below minimum, no liquidity, unknown token...).
+
+    `reason` is a status.QuoteReason value (market_closed, insufficient_liquidity, below_minimum, xstock_disabled,
+    above_maximum) when the cause is market state rather than a bug/config problem; None otherwise."""
+
+    def __init__(self, message: str, code: Optional[int] = None, reason: Optional[str] = None) -> None:
+        super().__init__(message, code)
+        self.reason = reason

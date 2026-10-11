@@ -38,12 +38,26 @@ from .tokens import (
     infer_token_type,
     to_base_units,
 )
-from .web3_api import Web3ApiClient
+from .status import (
+    QuoteReason,
+    TokenStatus,
+    TokenStatusMixin,
+    TradingStatus,
+    apply_status_info,
+    default_min_order_usdt,
+    finalize_status,
+    is_xstock,
+    parse_rwa_dynamic,
+    reason_for_error_code,
+    status_from_candles,
+    xstock_enabled,
+)
+from .web3_api import PublicRwaClient, Web3ApiClient
 
 log = logging.getLogger(__name__)
 
 
-class BinanceWeb3Client:
+class BinanceWeb3Client(TokenStatusMixin):
     def __init__(
         self,
         api: Web3ApiClient,
@@ -54,6 +68,9 @@ class BinanceWeb3Client:
         live_enabled: bool = False,
         max_live_notional: float = 25.0,
         clock: Callable[[], datetime] = utc_now,
+        public: Optional[PublicRwaClient] = None,
+        enable_xstock: Optional[bool] = None,
+        status_ttl_s: float = 60.0,
     ) -> None:
         if mode == TradingMode.SIM:
             raise ValueError("use SimulatedBinanceClient for SIM")
@@ -68,6 +85,12 @@ class BinanceWeb3Client:
         self._tokens: dict[str, TokenInfo] = {t.symbol: t for t in (tokens or DEFAULT_TOKENS)}
         self._routes: dict[str, tuple[Quote, RouteContext]] = {}
         self.executions: list[ExecutionResult] = []
+        # Public (no-key) RWA status endpoints; None disables them (status then comes from rwa/price + candles).
+        self.public = public
+        self.enable_xstock = xstock_enabled() if enable_xstock is None else enable_xstock
+        self._status_ttl = timedelta(seconds=status_ttl_s)
+        self._status_cache: dict[str, TokenStatus] = {}
+        self._quote_meta = {}
 
     @property
     def mode(self) -> TradingMode:
@@ -152,6 +175,9 @@ class BinanceWeb3Client:
         xStock quotes are RFQ and need `userWalletAddress` (API: 40001 "userWalletAddress is required for RFQ (xStock)
         quote"), so without a wallet we fail fast with that code instead of spending a request."""
         tok = self._token(symbol)
+        if is_xstock(symbol, tok.token_type) and not self.enable_xstock:
+            raise QuoteUnavailable(f"{symbol}: xStock disabled (zero BSC liquidity); set BINANCE_ENABLE_XSTOCK=true",
+                                   reason=QuoteReason.XSTOCK_DISABLED.value)
         if tok.token_type in WALLET_REQUIRED_TYPES and not self.wallet_address:
             raise QuoteUnavailable(f"{INVALID_PARAMS} userWalletAddress is required for RFQ ({tok.token_type.value}) "
                                    f"quote: set BINANCE_WALLET_ADDRESS", INVALID_PARAMS)
@@ -168,13 +194,13 @@ class BinanceWeb3Client:
             routes = self.api.get_quote(tok.chain_id or "", from_addr or "", to_addr or "", amount,
                                         user_wallet_address=self.wallet_address)
         except Web3ApiError as e:
-            raise QuoteUnavailable(str(e), e.code) from e
+            raise QuoteUnavailable(str(e), e.code, reason=reason_for_error_code(e.code)) from e
         if not routes:
-            raise QuoteUnavailable(f"no route for {symbol}")
+            raise QuoteUnavailable(f"no route for {symbol}", reason=QuoteReason.INSUFFICIENT_LIQUIDITY.value)
         route = next((r for r in routes if r.get("isBest")), routes[0])
         to_qty = from_base_units(route.get("toTokenAmount"), to_dec)
         if to_qty <= 0:
-            raise QuoteUnavailable(f"zero output quote for {symbol}")
+            raise QuoteUnavailable(f"zero output quote for {symbol}", reason=QuoteReason.INSUFFICIENT_LIQUIDITY.value)
         qty, usd = (to_qty, notional) if side == OrderSide.BUY else (from_qty, to_qty)
         mode = str(route.get("executionMode") or "SWAP").upper()
         now = self._clock()
@@ -189,7 +215,67 @@ class BinanceWeb3Client:
                            binance_quote_id=route.get("quoteId"), vendor=route.get("vendorName"),
                            execution_mode=mode, raw_route=route)
         self._routes[quote.quote_id] = (quote, ctx)
+        # Extras for risk/UI (quote_meta). No extra requests here: use the cached status (quote_or_reason and
+        # get_token_status warm it); price impact comes from the route's priceImpactPercent.
+        st = self._status_cache.get(symbol) or finalize_status(
+            TokenStatus(symbol, tok.token_type.value, TradingStatus.UNKNOWN, True,
+                        default_min_order_usdt(tok.token_type), checked_at=now), self.enable_xstock)
+        self._record_quote_meta(quote, st, st.price, route)
         return quote
+
+    def _raw_route(self, quote_id: str):
+        stored = self._routes.get(quote_id)
+        return stored[1].raw_route if stored else None
+
+    # ------------------------------------------------------------------ token status
+    def get_token_status(self, symbol: str, refresh: bool = False) -> TokenStatus:
+        """Trading status, min order, shares multiplier and reference price for `symbol` (cached status_ttl_s).
+
+        Sources, best first: public `rwa/dynamic/ai` (statusInfo + sharesMultiplier + stockInfo.price),
+        HMAC `rwa/price` (tokenPrice/referencePrice), then 1h candles (staleness / zero volume) when no statusInfo.
+        xStock is short-circuited to NO_LIQUIDITY/xstock_disabled unless enabled (no network calls)."""
+        now = self._clock()
+        cached = self._status_cache.get(symbol)
+        if cached and not refresh and now - cached.checked_at < self._status_ttl:
+            return cached
+        tok = self._token(symbol)
+        st = TokenStatus(symbol=symbol, token_type=tok.token_type.value, trading_status=TradingStatus.UNKNOWN,
+                         tradable=True, min_order_usdt=default_min_order_usdt(tok.token_type), checked_at=now)
+        if is_xstock(symbol, tok.token_type) and not self.enable_xstock:
+            st.trading_status, st.source = TradingStatus.NO_LIQUIDITY, "policy"
+            return self._cache_status(finalize_status(st, False))
+        info = None
+        if self.public is not None:
+            try:
+                dyn = parse_rwa_dynamic(self.public.rwa_dynamic(tok.chain_id or "", tok.contract_address or ""))
+                st.price, st.shares_multiplier, st.reference_price = dyn["price"], dyn["shares_multiplier"], dyn["reference_price"]
+                st.max_order_usdt = dyn["max_notional_usdt"]
+                info = dyn["status_info"]
+                apply_status_info(st, info)
+                st.source = "rwa_dynamic"
+            except Exception as e:  # noqa: BLE001 - status is best-effort
+                log.warning("rwa dynamic failed for %s: %s", symbol, e)
+        try:
+            for row in self.api.get_rwa_price(tok.chain_id or "", [tok.contract_address or ""]):
+                if str(row.get("tokenContractAddress", "")).lower() == (tok.contract_address or "").lower():
+                    st.price = float(row["tokenPrice"]) if row.get("tokenPrice") not in (None, "") else st.price
+                    if st.reference_price is None and row.get("referencePrice") not in (None, ""):
+                        st.reference_price = float(row["referencePrice"])
+        except ExchangeError as e:
+            log.warning("rwa price failed for %s: %s", symbol, e)
+        if not info:
+            try:
+                st.trading_status = status_from_candles(self.get_candles(symbol, Timeframe.H1, limit=24), now)
+                st.source = "candles"
+            except ExchangeError as e:
+                log.warning("candles failed for %s: %s", symbol, e)
+        if st.reference_price is None and st.price and st.shares_multiplier:
+            st.reference_price = st.price / st.shares_multiplier
+        return self._cache_status(finalize_status(st, self.enable_xstock))
+
+    def _cache_status(self, st: TokenStatus) -> TokenStatus:
+        self._status_cache[st.symbol] = st
+        return st
 
     # ------------------------------------------------------------------ execution
     def execute_swap(self, order: OrderRequest, quote: Quote) -> ExecutionResult:
