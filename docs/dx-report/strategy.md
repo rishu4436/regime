@@ -28,8 +28,7 @@ says on that prefix of bars.
 
 ### Exit rules shared with risk
 
-Bot 3 (risk) and Bot 2 (engine) agreed on one set of exit semantics, and Bot 6's `tests/e2e/test_exit_parity.py` runs
-both implementations on the same fixtures:
+The engine and risk use one set of exit semantics (parity test: [integration.md](integration.md)):
 
 - Stops are tested against the bar's low and TP against the high.
 - Any stop that is hit beats TP, and the highest stop that was hit wins. Exact ties go trailing > SL > max-loss.
@@ -59,7 +58,7 @@ blocked**, because reducing exposure is always allowed.
 - **Sizing:**
   - proposed % × 0.25, capped at 2% of equity
   - × 0.5 on thin-but-tradeable liquidity
-  - per-family minimum order (Ondo 20 USDT, see §3)
+  - per-family minimum order (Ondo 20 USDT, see §3.3)
   - never above `max_order_usdt` (25 USDT, the same as risk's live per-order cap)
 - **Optional market context:** `set_market_context(symbol, ctx)`. No contract change was needed.
   - token status off-hours / closed / no liquidity / paused, or `reference_price_only` → `live_token_paused`
@@ -88,53 +87,79 @@ The organisers' reference (`full_strategy_builder_simulation.html`) was the star
 
 Because of 1, 2, 4 and 7, the engine deliberately does **not** reproduce the simulator's trade list bar for bar.
 
-## 3. Real mainnet data: findings and pain points
+## 3. Real mainnet data: what broke the engine, and what would help
 
 On Sun 11 Oct 2026 we saved real responses from Binance's public skill endpoints (`bot2-notes/skills_research.md`).
 The engine's tests now load them (`backend/engine/tests/fixtures/binance/`: NVDAB, NVDAon and TSLAx 1h K-lines, the
 NVDAon status, and `rwa/dynamic`).
 
-**The three issuers behave very differently on BSC, and nothing in the APIs says so up front.**
-
-| Family | What we measured (Sunday, off-hours) | What the engine does |
+| Family | What the candles look like (Sunday, off-hours) | What the engine does |
 |---|---|---|
-| bStock (`…B`, e.g. NVDAB) | Asset status `TRADING` with no session. 26 weekend hourly bars carried ~$579k of DEX volume, with an average hourly high-low range of ~1.62%. | Full volume rules. This is the 24/7 demo family. |
-| Ondo (`…on`, e.g. NVDAon) | Status `offhours`, `openState=true`. All 48 hourly bars have **volume `0`**, with ~0.20% average range; the price behaves like a reference/oracle price. | Volume conditions are "not applicable" (skipped, not failed), and the no-volume / thin-liquidity gates are skipped. Stale-data checks still apply. |
-| xStock (`…x`, e.g. TSLAx) | Liquidity `0`, 24h buy/sell volume 0. Its 48 most recent hourly bars span 15 Aug → 4 Oct. Bot 4 got `40374` (insufficient liquidity) on a Sunday quote. | Entries blocked by default (`live_illiquid_family`), configurable. |
+| bStock (`…B`, e.g. NVDAB) | All 48 hourly bars have DEX volume. 26 weekend bars carried ~$579k, with an average hourly range of ~1.62%. | Full volume rules |
+| Ondo (`…on`, e.g. NVDAon) | All 48 hourly bars have volume `"0"`, with ~0.20% average range, so the price tracks the reference | Volume is "not applicable" (§3.1) |
+| xStock (`…x`, e.g. TSLAx) | Its 48 most recent hourly bars span 15 Aug → 4 Oct | Entries blocked by default (`live_illiquid_family`) |
+
+### 3.1 Engine-specific pain points
 
 | # | Pain point | Impact on the engine | Suggested fix |
 |---|---|---|---|
-| 1 | **Zero-volume Ondo candles off-hours.** The K-line volume field is `"0"` on every bar. | Our first live-safety version blocked **every** Ondo buy (no volume, thin liquidity). A volume-based rule can never fire. We found and fixed this only with the real sample. | Document the volume semantics per issuer and session, or return `null` instead of `0` when there is no DEX trading. |
-| 2 | **Liquidity differs per issuer, but status still says `TRADING`.** TSLAx is `TRADING` with zero liquidity. | Status alone can't tell a strategy whether a token is tradable. We added token-family rules based on the symbol suffix. | Add a liquidity / tradability flag to the market-status response. |
-| 3 | **The shares multiplier changes the price.** NVDAon raw price 230.870 vs stock 230.475 looks like +0.17%, but after dividing by `sharesMultiplier` (1.0017…) the premium is 0.00%. | Any premium/discount or cross-issuer spread signal is wrong unless every price is divided by the multiplier. | Return a multiplier-adjusted per-share price next to the token price. |
-| 4 | **The `offhours` status is undocumented.** The market-status endpoint returns an `offhours{openState, nextOpenTime, nextCloseTime}` block and `marketStatus: "offhours"` that the skill doc (v1.1) doesn't describe. Its meaning is our inference. | We can't be sure if an Ondo token is buyable off-hours. In the end the team treated off-hours as "no new buys". | Document every `marketStatus` and `reasonCode` value and what each one allows. |
-| 5 | **Ondo has a 20 USD minimum order (`40375`), but our live sizes are small.** The live sizing is ×0.25, capped at 2% of equity, under a 25 USDT per-order cap. | On small accounts, Ondo buys come out below the minimum and the exchange rejects them. The engine now raises the order to the 20 USDT floor only when that is ≤ the 25 USDT cap and ≤ equity. Otherwise it stays out with `live_below_min_order`. | Expose `min_order_usd` per token in the token/RWA info, so clients can size correctly before quoting. |
-| 6 | **`volume24h` is US stock volume, not DEX volume.** `rwa/dynamic.tokenInfo.volume24h` and the rank list's `volume24h` (~$19.5B for NVDAon) are stock-market figures. | Using them as on-chain liquidity would be badly wrong. We use candle volume and the quote's price impact instead. | Rename the field, or add a separate `dexVolume24h`. |
-| 7 | **The smart-money signal feed is memecoin-only.** `trading-signal` returned 40 BSC signals, all memecoins and none for stock tokens. | It can't be used as an entry condition for stock tokens. | A stock-token filter or category on the signal endpoint. |
-| 8 | **Token audit doesn't cover bStocks.** `query-token-audit` for NVDAB returns `hasResult=false, isSupported=false`. | We can't add an audit/risk gate for the token we trade most. | Audit coverage for the RWA tokens Binance lists. |
-| 9 | **The signed Web3 API is geo-blocked.** Every HMAC call from our US-hosted box returned `40304` (compliance restriction). | Real candles and quotes could only be fetched from the team lead's PC, so the engine was hardened first on hand-built fixtures and then on public-endpoint samples. | A region-free sandbox, or a clear HTTP 451, plus documented equivalence between the public K-line and `/market/candles`. |
+| 1 | **Zero-volume Ondo candles off-hours.** The K-line volume field is `"0"` on every bar, not `null`. | `volume_above_avg` and the min-volume filter can never pass, and our first live-safety version blocked **every** Ondo buy (no volume, thin liquidity). We found this only with the real sample. The fix: per-family volume rules. For Ondo, volume conditions are skipped rather than failed (and don't count as "warming up"). For other families, a volume comparison now needs a real baseline (this bar traded, and at least half the bars in the window did), so one stray trade among empty bars is never a "spike". | Return `null` (or a flag) when there was no DEX trading, and document volume semantics per issuer and session. |
+| 2 | **Flat or empty bars confuse the regime detector.** Closed-market placeholder bars (high = low, volume 0) and gaps between sessions are not "price action". | A flat stretch after a rally could still read as an uptrend, and weekend or overnight gaps inflated volatility into HIGH_VOLATILITY. Now: if more than half of the last 20 bars are dead, the result is low-confidence SIDEWAYS (`insufficient_data`). Dead bars are excluded, and volatility uses only returns between consecutive bars. | A per-bar `tradeCount` / "no trading" flag on every K-line source (the Web3 API rows have `tradeCount`; the public K-line rows don't). |
+| 3 | **The shares multiplier changes the price.** NVDAon raw price 230.870 vs stock 230.475 looks like +0.17%, but after dividing by `sharesMultiplier` (1.0017…) the premium is 0.00%. | Any premium/discount, reference-price or bStock-vs-Ondo spread rule is wrong unless every token price is divided by the multiplier first. The engine has no premium rule yet; any future one must divide by the multiplier first. | Return a multiplier-adjusted per-share price next to the token price. |
+| 4 | **`volume24h` is US stock volume, not DEX volume.** `rwa/dynamic.tokenInfo.volume24h` and the rank list's `volume24h` (~$19.5B for NVDAon) are stock-market figures. | They look like a liquidity number, but they would massively overstate on-chain liquidity. The engine uses only candle volume, plus quote price impact via the market context. | Rename the field, or add a separate `dexVolume24h`. |
+| 5 | **Smart-money signals and token audit don't cover stock tokens.** `trading-signal` returned 40 BSC signals, all memecoins. `query-token-audit` for NVDAB returns `hasResult=false, isSupported=false`. | Neither can be an entry condition or a risk filter for the tokens we trade, so the engine uses neither. | A stock-token category on the signal feed; audit coverage for listed RWA tokens. |
+| 6 | **Two K-line shapes, all strings.** The public skill K-line is `[openTime, o, h, l, c, volume, closeTime]`; the Web3 API documents `[o, h, l, c, v, ts, tradeCount]`. | Index mix-ups are easy. Both are parsed into `Candle`, then `sanitize_candles()` cleans them (§3.2). | One documented row schema, or keyed objects. |
 
-Two smaller findings:
-- **Different K-line shapes.** The public skill K-line rows are `[openTime, o, h, l, c, volume, closeTime]`, while the
-  Web3 API documents `[o, h, l, c, v, ts, tradeCount]`, and prices and volumes arrive as strings. The engine's
-  `sanitize_candles()` accepts either after parsing: it drops NaN/≤0/high<low rows, de-duplicates, sorts, and treats
-  naive times as UTC.
-- **Sparse hourly bars off-hours** (Bot 4's observation) used to look like volatility and broke clock-based DCA. Regime
-  volatility now uses only returns between consecutive bars, and DCA fires on the first bar after a schedule boundary.
+### 3.2 Warm-up, bar length and data cleaning
+
+Real candles are sparse, irregular and sometimes malformed, which mock candles never are. These rules apply on every
+entry point (`evaluate_manual`, `evaluate_auto`, `detect_regime`, `backtest_manual`):
+
+- **Cleaning (`sanitize_candles`):**
+  - drops `None` rows, missing or unparseable timestamps, NaN/inf/≤0 prices and `high < low`
+  - widens high/low to contain open/close
+  - sets missing or negative volume to 0
+  - keeps the last copy of a duplicated timestamp (a re-sent in-progress bar) and sorts
+  - treats naive times as UTC
+  
+  Problems found are appended to the signal reason as `[data: ...]`.
+- **Warm-up:** live evaluation needs at least 61 valid candles, the same rule as the backtest (which never trades
+  before bar 60). Otherwise it returns STAY_OUT `insufficient_data` with the count, for example "40 valid candles, need
+  at least 61". The real public samples have only 48 bars, so the tests prepend rescaled copies of the real bars.
+- **Bar length:** the timeframe comes from the strategy config, or is inferred from the typical bar spacing (robust to
+  gaps). Regime percent thresholds are scaled by `√(bar hours)`, clamped to 0.25–5, so a normal 3% daily move is not
+  "high volatility" on 1d bars. Clock-based DCA fires on the first bar after a schedule boundary, so a missing boundary
+  bar no longer skips a buy.
+- **Stale data:** in `live_safe`, a last candle older than 2 bars against an injectable `now` blocks new buys.
+  SELLs are never blocked.
+
+### 3.3 Covered elsewhere (engine angle only)
+
+- **Signed Web3 API geo-block (`40304`), no testnet, `baw` issues:** real candles could only be fetched from the team
+  lead's PC, so the engine was hardened on hand-built fixtures first and public-endpoint samples second. See
+  [exchange.md](exchange.md).
+- **xStock liquidity:** status says `TRADING` while liquidity is 0, so the engine blocks xStock buys by family. See
+  [exchange.md](exchange.md).
+- **Undocumented `offhours` status:** the engine treats off-hours / closed / no liquidity / paused as "no new buys"
+  (`live_token_paused`). See [exchange.md](exchange.md).
+- **Ondo 20 USD minimum (`40375`):** live sizes are small, so the engine raises an Ondo buy to 20 USDT when that is
+  within the 25 USDT cap and equity, and otherwise returns `live_below_min_order`. See [exchange.md](exchange.md).
+- **Caps, wallet limits, slippage:** the engine only shrinks: ×0.25 sizing, capped at 2% of equity and at 25 USDT.
+  Risk's caps are binding. See [risk.md](risk.md).
+- **Exit parity and integration tests:** the engine and risk share one exit rule set, checked by Bot 6's e2e parity
+  test. See [integration.md](integration.md).
 
 ## 4. Engine/risk parity on price impact
 
-Risk (`backend/risk`, `live_slippage`) blocks a live buy when the exchange-reported price impact is above its
-`max_slippage_pct` (1% by default in LIVE). The engine has to agree, or it would propose buys that risk always rejects.
-So `LiveSafetyConfig.max_price_impact_pct` defaults to **1.0**, and an impact above it gives STAY_OUT
-`live_price_impact`. An earlier "halve the size between 1% and 2%" band was removed for the same reason.
+Risk blocks a live buy whose exchange-reported price impact is above 1% (`max_slippage_pct`; see [risk.md](risk.md)).
+`LiveSafetyConfig.max_price_impact_pct` defaults to the same 1.0, so the engine never proposes a buy that risk will
+reject. Above it, the engine returns STAY_OUT `live_price_impact`. An earlier "halve the size between 1% and 2%" band
+was removed for the same reason.
 
-- **Same input.** Both read the Web3 quote's per-route `priceImpactPercent` in percent units. Bot 4 passes it as a
-  string (e.g. `'0.35'` = 0.35%). The engine parses it with `float()`, and `null` or unparseable means *unknown*, which
-  neither blocks nor resizes.
-- **Known difference.** Risk compares `abs(impact)`, while the engine compares the signed value. A negative impact
-  beyond −1% passes the engine but is blocked by risk. Risk stays the binding limit. Aligning this is a one-line
-  change we haven't made yet.
+- **Same input.** Both read the Web3 quote's `priceImpactPercent` in percent units. A string such as `'0.35'` is
+  parsed with `float()`, and `null` or unparseable means unknown: no block and no resize.
+- **Known difference.** Risk compares `abs(impact)`, while the engine compares the signed value. Risk stays the binding
+  limit.
 
 ## 5. Test evidence (branch `bot2/live` @ `4b2749b`, run 11 Oct 2026, Python 3.13)
 
@@ -142,7 +167,6 @@ So `LiveSafetyConfig.max_price_impact_pct` defaults to **1.0**, and an impact ab
   regime detection on seeded mock series, every exit rule, backtest determinism, real-shaped sparse/24/7 data, every
   `live_safe` gate, and the real Binance samples.
 - Full repo `pytest` on that branch: **211 passed**. The contracts check is up to date and ruff is clean.
-- Bot 6's exit-parity e2e test passed earlier (Phase 2) against the real engine and risk code.
 
 What worked well: the public skill endpoints worked keyless from our box, so the real samples behind §3 could be
 fetched and turned into regression tests within minutes. And the regime → one-preset design kept Auto mode easy to
