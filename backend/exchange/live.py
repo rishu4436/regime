@@ -9,6 +9,7 @@ Docs: https://web3.binance.com/en/dev-docs/products/market-api/introduction,
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Iterable, Optional
 
@@ -56,8 +57,16 @@ from .web3_api import PublicRwaClient, Web3ApiClient
 
 log = logging.getLogger(__name__)
 
+CANDLE_PAGE_SIZE = 300   # API max per request (limit=301 -> 40001 "invalid limit range")
+CANDLE_MAX_PAGES = 20    # hard cap per call (~6000 bars); one request per page
+
 
 class BinanceWeb3Client(TokenStatusMixin):
+    # GET /market/candles: max `limit` is 300 (verified live 2026-10-11); 5 RPS per endpoint.
+    candle_page_size: int = CANDLE_PAGE_SIZE
+    candle_max_pages: int = CANDLE_MAX_PAGES
+    candle_page_pause_s: float = 0.25
+
     def __init__(
         self,
         api: Web3ApiClient,
@@ -91,6 +100,7 @@ class BinanceWeb3Client(TokenStatusMixin):
         self._status_ttl = timedelta(seconds=status_ttl_s)
         self._status_cache: dict[str, TokenStatus] = {}
         self._quote_meta = {}
+        self._candle_sleep: Callable[[float], None] = time.sleep
 
     @property
     def mode(self) -> TradingMode:
@@ -130,8 +140,48 @@ class BinanceWeb3Client(TokenStatusMixin):
 
     # ------------------------------------------------------------------ market data
     def get_candles(self, symbol: str, timeframe: Timeframe = Timeframe.H1, limit: int = 200) -> list[Candle]:
+        """Newest `limit` candles, oldest first. Pages `GET /market/candles` when `limit` > CANDLE_PAGE_SIZE.
+
+        Verified live (NVDAB, 2026-10-11): `limit` 300 is the maximum (301 -> 40001 "invalid limit range");
+        `after=<ts>` returns the bars at or before ts (inclusive, i.e. older), `before=<ts>` the newer ones.
+        So we page backwards with `after=<oldest ts seen>`, dedupe the overlapping bar, and stop on a short or
+        empty page, on a page that adds nothing new, once `limit` is reached, or after CANDLE_MAX_PAGES."""
         tok = self._token(symbol)
-        rows = self.api.get_candles(tok.chain_id or "", tok.contract_address or "", bar=timeframe.value, limit=limit)
+        limit = max(int(limit), 0)
+        if limit == 0:
+            return []
+        page_size = max(2, int(self.candle_page_size))
+        by_ts: dict[int, Candle] = {}
+        after: Optional[int] = None
+        for page in range(int(self.candle_max_pages)):
+            # `after` is inclusive, so later pages ask for one extra bar (the overlap is deduped below).
+            want = min(page_size, limit - len(by_ts) + (0 if after is None else 1))
+            if page:
+                self._candle_sleep(self.candle_page_pause_s)  # stay under 5 RPS per endpoint
+            try:
+                rows = self.api.get_candles(tok.chain_id or "", tok.contract_address or "", bar=timeframe.value,
+                                            limit=want, after=after)
+            except Web3ApiError:
+                if not by_ts:
+                    raise
+                log.warning("candle page %d for %s %s failed; returning %d bars", page + 1, symbol,
+                            timeframe.value, len(by_ts), exc_info=True)
+                break
+            rows = rows or []
+            added = 0
+            for c in self._parse_candles(symbol, rows):
+                key = int(c.timestamp.timestamp() * 1000)
+                if key not in by_ts:
+                    by_ts[key] = c
+                    added += 1
+            if len(by_ts) >= limit or not rows or added == 0 or len(rows) < want:
+                break
+            after = min(by_ts)
+        candles = sorted(by_ts.values(), key=lambda k: k.timestamp)
+        return candles[-limit:]
+
+    @staticmethod
+    def _parse_candles(symbol: str, rows: Iterable) -> list[Candle]:
         candles: list[Candle] = []
         for r in rows:  # [open, high, low, close, volume, timestamp_ms, tradeCount]
             try:
@@ -140,8 +190,7 @@ class BinanceWeb3Client(TokenStatusMixin):
                                       open=o, high=max(h, o, c), low=min(l, o, c), close=c, volume=max(v, 0.0)))
             except (IndexError, TypeError, ValueError):
                 log.warning("skipping malformed candle row for %s: %r", symbol, r)
-        candles.sort(key=lambda k: k.timestamp)
-        return candles[-limit:]
+        return candles
 
     def _prices(self, toks: list[TokenInfo]) -> dict[str, float]:
         out: dict[str, float] = {}
