@@ -189,7 +189,13 @@ def test_live_different_wallet_blocks_until_reconciled(live, monkeypatch):
     for _ in range(3):
         ds = c.post("/api/loop/tick").json()
         ex.advance()
-        assert all(d["action"] == "STAY_OUT" and "different wallet connected" in d["reason"] for d in ds), ds
+        assert all(d["action"] == "STAY_OUT" and "a different wallet is connected" in d["reason"] for d in ds), ds
+        short_new, short_old = f"{NEW[:6]}\u2026{NEW[-4:]}", f"{OLD[:6]}\u2026{OLD[-4:]}"
+        for d in ds:
+            assert d["reason"] == (f"Paused: a different wallet is connected ({short_new}, expected {short_old}). Regime "
+                                   "places no orders, and stop-loss and take-profit are paused, until you click Check "
+                                   "positions on the dashboard."), d["reason"]
+            assert "/api/" not in d["reason"] and NEW not in d["reason"]
     assert len(ex.executions) == n_exec
     ex._price_override.pop("NVDAB")
     # the new wallet doesn't hold the saved NVDAB position

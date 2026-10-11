@@ -243,8 +243,9 @@ The Vite dev proxy connects from localhost, so the dashboard on `http://localhos
   token statuses) and re-reads them, so the next `/api/wallet` has a newer `updated_at` and fresh `limits`.
 - `wallet_changed: true` blocks every order (BUYs **and** exits, since the saved positions may not be in the new
   wallet): `/api/live/status` (and `/api/system.live`) gets `can_trade: false`, `"different wallet connected"` in
-  `blocked_reasons` and `wallet_block: {address, expected, since}`; each tick is a STAY_OUT "Blocked: different wallet
-  connected ...". The block is saved in the state file and survives restarts.
+  `blocked_reasons` and `wallet_block: {address, expected, since}`; each tick is a STAY_OUT "Paused: a different wallet
+  is connected (0xabc1…1234, expected 0xdef5…5678). Regime places no orders, and stop-loss and take-profit are paused,
+  until you click Check positions on the dashboard." (addresses shortened to first 6 + … + last 4). The block is saved in the state file and survives restarts.
 - `POST /api/wallet/reconcile` checks the saved open positions against the connected wallet's balances (oldest
   first). Positions the wallet doesn't fully hold are dropped from the book (no trade; listed in `dropped`), the
   wallet becomes the saved wallet and the block clears. In SIM the wallet is the book, so nothing is dropped.

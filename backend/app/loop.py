@@ -35,6 +35,14 @@ PENDING_EXIT = "pending_exit"        # exit held while the BUY settles on chain 
 ORDER_IN_FLIGHT = "order_in_flight"  # Bot 4 executor single-flight refusal (verbatim)
 
 
+def _short_addr(addr: Optional[str]) -> str:
+    """0xabcdef...1234 -> '0xabcd\u20261234' (first 6 chars + ellipsis + last 4) for user-facing text."""
+    a = str(addr or "").strip()
+    if not a:
+        return "unknown"
+    return a if len(a) <= 10 else f"{a[:6]}\u2026{a[-4:]}"
+
+
 class AgentStateError(RuntimeError):
     """Invalid state for the request (mapped to HTTP 409)."""
 
@@ -226,8 +234,9 @@ class TradingLoop:
                 out.append(self._finalize(Decision(
                     mode=self.s.trading_mode, agent_mode=self.agent_mode, symbol=sym, regime=self.current_regime, timestamp=now,
                     strategy=self.active_strategy or "NONE", action=Action.STAY_OUT,
-                    reason=(f"Blocked: different wallet connected ({b.get('address')}, saved {b.get('expected')}); no orders "
-                            "until the saved positions are checked against the new wallet (POST /api/wallet/reconcile)"))))
+                    reason=(f"Paused: a different wallet is connected ({_short_addr(b.get('address'))}, expected "
+                            f"{_short_addr(b.get('expected'))}). Regime places no orders, and stop-loss and take-profit are "
+                            "paused, until you click Check positions on the dashboard."))))
                 return self._end_tick(out)
 
             # 0) in-flight LIVE buys: reconcile first, so a fill confirmed now is a real lot for the exits below
