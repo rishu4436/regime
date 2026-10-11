@@ -1,6 +1,6 @@
 // "Ask Stock Agent": a paid second opinion on one token via x402 (Bot 4's /api/x402, paid from the Agentic Wallet).
 // Advice only: the report is shown here and never places or changes a trade.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { ApiError, type X402Price, type X402JobStatus } from "../api/types";
 import { bscTx } from "../lib/live";
@@ -12,7 +12,12 @@ export function StockAgentCard({ symbol, tick }: { symbol: string; tick?: number
   const [res, setRes] = useState<X402JobStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  useEffect(() => { api.getX402Price(symbol).then(setPrice).catch(() => setPrice(null)); }, [symbol, tick, job?.id]);
+  // null = the backend has no /api/x402 yet (404/405/501): stop re-asking every tick until the symbol changes
+  const missing = useRef<string | null>(null);
+  useEffect(() => {
+    if (missing.current === symbol) return;
+    api.getX402Price(symbol).then((p) => { missing.current = p === null ? symbol : null; setPrice(p); }).catch(() => setPrice(null));
+  }, [symbol, tick, job?.id]);
   useEffect(() => { setJob(null); setRes(null); setErr(null); }, [symbol]);
   // poll the job every 3 s until it's done or failed
   useEffect(() => {
