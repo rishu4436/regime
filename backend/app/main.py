@@ -28,6 +28,7 @@ from .schemas import (
     ParseResponse, PresetsTable, PresetsTableEntry, ReasonRequest, DecisionView, Heartbeat, LiveStatus, LoopStateView,
     StatusView, SystemInfoView, WalletInfo,
 )
+from .live import agent_identity
 from .settings import Settings
 from .store import StrategyStore
 from .wiring import Components, build_components, presets_table
@@ -90,7 +91,7 @@ def create_app(settings: Optional[Settings] = None, components: Optional[Compone
     def system() -> SystemInfoView:
         return SystemInfoView(trading_mode=settings.trading_mode, live_enabled=settings.live_enabled, contracts_version=CONTRACTS_VERSION,
                               sim_seed=settings.sim_seed if L.sim else None, components=comps.names(),
-                              live=LiveStatus.model_validate(L.live_status()))
+                              live=LiveStatus.model_validate(L.live_status()), agent_identity=agent_identity())
 
     @app.get("/api/live/status", response_model=LiveStatus)
     def live_status() -> LiveStatus:

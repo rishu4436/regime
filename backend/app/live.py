@@ -234,7 +234,7 @@ class WalletSettingsProvider:
     subprocess. Cached for `ttl_s`. Never runs a subprocess outside LIVE (SIM/PAPER/tests return None).
     On failure returns None and reports the error once per failure streak via `on_error`."""
 
-    def __init__(self, exchange: Any, mode: TradingMode, ttl_s: float = 60.0, cmd: tuple[str, ...] = ("baw", "wallet", "settings", "--json"),
+    def __init__(self, exchange: Any, mode: TradingMode, ttl_s: float = 600.0, cmd: tuple[str, ...] = ("baw", "wallet", "settings", "--json"),
                  runner: Optional[Callable[[tuple[str, ...]], str]] = None, on_error: Optional[Callable[[str], None]] = None) -> None:
         self.exchange, self.mode, self.ttl_s, self.cmd = exchange, mode, ttl_s, cmd
         self.runner = runner or self._run
@@ -253,27 +253,34 @@ class WalletSettingsProvider:
             raise RuntimeError(f"{' '.join(cmd)} exited {p.returncode}: {(p.stderr or p.stdout).strip()[:200]}")
         return p.stdout
 
-    def raw(self) -> Optional[dict]:
+    def raw(self) -> tuple[Optional[dict], bool]:
+        """(payload, from_client). The client's get_wallet_settings() result carries its own fetched_at."""
         import json
         fn = getattr(self.exchange, "get_wallet_settings", None)
         if callable(fn):
             r = fn()
-            return r if isinstance(r, dict) else (r.model_dump() if hasattr(r, "model_dump") else dict(r))
+            if r is None:
+                return None, True
+            return (r if isinstance(r, dict) else (r.model_dump() if hasattr(r, "model_dump") else dict(r))), True
         if self.mode != TradingMode.LIVE:
-            return None
+            return None, False
         out = json.loads(self.runner(self.cmd))
         if isinstance(out, dict) and isinstance(out.get("data"), dict):  # tolerate {"success":..,"data":{..}} wrappers
             out = out["data"]
-        return out
+        return out, False
+
+    def invalidate(self) -> None:
+        """Re-read on next use (called after every execution: the wallet's daily quota just changed)."""
+        self._at = None
 
     def get(self, force: bool = False) -> Any:
         now = utc_now()
         if not force and self._at is not None and (now - self._at).total_seconds() < self.ttl_s:
             return self._cached
         try:
-            raw = self.raw()
+            raw, from_client = self.raw()
             self._raw = raw
-            self._cached = to_wallet_limits(raw, now) if raw is not None else None
+            self._cached = to_wallet_limits(raw, None if from_client else now) if raw is not None else None
             self._failing, self.last_error = False, None
         except Exception as e:
             self._cached, self.last_error = None, f"{type(e).__name__}: {e}"
@@ -284,12 +291,13 @@ class WalletSettingsProvider:
         return self._cached
 
 
-def to_wallet_limits(raw: dict, fetched_at: datetime) -> Any:
+def to_wallet_limits(raw: dict, fetched_at: Optional[datetime]) -> Any:
+    """fetched_at=None: the payload (client.get_wallet_settings()) carries its own fetched_at (Bot 3 reads it)."""
     try:
         from backend.risk import WalletLimits  # type: ignore[attr-defined]
     except Exception:
         return None  # risk without wallet-limit support: nothing to pass
-    return WalletLimits.from_baw(raw, fetched_at=fetched_at)
+    return WalletLimits.from_baw(raw) if fetched_at is None else WalletLimits.from_baw(raw, fetched_at=fetched_at)
 
 
 def to_token_status(obj: Any) -> Any:
@@ -306,8 +314,60 @@ def to_token_status(obj: Any) -> Any:
 
 
 def quote_price_impact(quote: Any) -> Optional[float]:
+    """Percent units (0.35 = 0.35%). Missing / null -> None (never 0)."""
+    if quote is None:
+        return None
+    extra = getattr(quote, "model_extra", None) or {}
     for k in ("price_impact_pct", "price_impact_percent", "priceImpactPercent"):
-        v = getattr(quote, k, None)
+        v = quote.get(k) if isinstance(quote, dict) else getattr(quote, k, extra.get(k))
         if v is not None:
-            return float(v)
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
     return None
+
+
+# ---------------------------------------------------------------- exchange error classification
+OFF_HOURS_CODES = {"40367": "Ondo market closed", "40369": "bStock market closed", "40374": "no liquidity / market closed"}
+_CODE_RE = re.compile(r"\b(40367|40369|40374)\b")
+
+
+def off_hours_code(err: Any) -> Optional[str]:
+    """40367 / 40369 / 40374 from an exception (`.code`) or an error text; None otherwise."""
+    if err is None:
+        return None
+    code = getattr(err, "code", None)
+    if code is not None and str(code) in OFF_HOURS_CODES:
+        return str(code)
+    m = _CODE_RE.search(str(err))
+    return m.group(1) if m else None
+
+
+def is_session_expired(err: Any) -> bool:
+    if err is None:
+        return False
+    names = f"{type(err).__name__} {getattr(err, 'code', '')} {err}".upper()
+    return "WALLET_SESSION_EXPIRED" in names or "SESSIONEXPIRED" in names.replace("_", "") or "SESSION EXPIRED" in names
+
+
+def is_waiting_on_chain(res: Any) -> bool:
+    st = getattr(getattr(res, "status", None), "value", getattr(res, "status", None))
+    err = (getattr(res, "error", None) or "").upper()
+    return st == "PENDING_CONFIRMATION" or "WAITING ON CHAIN" in err or "UNCONFIRMED" in err
+
+
+def agent_identity() -> Optional[dict]:
+    """Bot 5's backend/agent_studio get_agent_identity() -> {erc8004_id, registry, studio_version}; None if absent."""
+    try:
+        from backend import agent_studio  # type: ignore[attr-defined]
+        fn = getattr(agent_studio, "get_agent_identity", None)
+        if not callable(fn):
+            return None
+        ident = fn()
+    except Exception:
+        return None
+    if ident is None:
+        return None
+    d = ident if isinstance(ident, dict) else (ident.model_dump() if hasattr(ident, "model_dump") else vars(ident))
+    return {k: d.get(k) for k in ("erc8004_id", "registry", "studio_version")}

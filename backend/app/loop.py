@@ -10,7 +10,7 @@ import threading
 import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Optional
 
 from backend.contracts import (
@@ -77,6 +77,8 @@ class TradingLoop:
         self.last_tick_at: Optional[datetime] = None
         self.last_error: Optional[str] = None
         self.restarts = 0
+        self.cooldowns: dict[str, dict] = {}       # symbol -> {until, code, reason}: exchange off-hours errors (20 min)
+        self.chain_pending: dict[str, dict] = {}   # order_id -> submitted BUY waiting on chain
         self.bus.enrich = self.enrich_payload
         self.wallet_settings = livemod.WalletSettingsProvider(
             comps.exchange, settings.trading_mode, on_error=lambda m: self._alert(AlertLevel.WARNING, "WALLET_SETTINGS", m))
@@ -235,6 +237,9 @@ class TradingLoop:
 
             # 3) strategy (engine) -> 4) risk -> 5) execute / confirm
             pf = self.book.portfolio()
+            self._poll_chain_pending()
+            if not self.sim:
+                self._update_market_context(sym, pf)
             if self.manual:
                 signal = self.c.engine.evaluate_manual(self.manual, window, pf)
             else:
@@ -244,8 +249,12 @@ class TradingLoop:
                     regime = self.current_regime = signal.regime
             base = dict(mode=self.s.trading_mode, agent_mode=self.agent_mode, symbol=sym, regime=regime, timestamp=now,
                         strategy=signal.strategy, signal=signal)
-            if signal.action == Action.STAY_OUT:
+            if signal.action == Action.STAY_OUT:  # incl. Bot 2's live_* / insufficient_data: a logged no-trade
                 out.append(self._finalize(Decision(action=Action.STAY_OUT, reason=signal.reason, **base)))
+                return self._end_tick(out)
+            cd = self._cooldown(sym) if signal.action == Action.BUY else None
+            if cd:
+                out.append(self._finalize(Decision(action=Action.STAY_OUT, reason=f"BUY not executed: {cd}", **base)))
                 return self._end_tick(out)
             verdict = self._risk_check(signal, pf, control)  # LIVE BUY: pass 1 with LiveContext (no quote yet)
             if not verdict.approved:
@@ -377,6 +386,121 @@ class TradingLoop:
                               "(set LIVE_ALLOWED_TOKENS to include it)")]
         return []
 
+    # ------------------------------------------------------------------ LIVE: cooldowns, chain, session, engine context
+    COOLDOWN = timedelta(minutes=20)
+
+    def _maybe_cooldown(self, sym: str, err: Any) -> str:
+        code = livemod.off_hours_code(err)
+        if not code:
+            return ""
+        until = utc_now() + self.COOLDOWN
+        what = livemod.OFF_HOURS_CODES[code]
+        self.cooldowns[sym] = {"symbol": sym, "until": until, "code": code, "reason": what}
+        return f"; {sym} cooling down until {until:%H:%M} UTC ({what}, {code})"
+
+    def _cooldown(self, sym: str) -> Optional[str]:
+        c = self.cooldowns.get(sym)
+        if not c:
+            return None
+        if c["until"] <= utc_now():
+            self.cooldowns.pop(sym, None)
+            return None
+        return f"{sym} cooling down until {c['until']:%H:%M} UTC after exchange error {c['code']} ({c['reason']})"
+
+    def active_cooldowns(self) -> list[dict]:
+        for s in list(self.cooldowns):
+            self._cooldown(s)
+        return [dict(c, until=c["until"].isoformat()) for c in self.cooldowns.values()]
+
+    def _session_expired(self, err: Any) -> None:
+        """baw session gone (can silently expire within 48h): pause trading + alert. Exits are still attempted."""
+        if not self.control().paused:
+            self._control_changed(self.c.risk.pause("Wallet session expired: re-scan the baw QR code, then resume"))
+        self._alert(AlertLevel.CRITICAL, "WALLET_SESSION_EXPIRED", f"wallet session expired ({str(err)[:120]}); trading paused - "
+                    "run `baw auth signin` (scan the QR), then POST /api/control/resume")
+
+    def _poll_chain_pending(self) -> None:
+        """Submitted BUYs waiting on chain: ask the client (duck-typed refresh_execution / get_execution_status)."""
+        if not self.chain_pending:
+            return
+        ex = self.c.exchange
+        fn = getattr(ex, "refresh_execution", None) or getattr(ex, "get_execution_status", None)
+        for oid, p in list(self.chain_pending.items()):
+            res = p["res"]
+            if callable(fn):
+                try:
+                    res = fn(res)
+                except Exception:
+                    continue
+            if livemod.is_waiting_on_chain(res):
+                if (utc_now() - p["since"]).total_seconds() > 1800 and not p.get("alerted"):
+                    p["alerted"] = True
+                    self._alert(AlertLevel.WARNING, "CHAIN_PENDING", f"{res.symbol} BUY still unconfirmed after 30 min (tx {res.tx_hash})", res.symbol)
+                continue
+            self.chain_pending.pop(oid, None)
+            sig, base, did = p["signal"], dict(p["base"], timestamp=self._now()), p["decision_id"]
+            livemod.record_execution(self.c.risk, res)
+            if res.status in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED) and res.filled_quantity > 0:
+                self._record_live_buy(res)
+                spent = p["notional"] if res.status == OrderStatus.FILLED else res.notional + res.fee
+                self.book.open_lot(res, spent, sig.strategy, self._exit_rules(), self._now())
+                self._finalize(Decision(id=did, action=Action.BUY, risk_verdict=p["verdict"], execution=res,
+                                        reason=f"confirmed on chain; {sig.reason}", **base))
+            else:
+                self._finalize(Decision(id=did, action=Action.STAY_OUT, risk_verdict=p["verdict"], execution=res,
+                                        reason=f"BUY failed on chain ({res.status.value}{': ' + res.error if res.error else ''})", **base))
+            self.bus.publish(EventType.EXECUTION, res, decision_id=did)
+
+    def _update_market_context(self, sym: str, pf) -> None:
+        """Bot 2 live engine: per-order cap from risk, and set_market_context(symbol, {status, reference_price_only,
+        priceImpactPercent, equity}) from token status + a probe quote; None when nothing is known."""
+        eng = getattr(self.c.engine, "_primary", None) or self.c.engine
+        cfg = getattr(eng, "live_config", None)
+        if cfg is not None and hasattr(cfg, "max_order_usdt"):
+            cap = livemod.risk_live_limits(self.c.risk, pf, livemod.make_live_context(
+                wallet_limits=self.wallet_settings.get())).get("per_order_cap_usdt")
+            if cap and cap != cfg.max_order_usdt:
+                try:
+                    import dataclasses
+                    eng.live_config = dataclasses.replace(cfg, max_order_usdt=float(cap))
+                except Exception:
+                    pass
+        setter = getattr(eng, "set_market_context", None)
+        if not callable(setter):
+            return
+        ex, ctx = self.c.exchange, {}
+        fn = getattr(ex, "get_token_status", None)
+        if callable(fn):
+            try:
+                st = fn(sym)
+                d = st if isinstance(st, dict) else (st.model_dump() if hasattr(st, "model_dump") else vars(st))
+                ctx["status"] = d.get("trading_status", d.get("status"))
+                ctx["reference_price_only"] = bool(d.get("reference_price_only", False))
+            except Exception:
+                pass
+        if self._cooldown(sym):
+            ctx["status"] = "closed"
+        else:
+            try:
+                cap = getattr(getattr(eng, "live_config", None), "max_order_usdt", None) or self.s.live_max_order_usdt
+                imp = livemod.quote_price_impact(ex.get_quote(sym, OrderSide.BUY, float(cap)))
+                if imp is not None:
+                    ctx["priceImpactPercent"] = imp
+            except Exception as e:
+                if self._maybe_cooldown(sym, e):
+                    ctx["status"] = "closed"
+        try:
+            bal = livemod.read_exchange_wallet(ex)[1]
+            if bal is not None:
+                ctx["equity"] = bal.get(livemod.QUOTE_ASSET, 0.0)
+        except Exception as e:
+            if livemod.is_session_expired(e):
+                self._session_expired(e)
+        try:
+            setter(sym, ctx or None)
+        except Exception:
+            pass
+
     def daily_live_notional(self) -> float:
         return float((self.state.get("live_bought") or {}).get(utc_now().date().isoformat(), 0.0))
 
@@ -485,7 +609,10 @@ class TradingLoop:
         if ctrl.paused:
             reasons.append(one_prefix("Paused", ctrl.reason, "by user"))
         return {"live_trading_enabled": self.s.live_trading_enabled, "binance_live_enabled": self.s.binance_live_enabled,
-                "risk_allow_live": allow, "wallet_connected": connected, "can_trade": not reasons, "blocked_reasons": reasons}
+                "risk_allow_live": allow, "wallet_connected": connected, "can_trade": not reasons, "blocked_reasons": reasons,
+                "cooldowns": self.active_cooldowns(),
+                "chain_pending": [{"order_id": k, "symbol": v["res"].symbol, "tx_hash": v["res"].tx_hash,
+                                   "since": v["since"].isoformat()} for k, v in self.chain_pending.items()]}
 
     def enrich_payload(self, payload: Any) -> Any:
         return livemod.enrich_payload(payload, self.exec_meta.get)
@@ -554,6 +681,8 @@ class TradingLoop:
                 # dispatch on Quote.path: the exchange rejects an order sent to the wrong path (Bot 4)
                 res = ex.execute_rfq(order, quote) if quote.path == ExecutionPath.RFQ else ex.execute_swap(order, quote)
             except Exception as e:  # never let an exchange error kill the loop
+                if livemod.is_session_expired(e):
+                    self._session_expired(e)
                 res = ExecutionResult(client_order_id=decision_id, symbol=sym, side=side, status=OrderStatus.FAILED,
                                       path=OrderRequest.model_fields["path"].default, mode=mode, error=f"{type(e).__name__}: {e}")
             finally:
@@ -564,6 +693,10 @@ class TradingLoop:
             while len(self.exec_meta) > 5000:
                 self.exec_meta.popitem(last=False)
         livemod.record_execution(self.c.risk, res)  # Bot 3: LIVE BUY fills count towards the daily notional cap
+        if not self.sim:
+            self.wallet_settings.invalidate()  # wallet quota changed: re-read baw settings before the next trade
+            if res.error and livemod.is_session_expired(res.error):
+                self._session_expired(res.error)
         if self.live and side == OrderSide.BUY and res.status in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED):
             self._record_live_buy(res)
         self.bus.publish(EventType.EXECUTION, res, decision_id=decision_id)
@@ -580,21 +713,30 @@ class TradingLoop:
             try:
                 quote = self.c.exchange.get_quote(signal.symbol, OrderSide.BUY, notional)
             except Exception as e:  # market closed / no liquidity / below minimum: a normal decision, not a crash
+                if livemod.is_session_expired(e):
+                    self._session_expired(e)
+                note = self._maybe_cooldown(signal.symbol, e)
                 return self._finalize(Decision(id=did, action=Action.STAY_OUT, risk_verdict=verdict,
-                                               reason=f"BUY not executed: no quote ({_quote_error(e)})", **base))
+                                               reason=f"BUY not executed: no quote ({_quote_error(e)}){note}", **base))
             v2 = self._risk_check(signal, self.book.portfolio(), self.control(), quote=quote)
             if not v2.approved:
                 return self._finalize(Decision(id=did, action=Action.STAY_OUT, risk_verdict=v2,
                                                reason="BUY not executed: " + _blocked(v2.reasons), **base))
             verdict = v2
         res = self._execute(OrderSide.BUY, signal.symbol, notional, did, quote=quote)
+        if not self.sim and livemod.is_waiting_on_chain(res):  # submitted; the lot opens once the chain confirms
+            self.chain_pending[res.order_id] = {"res": res, "notional": notional, "signal": signal, "verdict": verdict,
+                                                "base": base, "decision_id": did, "since": utc_now()}
+            return self._finalize(Decision(id=did, action=Action.BUY, risk_verdict=verdict, execution=res,
+                                           reason=f"BUY submitted, waiting on chain{' (tx ' + res.tx_hash + ')' if res.tx_hash else ''}; {signal.reason}", **base))
         if res.status in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED) and res.filled_quantity > 0:
             spent = notional if res.status == OrderStatus.FILLED else res.notional + res.fee
             self.book.open_lot(res, spent, signal.strategy, self._exit_rules(), self._now())
             return self._finalize(Decision(id=did, action=Action.BUY, risk_verdict=verdict, execution=res,
                                            reason=signal.reason, **base))
+        note = self._maybe_cooldown(signal.symbol, res.error) if res.error else ""
         return self._finalize(Decision(id=did, action=Action.STAY_OUT, risk_verdict=verdict, execution=res,
-                                       reason=f"BUY not filled ({res.status.value}{': ' + res.error if res.error else ''}); {signal.reason}", **base))
+                                       reason=f"BUY not filled ({res.status.value}{': ' + res.error if res.error else ''}){note}; {signal.reason}", **base))
 
     def _exit(self, lots: list[Lot], signal: Signal, reason: Optional[ExitReason], regime: Optional[Regime],
               verdict: Optional[RiskVerdict]) -> Decision:

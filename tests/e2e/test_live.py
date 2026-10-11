@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import timedelta
+from typing import Optional
 
 import pytest
 from fastapi.testclient import TestClient
@@ -349,7 +350,7 @@ def test_live_status_and_system_block():
     c, _ = live_client()
     ls = c.get("/api/live/status").json()
     assert ls == {"live_trading_enabled": True, "binance_live_enabled": True, "risk_allow_live": True, "wallet_connected": True,
-                  "can_trade": True, "blocked_reasons": []}
+                  "can_trade": True, "blocked_reasons": [], "cooldowns": [], "chain_pending": []}
     assert c.get("/api/system").json()["live"] == ls
     c.post("/api/control/emergency-stop", json={"reason": "test"})
     ls = c.get("/api/live/status").json()
@@ -475,3 +476,163 @@ def test_autostart_default_agent_is_auto(tmp_path):
         lp = c.get("/api/loop").json()
         assert lp["running"] and lp["agent_mode"] == "AUTO" and lp["active_symbol"] == SYM
         c.post("/api/loop/stop")
+
+
+# ---------------------------------------------------------------- exchange states: cooldown, session, chain, market context
+class QuoteX(Quote):
+    """Bot 4 PR #9 quotes carry price impact (percent units)."""
+    price_impact_pct: Optional[float] = None
+
+
+def test_off_hours_error_sets_20_min_cooldown():
+    c, ex = live_client()
+    ex.get_quote = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("QuoteUnavailable: bStock market closed (40369)"))
+    d = _buy(first_buy_tick(c, ex))
+    assert d["action"] == "STAY_OUT" and "40369" in d["reason"] and "cooling down until" in d["reason"]
+    cds = c.get("/api/live/status").json()["cooldowns"]
+    assert cds and cds[0]["symbol"] == SYM and cds[0]["code"] == "40369"
+    ds = c.post("/api/loop/tick").json()
+    assert any("cooling down" in x["reason"] and x["action"] == "STAY_OUT" for x in ds)
+
+
+def test_wallet_session_expired_pauses_and_alerts():
+    c, ex = live_client()
+    ex.get_quote = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("WALLET_SESSION_EXPIRED: baw session expired"))
+    _buy(first_buy_tick(c, ex))
+    ctrl = c.get("/api/control").json()
+    assert ctrl["paused"] and "session expired" in ctrl["reason"].lower()
+    assert any(a["code"] == "WALLET_SESSION_EXPIRED" for a in c.get("/api/alerts").json())
+    assert any("Paused" in r for r in c.get("/api/live/status").json()["blocked_reasons"])
+
+
+def test_waiting_on_chain_then_confirmed():
+    class ChainEx(FakeLiveExchange):
+        def _execute(self, order, quote, path):
+            res = super()._execute(order, quote, path)
+            self.final = res
+            return res.model_copy(update={"status": OrderStatus.PENDING_CONFIRMATION, "filled_quantity": 0.0})
+
+        def refresh_execution(self, res):
+            return self.final
+    c, ex = live_client(ex=ChainEx())
+    d = _buy(first_buy_tick(c, ex))
+    assert d["action"] == "BUY" and "waiting on chain" in d["reason"] and d["execution"]["status"] == "PENDING_CONFIRMATION"
+    assert not c.get("/api/portfolio").json()["positions"] and c.get("/api/live/status").json()["chain_pending"]
+    oid = d["execution"]["order_id"]
+    c.post("/api/control/pause", json={"reason": "no new entries"})
+    c.post("/api/loop/tick")
+    assert len(c.get("/api/portfolio").json()["positions"]) == 1
+    assert oid not in [p["order_id"] for p in c.get("/api/live/status").json()["chain_pending"]]
+    d2 = c.get(f"/api/decisions/{d['id']}").json()
+    assert d2["execution"]["status"] == "FILLED" and "confirmed on chain" in d2["reason"]
+
+
+def test_engine_market_context_and_price_impact_passthrough():
+    import dataclasses
+    from backend.app.fallbacks import FallbackStrategyEngine
+
+    @dataclasses.dataclass
+    class Cfg:
+        max_order_usdt: float = 99.0
+
+    class SpyEngine(FallbackStrategyEngine):
+        live_config = Cfg()
+        seen: list = []
+
+        def set_market_context(self, symbol, ctx):
+            self.seen.append((symbol, ctx))
+
+    class ImpactEx(FakeLiveExchange):
+        impact = 0.35
+
+        def get_quote(self, symbol, side, notional, path=ExecutionPath.SWAP):
+            q = super().get_quote(symbol, side, notional, path)
+            q = QuoteX(**q.model_dump(), price_impact_pct=self.impact)
+            self._quotes[q.quote_id] = q
+            return q
+
+        def get_token_status(self, symbol):
+            return {"trading_status": "trading", "min_order_usdt": None, "reference_price_only": False}
+
+    eng = SpyEngine()
+    s = live_settings()
+    risk = ContextRisk(control=__import__("backend.contracts", fromlist=["ControlState"]).ControlState(trading_mode=TradingMode.LIVE), live_allowed=True)
+    ex = ImpactEx()
+    c = TestClient(create_app(s, build_components(s, exchange=ex, risk=risk, engine=eng)))
+    d = _buy(first_buy_tick(c, ex))
+    assert d["execution"]["status"] == "FILLED"
+    sym, ctx = eng.seen[0]
+    assert sym == SYM and ctx == {"status": "trading", "reference_price_only": False, "priceImpactPercent": 0.35, "equity": 200.0}
+    assert eng.live_config.max_order_usdt == 25.0  # from risk.live_limits()['per_order_cap_usdt']
+    assert risk.contexts[1].price_impact_pct == 0.35 and risk.contexts[1].token_status is not None
+    eng2, ex2 = SpyEngine(), ImpactEx()
+    eng2.seen = []
+    ex2.impact = None  # null -> None, never 0
+    risk2 = ContextRisk(control=__import__("backend.contracts", fromlist=["ControlState"]).ControlState(trading_mode=TradingMode.LIVE), live_allowed=True)
+    c2 = TestClient(create_app(s, build_components(s, exchange=ex2, risk=risk2, engine=eng2)))
+    first_buy_tick(c2, ex2)
+    assert "priceImpactPercent" not in eng2.seen[-1][1] and risk2.contexts and risk2.contexts[-1].price_impact_pct is None
+
+
+def test_agent_identity_in_system(monkeypatch):
+    import sys
+    import types
+    c, _ = live_client()
+    monkeypatch.setitem(sys.modules, "backend.agent_studio", types.SimpleNamespace(get_agent_identity=lambda: None))
+    assert c.get("/api/system").json()["agent_identity"] is None
+    ident = {"erc8004_id": "42", "registry": "0xabc", "studio_version": "1.0", "extra": 1}
+    monkeypatch.setitem(sys.modules, "backend.agent_studio", types.SimpleNamespace(get_agent_identity=lambda: ident))
+    import backend
+    monkeypatch.setattr(backend, "agent_studio", sys.modules["backend.agent_studio"], raising=False)
+    assert c.get("/api/system").json()["agent_identity"] == {"erc8004_id": "42", "registry": "0xabc", "studio_version": "1.0"}
+
+
+# ---------------------------------------------------------------- engine <-> risk agreement on the price-impact block
+def _parity_available() -> bool:
+    try:
+        from backend.engine.engine import DefaultStrategyEngine
+        from backend.risk import LiveContext
+        return "price_impact_pct" in LiveContext.model_fields and hasattr(DefaultStrategyEngine, "set_market_context")
+    except Exception:
+        return False
+
+
+@pytest.mark.skipif(not _parity_available(), reason="needs bot2/live engine (set_market_context) and bot3/live LiveContext.price_impact_pct")
+@pytest.mark.parametrize("impact", [0.5, 0.99, 1.0, 1.01, 1.5, 2.5])
+def test_engine_and_risk_agree_on_price_impact_threshold(impact):
+    """Both block a LIVE BUY when price impact > 1% and allow exactly 1%."""
+    from backend.contracts import ControlState
+    from backend.engine.engine import DefaultStrategyEngine
+    from backend.risk import DefaultRiskManager, LiveContext, RiskConfig
+    now = utc_now()
+    ex = FakeLiveExchange()
+    shift = (now - timedelta(minutes=30)) - ex.series[ex.cursor - 1].timestamp
+    candles = [b.model_copy(update={"timestamp": b.timestamp + shift}) for b in ex.series[:ex.cursor]]
+    strat = trading_strategy(SYM, activation="AUTO_EXECUTE").model_copy(deep=True)
+    d = strat.model_dump()
+    d["entry"]["rsi_below"]["threshold"] = 100
+    from backend.contracts import ManualStrategy
+    strat = ManualStrategy.model_validate(d)
+    pf = Portfolio(starting_capital=1000, cash=1000, equity=1000, mode=TradingMode.LIVE)
+
+    eng = DefaultStrategyEngine(live_safe=True, clock=lambda: now)
+    eng.set_market_context(SYM, {"status": "trading", "reference_price_only": False, "priceImpactPercent": impact, "equity": 1000})
+    sig = eng.evaluate_manual(strat, candles, pf)
+    engine_blocks = sig.action != Action.BUY and "impact" in (sig.reason + " ".join(sig.conditions_failed or [])).lower()
+    if sig.action != Action.BUY and not engine_blocks:
+        pytest.skip(f"engine stays out for another reason: {sig.reason}")
+
+    risk = DefaultRiskManager(control=ControlState(trading_mode=TradingMode.LIVE, confirmation_mode=False),
+                              config=RiskConfig(allow_live=True))
+    price = candles[-1].close
+    q = Quote(symbol=SYM, side=OrderSide.BUY, notional=20, quantity=20 / price, price=price, created_at=now,
+              expires_at=now + timedelta(seconds=30))
+    ctx = LiveContext(now=now, data_timestamp=now, reference_price=price, quote=q, balances={"USDT": 1000.0, "BNB": 0.05},
+                      price_impact_pct=impact)
+    buy = Signal(symbol=SYM, action=Action.BUY, source=AgentMode.MANUAL, strategy="x", reason="x", proposed_notional=20, price=price)
+    v = risk.check(buy, pf, risk.get_control_state(), context=ctx)
+    impact_checks = [c for c in v.checks if "impact" in c.name or "impact" in c.detail.lower()]
+    risk_blocks = any(not c.passed for c in impact_checks)
+
+    assert engine_blocks == (impact > 1.0), (impact, sig.reason)
+    assert risk_blocks == (impact > 1.0), (impact, [c.model_dump() for c in impact_checks])

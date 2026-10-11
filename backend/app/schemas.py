@@ -105,11 +105,14 @@ class LiveStatus(_M):
     wallet_connected: bool
     can_trade: bool
     blocked_reasons: list[str] = Field(default_factory=list)
+    cooldowns: list[dict] = Field(default_factory=list, description="[{symbol, until, code, reason}] after 40367/40369/40374")
+    chain_pending: list[dict] = Field(default_factory=list, description="BUYs submitted and waiting on chain")
 
 
 class SystemInfoView(SystemInfo):
     """SystemInfo + `live` block. Contract request: add `live: Optional[LiveStatus]` to SystemInfo."""
     live: LiveStatus
+    agent_identity: Optional[dict] = Field(default=None, description="Bot 5 agent_studio: {erc8004_id, registry, studio_version}")
 
 
 class WalletBalance(_M):
