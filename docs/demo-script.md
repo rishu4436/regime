@@ -17,9 +17,9 @@ Only show what is on the screen. If something isn't there on the day, skip it an
 - [ ] Backend running in **LIVE** mode on Rishu's PC. The red **LIVE · MAINNET** tag shows at the top of the dashboard.
 - [ ] Dashboard started with `VITE_API_MODE=http`, so it shows the real backend and not mock data.
   (The one-command `run.sh` / `run.ps1` does this. If the **Demo LIVE scenario** toggle is visible, you are on mock data.)
-- [ ] Wallet connected. If the top bar shows **Reconnect wallet**, click it and scan the QR in the Binance App.
+- [ ] Wallet connected. If the status bar at the top shows a red **Reconnect wallet** button, click it and scan the QR in the Binance App.
   When it's connected, the top bar shows only the wallet address.
-- [ ] The agent is running **Auto** mode with **Grid** on **NVDAB**, and the two NVDAB lots show under **Open positions**.
+- [ ] The agent is running **Auto** mode with **Grid** on **NVDAB**, and the three NVDAB lots show under **Open positions**.
 - [ ] Two BscScan tabs open in the background, one for each tx above.
 - [ ] Trading limits panel visible on the dashboard (it is on main since PR #23).
 - [ ] Decide how to show Emergency stop (see 2:05). In LIVE it sells the open lots on the next bar.
@@ -39,7 +39,7 @@ Only show what is on the screen. If something isn't there on the day, skip it an
 | 0:15 | Point at the red **LIVE · MAINNET** tag and banner. | "This is live. Real money, on BNB Smart Chain mainnet." |
 | 0:22 | **Agent** card: market regime, active strategy (Grid), token NVDAB. | "Regime reads the market first. Right now NVDAB is in this regime, so Regime picked one strategy for it: Grid. It runs one strategy at a time." |
 | 0:32 | Autonomy monitor: running since, last tick, next tick. | "This shows it's alive. It checks the market every tick, around the clock." |
-| 0:38 | **Open positions**: the two NVDAB lots. | "These are the two NVDAB positions it holds now." |
+| 0:38 | **Open positions**: the three NVDAB lots. | "These are the three NVDAB positions it holds now, each about 10 USDT." |
 
 ## 0:45–1:10: A decision and its reason
 
@@ -62,7 +62,7 @@ Only show what is on the screen. If something isn't there on the day, skip it an
 
 | Time | Shot | Say |
 |---|---|---|
-| 1:40 | **Trading limits** card. Click through **Order size**: Strategy decides, Fixed USDT, % of wallet. | "You set how much Regime may trade. Let the strategy decide the size, use a fixed amount in USDT, or a percent of the wallet." |
+| 1:40 | Sidebar, **Agent** group: open the **Trading limits** tab. Click through **Order size**: Strategy decides, Fixed USDT, % of wallet. | "You set how much Regime may trade. Let the strategy decide the size, use a fixed amount in USDT, or a percent of the wallet." |
 | 1:50 | Point at Max per order, Max total invested, Max in one token, Daily loss limit, Daily buy limit. | "Then hard caps: per order, in total, per token, daily loss and daily buys. You can change them while it runs. The wallet's own daily limit in the Binance App stays the final cap." |
 | 1:58 | Optional: set Fixed USDT above Max per order, save, show the red message, then click **Undo changes**. | "A bad value gets a plain sentence, not an error code, and nothing changes." |
 
@@ -71,8 +71,8 @@ Only show what is on the screen. If something isn't there on the day, skip it an
 | Time | Shot | Say |
 |---|---|---|
 | 2:05 | A stay-out or a blocked risk check in the Activity feed, with its reason. | "Every trade goes through the risk layer first. It can block any trade, and it always says why." |
-| 2:12 | Click **❚❚ Pause**, show "Paused", then click **▶ Resume**. | "One click pauses it." |
-| 2:18 | Click **■ Emergency stop**. Show the confirm dialog, then click **Cancel**. | "Emergency stop blocks every new buy and closes open positions. It stays on until you reset it." |
+| 2:12 | In the status bar at the top (it is on every tab), click **❚❚ Pause**, show "Paused", then click **▶ Resume**. | "One click pauses it." |
+| 2:18 | Click **■ Emergency stop** in the same bar. Show the confirm dialog (the "Close all positions now" toggle starts off), then click **Cancel**. | "Emergency stop blocks every new buy and closes open positions. It stays on until you reset it." |
 
 **Emergency stop in LIVE:** confirming it sells the open NVDAB lots on the next bar. Only confirm if Rishu wants that. Otherwise show the dialog and cancel, as above.
 
@@ -80,7 +80,7 @@ Only show what is on the screen. If something isn't there on the day, skip it an
 
 | Time | Shot | Say |
 |---|---|---|
-| 2:25 | **Agent identity** card (BNB Agent Studio · ERC-8004). Show the three steps: create identity wallet, fund it with BNB for gas, register. | "Regime is ready for an on-chain identity with BNB Agent Studio, using ERC-8004. It uses a separate small wallet that never touches trading funds." |
+| 2:25 | Sidebar: **Agent identity** tab, then the **Agent identity** card (BNB Agent Studio · ERC-8004). Show the three steps: create identity wallet, fund it with BNB for gas, register. | "Regime is ready for an on-chain identity with BNB Agent Studio, using ERC-8004. It uses a separate small wallet that never touches trading funds." |
 | 2:32 | Card reads "not registered yet". | "It's ready, but not registered yet." |
 
 <!-- AGENT STUDIO REGISTRATION: if Rishu registers before recording, replace the 2:32 row with:
@@ -95,7 +95,7 @@ ERC-8004 id: <ID>
 |---|---|---|
 | 2:35 | **Auto Mode** tab: the watchlist picker. Search the full token list (about 680 tokenized stocks) and show the Watchlist (up to 5). | "Regime can watch up to five tokens at once, picked from about 680 tokenized stocks on BNB Chain." |
 | 2:40 | Turn on **Auto-pick tokens** and choose a theme, such as AI & chips. Show the picks with their reasons. | "Or let Auto-pick choose them by theme, using momentum, trend and volume. Each pick says why, and the risk limits cover all of them together." |
-| 2:47 | Dashboard **Watchlist** card with the Auto-pick pill. | "It checks each one every tick." |
+| 2:47 | Back to the **Dashboard** tab: the **Watchlist** card with the Auto-pick pill. | "It checks each one every tick." |
 
 ## 2:50–2:55: Manual Strategy Builder
 
