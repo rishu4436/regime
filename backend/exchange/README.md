@@ -52,6 +52,7 @@ and a LIVE client (signed HMAC requests + Agentic Wallet) — LIVE must be opt-i
 ### Behaviour callers must know (Bot 6)
 - Dispatch on `quote.path`: `RFQ` -> `execute_rfq`, `SWAP` -> `execute_swap`. The wrong one returns `REJECTED`
   (real API: Ondo is always RFQ, BStock RFQ/SWAP, xStock SWAP).
+- SIM replay: `sim.set_replay_index(i)` pins time to bar `i` of the `sim.n_bars(symbol)`-bar series (candles up to i, price = bar i close, quotes/fills at that price; clamped; `None` = default). `sim.replay_index` reads it.
 - A quote is single-use and expires 30 s after creation (`EXPIRED`).
 - `get_quote` in PAPER/LIVE raises `QuoteUnavailable` (with `.code`, e.g. 40367 market closed, 40375 < 20 USD,
   40374 no liquidity). SIM never raises for known tokens. Unknown symbols raise.

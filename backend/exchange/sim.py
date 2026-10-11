@@ -7,6 +7,8 @@ the execution rules follow the real API (https://web3.binance.com/en/dev-docs/pr
 - Executing a quote on the wrong path is REJECTED (real API: RFQ routes have no `tx`, SWAP routes have no `rfq`).
 - Ondo minimum order 20 USD (40375 ONDO_FROM_USD_AMOUNT_TOO_SMALL) -> REJECTED.
 - Optional US-market-hours gate (40367 / 40369) and simulated latency, both off by default.
+- Replay: `set_replay_index(i)` pins the "current" bar to index i of the fixed n_candles-bar series, so
+  candles/prices/quotes/fills behave as if time stood at bar i (for bar-by-bar SIM loops).
 Never touches the network and refuses LIVE.
 """
 from __future__ import annotations
@@ -16,6 +18,7 @@ from typing import Callable, Optional
 
 from backend.contracts import (
     QUOTE_TTL_SECONDS,
+    Candle,
     ExecutionPath,
     ExecutionResult,
     OrderRequest,
@@ -23,12 +26,13 @@ from backend.contracts import (
     OrderStatus,
     Quote,
     Regime,
+    Timeframe,
     TokenInfo,
     TokenType,
     TradingMode,
     utc_now,
 )
-from backend.mocks import MockExchangeClient
+from backend.mocks import MockExchangeClient, generate_candles
 from backend.mocks.exchange import FEE_RATE, RFQ_FEE_RATE
 
 from .errors import BSTOCK_INVALID_TRADING_TIME, ONDO_FROM_USD_AMOUNT_TOO_SMALL, ONDO_MARKET_STATE_NOT_TRADABLE
@@ -74,6 +78,52 @@ class SimulatedBinanceClient(MockExchangeClient):
         self.enforce_paths = enforce_paths
         self._latency = latency_s
         self._sleep = sleep
+        self._replay_index: Optional[int] = None
+        self._series_cache: dict[tuple, list[Candle]] = {}
+
+    # ------------------------------------------------------------------ replay
+    @property
+    def replay_index(self) -> Optional[int]:
+        """Requested replay bar index (None = live/full-series behaviour). Clamped per symbol when used."""
+        return self._replay_index
+
+    def set_replay_index(self, i: Optional[int]) -> None:
+        """Pin the current bar to index `i` (0 = oldest) of each symbol's `n_bars(symbol)`-bar series.
+
+        - get_candles(symbol, tf, limit) -> bars[0..i] (inclusive), then the last `limit` of that slice.
+        - get_price(symbol) -> bars[i].close (a set_price() override still wins), so get_quote and fills use it.
+        - Out-of-range i is clamped to [0, n_bars-1]; None restores the default full-series behaviour.
+        """
+        self._replay_index = None if i is None else int(i)
+
+    def n_bars(self, symbol: str) -> int:
+        """Length of the replayable series for `symbol` (the client's n_candles; same for every symbol)."""
+        self._token(symbol)
+        return self._n
+
+    def _series(self, symbol: str, timeframe: Timeframe) -> list[Candle]:
+        tok = self._token(symbol)
+        regime = self._regimes.get(symbol, Regime.SIDEWAYS)
+        key = (symbol, timeframe, regime, tok.price)
+        if key not in self._series_cache:
+            self._series_cache[key] = generate_candles(regime, n=self._n, seed=self._seed,
+                                                       start_price=tok.price or 100.0, timeframe=timeframe)
+        return self._series_cache[key]
+
+    def _clamped_index(self, symbol: str) -> int:
+        assert self._replay_index is not None
+        return max(0, min(self._replay_index, self.n_bars(symbol) - 1))
+
+    def get_candles(self, symbol: str, timeframe: Timeframe = Timeframe.H1, limit: int = 200) -> list[Candle]:
+        if self._replay_index is None:
+            return super().get_candles(symbol, timeframe, limit)
+        upto = self._series(symbol, timeframe)[: self._clamped_index(symbol) + 1]
+        return upto[-limit:] if limit > 0 else []
+
+    def get_price(self, symbol: str) -> float:
+        if self._replay_index is None or symbol in self._price_override:
+            return super().get_price(symbol)
+        return self._series(symbol, Timeframe.H1)[self._clamped_index(symbol)].close
 
     def _maybe_sleep(self) -> None:
         if self._latency > 0:
