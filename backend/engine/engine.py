@@ -90,8 +90,8 @@ class DefaultStrategyEngine:
         'closed'|'no liquidity'|'paused'; Binance ``statusInfo`` marketStatus/openState/reasonCode also accepted),
         ``reference_price_only``, ``price_impact_pct`` or ``priceImpactPercent`` (percent units, from a quote),
         ``reference_price``, ``equity`` (USDT hint). Applies to BUYs only: off-hours / closed / no liquidity /
-        paused / reference_price_only -> STAY_OUT 'live_token_paused'; impact > 2% -> STAY_OUT 'live_price_impact';
-        impact > 1% -> size x0.5. SELLs are never blocked.
+        paused / reference_price_only -> STAY_OUT 'live_token_paused'; impact > max_price_impact_pct (1%) ->
+        STAY_OUT 'live_price_impact' (impact None / unparseable = unknown: no block). SELLs are never blocked.
         """
         norm = normalize_market_context(ctx)
         if norm is None:
@@ -106,7 +106,8 @@ class DefaultStrategyEngine:
     def _live_block(
         self, symbol: str, cs: Sequence[Candle], bar_seconds: int, base: dict, met: Sequence[str] = ()
     ) -> Optional[Signal]:
-        blocks = market_blockers(symbol, self._market.get(symbol), self.live_config)
+        # Token status gates whenever a context is set; the price-impact gate is part of live_safe.
+        blocks = market_blockers(symbol, self._market.get(symbol), self.live_config, check_impact=self.live_safe)
         if self.live_safe:
             blocks = entry_blockers(symbol, cs, bar_seconds, self.clock(), self.live_config) + blocks
         if not blocks:
@@ -125,10 +126,6 @@ class DefaultStrategyEngine:
         """(size %, notional, reason note, blocking STAY_OUT or None) for a BUY."""
         ctx = self._market.get(symbol)
         if not self.live_safe:
-            imp = ctx.get("price_impact_pct") if ctx else None
-            if imp is not None and imp > self.live_config.impact_halve_pct:
-                pct *= 0.5
-                return pct, equity * pct / 100, f" [price impact {imp:.2f}% -> size x0.5]", None
             return pct, equity * pct / 100, "", None
         d = live_size(symbol, pct, equity, cs, self.live_config, ctx)
         if d.blocker is not None:

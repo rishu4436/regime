@@ -233,27 +233,41 @@ def test_market_context_paused_blocks_buys_not_sells(status):
     )
 
 
-def test_price_impact_gates():
+def test_price_impact_gate_matches_risk_1pct():
     s = always_in("NVDAB", volume=False)
     cs = extended("NVDAB")
-    half = live(market_context={"NVDAB": {"status": "open", "price_impact_pct": 1.5}}).evaluate_manual(s, cs, pf())
-    assert half.action == Action.BUY and half.proposed_notional == pytest.approx(10.0) and "price impact" in half.reason
-    quote = {"status": "trading", "priceImpactPercent": "1.5"}  # Web3 quote route key, percent units
-    assert live(market_context={"NVDAB": quote}).evaluate_manual(s, cs, pf()).proposed_notional == pytest.approx(10.0)
-    tiny = {"priceImpactPercent": 0.0001}  # NVDAon 25 USDT quote seen by Bot 4
-    assert live(market_context={"NVDAB": tiny}).evaluate_manual(s, cs, pf()).proposed_notional == pytest.approx(20.0)
-    out = live(market_context={"NVDAB": {"price_impact_pct": 2.5}}).evaluate_manual(s, cs, pf())
-    assert out.action == Action.STAY_OUT and out.conditions_failed == ["live_price_impact"]
-    ok = live(market_context={"NVDAB": {"price_impact_pct": 0.0001, "reference_price": 230.475}})
-    assert ok.evaluate_manual(s, cs, pf()).proposed_notional == pytest.approx(20.0)
-    # Ondo: halving 20 -> 10 USDT would fall below the 20 USD minimum -> stay out (never bump a halved order)
-    o = live(market_context={"NVDAon": {"price_impact_pct": 1.5}})
+
+    def run(ctx, **cfg):
+        return live(market_context={"NVDAB": ctx}, **cfg).evaluate_manual(s, cs, pf())
+
+    # > 1% -> STAY_OUT, no size-halving band any more
+    for ctx in ({"price_impact_pct": 1.5}, {"priceImpactPercent": "1.01"}, {"priceImpactPercent": 2.5}):
+        sig = run({"status": "trading", **ctx})
+        assert sig.action == Action.STAY_OUT and sig.conditions_failed == ["live_price_impact"]
+    # <= 1% -> full live-safe size (20 USDT on 1000), strings parsed with float()
+    for imp in ("0.35", 0.35, "1", 1.0, "0.0001", 0, "0", -0.2):
+        sig = run({"status": "trading", "priceImpactPercent": imp})
+        assert sig.action == Action.BUY and sig.proposed_notional == pytest.approx(20.0), imp
+        assert "impact" not in sig.reason
+    # null / unparseable = unknown: no block, no halving
+    for ctx in ({"priceImpactPercent": None}, {"priceImpactPercent": "n/a"}, {"price_impact_pct": "nan"}, {}):
+        sig = run(ctx)
+        assert sig.action == Action.BUY and sig.proposed_notional == pytest.approx(20.0)
+    # either key is accepted; the first parseable one wins
+    assert run({"price_impact_pct": None, "priceImpactPercent": "1.2"}).conditions_failed == ["live_price_impact"]
+    assert run({"price_impact_pct": "0.2", "priceImpactPercent": "5"}).action == Action.BUY
+    # configurable threshold
+    assert run({"priceImpactPercent": "1.5"}, max_price_impact_pct=2.0).action == Action.BUY
+    # Ondo at 1.5%: blocked by the impact gate (no halving, so no min-order interaction)
+    o = live(market_context={"NVDAon": {"priceImpactPercent": "1.5"}})
     sig = o.evaluate_manual(always_in("NVDAon", volume=False), extended("NVDAon"), pf())
-    assert sig.conditions_failed == ["live_below_min_order"] and "price impact halved" in sig.reason
-    # Market context also gates the SIM/PAPER engine without live_safe (explicit real-world input)
+    assert sig.conditions_failed == ["live_price_impact"]
+    o = live(market_context={"NVDAon": {"priceImpactPercent": "0.35"}})
+    assert o.evaluate_manual(always_in("NVDAon", volume=False), extended("NVDAon"), pf()).proposed_notional == 20.0
+    # Without live_safe the impact gate is off (sizes unchanged); token status still gates
     plain = DefaultStrategyEngine(market_context={"NVDAB": {"price_impact_pct": 1.5}})
     p = plain.evaluate_manual(s, cs, pf())
-    assert p.action == Action.BUY and p.proposed_size_pct == pytest.approx(5.0)
+    assert p.action == Action.BUY and p.proposed_size_pct == pytest.approx(10.0)
     assert normalize_market_context({"priceImpactPercent": "nan", "status": None}) == {
         "status": None,
         "reference_price_only": False,
@@ -270,7 +284,7 @@ def test_config_validation_new_fields():
         {"max_order_usdt": 0},
         {"min_order_usdt": {"ondo": -1}},
         {"equity_hint_usdt": 0},
-        {"impact_halve_pct": 3},
+        {"max_price_impact_pct": 0},
     ):
         with pytest.raises(ValueError):
             LiveSafetyConfig(**bad)

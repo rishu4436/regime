@@ -54,9 +54,9 @@ class LiveSafetyConfig:
     bump_to_min_order: bool = True
     max_order_usdt: float = 25.0  # never propose more than this per BUY (Bot 3's live per-order cap)
     equity_hint_usdt: Optional[float] = None  # if set, size from min(equity, hint) (e.g. the real wallet balance)
-    # Market context (DefaultStrategyEngine.set_market_context): quote price impact gates.
-    impact_halve_pct: float = 1.0  # impact > 1% -> size x0.5
-    impact_max_pct: float = 2.0  # impact > 2% -> STAY_OUT 'live_price_impact'
+    # Market context (DefaultStrategyEngine.set_market_context): quote price impact (percent units) above this ->
+    # STAY_OUT 'live_price_impact'. Same 1% limit as Bot 3's risk check. Unknown impact (None) never blocks.
+    max_price_impact_pct: float = 1.0
 
     def __post_init__(self) -> None:
         if not (0 < self.size_factor <= 1) or not (0 < self.max_size_pct <= 100):
@@ -71,8 +71,8 @@ class LiveSafetyConfig:
             raise ValueError("max_order_usdt must be > 0 and min_order_usdt values >= 0")
         if self.equity_hint_usdt is not None and self.equity_hint_usdt <= 0:
             raise ValueError("equity_hint_usdt must be > 0")
-        if not (0 < self.impact_halve_pct <= self.impact_max_pct):
-            raise ValueError("0 < impact_halve_pct <= impact_max_pct")
+        if not self.max_price_impact_pct > 0:
+            raise ValueError("max_price_impact_pct must be > 0")
 
 
 @dataclass(frozen=True)
@@ -177,6 +177,16 @@ def _num(v: Any) -> Optional[float]:
     return f if f == f and f not in (float("inf"), float("-inf")) else None
 
 
+def parse_price_impact(ctx: Mapping[str, Any]) -> Optional[float]:
+    """Price impact in PERCENT units from ``price_impact_pct`` or the Web3 quote's ``priceImpactPercent`` (Bot 4
+    sends a string, e.g. '0.35' = 0.35%). Parsed with float(); None / unparseable / NaN / inf -> None (unknown)."""
+    for key in ("price_impact_pct", "priceImpactPercent"):
+        v = _num(ctx.get(key))
+        if v is not None:
+            return v
+    return None
+
+
 def normalize_market_context(ctx: Optional[Mapping[str, Any]]) -> Optional[dict]:
     """Accepts the engine shape ``{status, price_impact_pct, reference_price, equity}`` and the raw Binance
     ``statusInfo`` shape (``marketStatus``/``openState``/``reasonCode``). Unknown keys are ignored."""
@@ -191,13 +201,15 @@ def normalize_market_context(ctx: Optional[Mapping[str, Any]]) -> Optional[dict]
         "reference_price_only": bool(ctx.get("reference_price_only", ctx.get("referencePriceOnly", False))),
         "open_state": ctx.get("openState", ctx.get("open_state")),
         "reason_code": (str(ctx.get("reasonCode", ctx.get("reason_code")) or "").upper() or None),
-        "price_impact_pct": _num(ctx.get("price_impact_pct", ctx.get("priceImpactPercent"))),
+        "price_impact_pct": parse_price_impact(ctx),
         "reference_price": _num(ctx.get("reference_price", ctx.get("referencePrice"))),
         "equity": _num(ctx.get("equity")),
     }
 
 
-def market_blockers(symbol: str, ctx: Optional[dict], cfg: LiveSafetyConfig) -> list[tuple[str, str]]:
+def market_blockers(
+    symbol: str, ctx: Optional[dict], cfg: LiveSafetyConfig, check_impact: bool = True
+) -> list[tuple[str, str]]:
     if not ctx:
         return []
     out = []
@@ -212,8 +224,8 @@ def market_blockers(symbol: str, ctx: Optional[dict], cfg: LiveSafetyConfig) -> 
             )
         )
     imp = ctx.get("price_impact_pct")
-    if imp is not None and imp > cfg.impact_max_pct:
-        out.append(("live_price_impact", f"quote price impact {imp:.2f}% > {cfg.impact_max_pct:g}%"))
+    if check_impact and imp is not None and imp > cfg.max_price_impact_pct:
+        out.append(("live_price_impact", f"quote price impact {imp:.4g}% > {cfg.max_price_impact_pct:g}%"))
     return out
 
 
@@ -233,8 +245,8 @@ def live_size(
     cfg: LiveSafetyConfig,
     ctx: Optional[dict] = None,
 ) -> SizeDecision:
-    """Live-safe BUY size: x size_factor, cap max_size_pct, x thin-liquidity factor (volume families only),
-    x0.5 on price impact > impact_halve_pct; then the per-family min-order floor and the max_order_usdt cap."""
+    """Live-safe BUY size: x size_factor, cap max_size_pct, x thin-liquidity factor (volume families only); then
+    the per-family min-order floor and the max_order_usdt cap. (Price impact is a gate, not a size factor.)"""
     fam = token_family(symbol)
     basis = equity
     hint = ctx.get("equity") if ctx else None
@@ -248,23 +260,15 @@ def live_size(
         if thin:
             pct *= factor
             steps.append(thin)
-    halved = False
-    imp = ctx.get("price_impact_pct") if ctx else None
-    if imp is not None and imp > cfg.impact_halve_pct:
-        pct *= 0.5
-        halved = True
-        steps.append(f"price impact {imp:.2f}% > {cfg.impact_halve_pct:g}% x0.5")
     notional = basis * pct / 100
     if basis != equity:
         steps.append(f"equity basis {basis:g}")
     floor = cfg.min_order_usdt.get(fam, 0.0)
     if floor > 0 and notional < floor:
-        can_bump = cfg.bump_to_min_order and not halved and floor <= cfg.max_order_usdt and floor <= basis
+        can_bump = cfg.bump_to_min_order and floor <= cfg.max_order_usdt and floor <= basis
         if not can_bump:
             why = (
-                "price impact halved the size"
-                if halved
-                else f"floor > max order {cfg.max_order_usdt:g} USDT"
+                f"floor > max order {cfg.max_order_usdt:g} USDT"
                 if floor > cfg.max_order_usdt
                 else f"floor > equity {basis:g}"
                 if floor > basis

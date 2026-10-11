@@ -316,16 +316,15 @@ New `LiveSafetyConfig` fields:
 - `min_order_usdt` (default `{"ondo": 20.0}`; other families have no floor) and `bump_to_min_order` (default True)
 - `max_order_usdt` (default 25.0)
 - `equity_hint_usdt` (optional; sizes from min(equity, hint))
-- `impact_halve_pct` (default 1.0) and `impact_max_pct` (default 2.0)
+- `max_price_impact_pct` (default 1.0, the same limit Bot 3's risk applies)
 
 **BUY sizing order:**
 1. proposed % ×0.25, capped at 2%
 2. thin-liquidity ×0.5 (volume families only)
-3. price impact > 1% → ×0.5
-4. notional on min(equity, hint)
-5. below the family's min order → bump to the floor, but only if the floor ≤ `max_order_usdt`, the floor ≤ the
-   equity basis, and the size was not halved for price impact. Otherwise STAY_OUT `live_below_min_order`.
-6. Never above `max_order_usdt` (25 USDT).
+3. notional on min(equity, hint)
+4. below the family's min order → bump to the floor, but only if the floor ≤ `max_order_usdt` and the floor ≤ the
+   equity basis. Otherwise STAY_OUT `live_below_min_order`.
+5. Never above `max_order_usdt` (25 USDT).
 
 `proposed_size_pct` is always `notional / equity × 100`.
 
@@ -334,17 +333,19 @@ New `LiveSafetyConfig` fields:
 - `status`: Bot 3's `trading` / `off-hours` / `closed` / `no liquidity`, also `open` / `paused`, or the raw Binance
   `statusInfo` keys `marketStatus` / `openState` / `reasonCode`. Status is case-, `-`-, `_`- and space-insensitive.
 - `reference_price_only`
-- `price_impact_pct`, or the Web3 quote's per-route `priceImpactPercent` (percent units, e.g. 0.0001)
+- `price_impact_pct`, or the Web3 quote's per-route `priceImpactPercent`. Both are percent units (e.g. `'0.35'` =
+  0.35%), may be strings, and are parsed with `float()`. `null`, unparseable, NaN or inf = unknown: no block and no
+  size change.
 - `reference_price`
 - `equity`
 
 Effects on BUYs only (SELLs are never blocked):
 - off-hours, closed, no liquidity, paused, `openState=false`, a reasonCode of ASSET_PAUSED / MARKET_PAUSED /
   MAINTENANCE, or `reference_price_only` → STAY_OUT `live_token_paused`
-- price impact > 2% → STAY_OUT `live_price_impact`
-- price impact > 1% → size ×0.5
+- `live_safe` only: price impact > `max_price_impact_pct` (1%) → STAY_OUT `live_price_impact`. There is no
+  size-halving band, matching Bot 3, which rejects any live buy above 1% impact.
 
-The context gates apply even without `live_safe`, because the loop only sets a context when it has real data.
+The token-status gate applies even without `live_safe`, because the loop only sets a context when it has real data.
 
 ### Fixtures
 `tests/fixtures/binance/` holds real public samples (see Tests above). They only have 48 bars, so
