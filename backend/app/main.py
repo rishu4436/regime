@@ -223,13 +223,57 @@ def create_app(settings: Optional[Settings] = None, components: Optional[Compone
         return L.reset_limits()
 
     # ---------------------------------------------------------------- market data
-    @app.get("/api/tokens", response_model=list[TokenView])
-    def tokens(q: str = "") -> list[TokenView]:
+    def _narrative(row: dict) -> str:
+        """Narrative CODE (AI_CHIPS, EV_ENERGY, BIG_TECH, CRYPTO) or 'other' - Bot 5's plain sector map, no Grok."""
+        try:
+            from backend.llm.narratives import narrative_of
+        except Exception:
+            return "other"
+        try:
+            return narrative_of(row["symbol"], row.get("name")) or narrative_of(row.get("underlying") or "") or "other"
+        except Exception:
+            return "other"
+
+    @app.get("/api/tokens")
+    def tokens(q: str = "", all: bool = False) -> list[dict]:
+        """Default: search_tokens(q) as TokenView + token_status (unchanged) plus top-level status / tradable /
+        min_order_usdt / max_order_usdt / narrative. all=1: Bot 4's full list_tokens() rows (~680, cached 10 min)
+        filtered by q, each with `narrative`."""
+        if all and callable(getattr(comps.exchange, "list_tokens", None)):
+            ql = q.strip().lower()
+            rows = [r for r in L.token_rows(all_tokens=True) if not ql or ql in str(r.get("symbol", "")).lower()
+                    or ql in str(r.get("name") or "").lower() or ql in str(r.get("underlying") or "").lower()]
+            return [{**r, "narrative": _narrative(r)} for r in rows]
         toks = comps.exchange.search_tokens(q)
         if L.sim:
             toks = [t.model_copy(update={"price": guard(L.view_price, t.symbol)}) for t in toks]
-        # + token_status (Bot 4 get_token_status, cached ~60 s; null if unavailable)
-        return [TokenView(**t.model_dump(), token_status=L.token_status(t.symbol)) for t in toks]
+        out = []
+        for t in toks:  # + token_status (Bot 4 get_token_status, cached ~60 s; null if unavailable)
+            d = TokenView(**t.model_dump(), token_status=L.token_status(t.symbol)).model_dump(mode="json")
+            ts = d.get("token_status") or {}
+            st = ts.get("trading_status")
+            d.update(type=d.get("token_type"), status=getattr(st, "value", st), tradable=ts.get("tradable"),
+                     min_order_usdt=ts.get("min_order_usdt"), max_order_usdt=ts.get("max_order_usdt"))
+            d["narrative"] = _narrative(d)
+            out.append(d)
+        return out
+
+    @app.get("/api/watchlist")
+    def watchlist() -> dict:
+        """{watchlist, configured_watchlist, auto_pick, picks, skipped, explanations, per_token:[{symbol, watched,
+        regime, signal, action, reason, held, position, position_usdt}], updated_at}."""
+        return L.watchlist_view()
+
+    @app.get("/api/autopick")
+    def autopick(narrative: str = "ANY", max_tokens: int = 3) -> dict:
+        """Preview Auto-pick without activating: {picks:[{symbol, narrative, score, reason}], skipped, explanations}."""
+        if not 1 <= max_tokens <= 5:
+            raise HTTPException(422, "max_tokens must be between 1 and 5")
+        nar = (narrative or "ANY").strip().upper()
+        if nar not in ("AI_CHIPS", "EV_ENERGY", "BIG_TECH", "CRYPTO", "ANY"):
+            raise HTTPException(422, "narrative must be one of AI_CHIPS, EV_ENERGY, BIG_TECH, CRYPTO, ANY")
+        with L.lock:
+            return L.compute_picks(nar, max_tokens)
 
     @app.get("/api/candles/{symbol}", response_model=list[Candle])
     def candles(symbol: str, timeframe: Timeframe = Timeframe.H1, limit: Optional[int] = None, history: bool = False) -> list[Candle]:

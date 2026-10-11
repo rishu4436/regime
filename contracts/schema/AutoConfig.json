@@ -9,6 +9,38 @@
       "title": "ActivationMode",
       "type": "string"
     },
+    "AutoPickConfig": {
+      "additionalProperties": false,
+      "description": "Watchlist Auto-pick (v0.3): pick up to ``max_tokens`` tradable tokens of one narrative by momentum/trend/liquidity.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "max_tokens": {
+          "default": 3,
+          "maximum": 5,
+          "minimum": 1,
+          "title": "Max Tokens",
+          "type": "integer"
+        },
+        "narrative": {
+          "default": "ANY",
+          "enum": [
+            "AI_CHIPS",
+            "EV_ENERGY",
+            "BIG_TECH",
+            "CRYPTO",
+            "ANY"
+          ],
+          "title": "Narrative",
+          "type": "string"
+        }
+      },
+      "title": "AutoPickConfig",
+      "type": "object"
+    },
     "PresetName": {
       "enum": [
         "DCA",
@@ -48,6 +80,18 @@
       "$ref": "#/$defs/ActivationMode",
       "default": "CONFIRMATION"
     },
+    "auto_pick": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AutoPickConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "v0.3: pick the watchlist automatically"
+    },
     "capital": {
       "description": "USDT allocated to the auto agent",
       "exclusiveMinimum": 0,
@@ -73,6 +117,15 @@
     "timeframe": {
       "$ref": "#/$defs/Timeframe",
       "default": "1h"
+    },
+    "watchlist": {
+      "description": "v0.3: up to 5 tokens for the auto agent; empty = [symbol]. `symbol` stays the first entry",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 5,
+      "title": "Watchlist",
+      "type": "array"
     }
   },
   "required": [
