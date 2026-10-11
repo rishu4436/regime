@@ -175,9 +175,10 @@ export function ManualBuilder({ strategy: s, setStrategy, capital, setCapital, r
           <div className="group">
             <div className="group-title">Exit rules</div>
             <div className="field-grid" style={{ marginBottom: 6 }}>
-              <div><span className="lbl">Take profit</span><NumberInput value={x.take_profit_pct} min={0} step={0.5} suffix="%" onChange={(v) => up((d) => { d.exit.take_profit_pct = n(v, 12); })} /></div>
-              <div><span className="lbl">Stop loss</span><NumberInput value={x.stop_loss_pct} min={0} step={0.5} suffix="%" onChange={(v) => up((d) => { d.exit.stop_loss_pct = n(v, 6); })} /></div>
+              <div><span className="lbl">Take profit · safety rail</span><NumberInput value={x.take_profit_pct} min={0} step={0.5} suffix="%" onChange={(v) => up((d) => { d.exit.take_profit_pct = n(v, 12); })} /></div>
+              <div><span className="lbl">Stop loss · safety rail</span><NumberInput value={x.stop_loss_pct} min={0} step={0.5} suffix="%" onChange={(v) => up((d) => { d.exit.stop_loss_pct = n(v, 6); })} /></div>
             </div>
+            <div className="note" style={{ marginTop: 0, marginBottom: 8 }}><span className="pill" style={{ fontSize: ".66rem", marginRight: 6 }}>safety rail</span>Take profit and stop loss are always on: every position, from any strategy, closes at these levels.</div>
             <RuleRow on={x.trailing_stop.enabled} onToggle={(v) => up((d) => { d.exit.trailing_stop.enabled = v; })} title="Trailing stop" hint="Ratchets up behind the price">
               <NumberInput value={x.trailing_stop.pct} min={0} step={0.5} suffix="%" width={78} onChange={(v) => up((d) => { d.exit.trailing_stop.pct = n(v, 4); })} />
             </RuleRow>

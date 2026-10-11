@@ -125,7 +125,7 @@ export function AutoMode({ config: c, setConfig, status, onActivated, tick }: Pr
                 </tbody>
               </table>
             )}
-            {table && <div className="note" style={{ padding: "0 4px" }}>All presets enabled. Cells dimmed when you've disabled that preset; the agent then stays out instead.</div>}
+            {table && <div className="note" style={{ padding: "0 4px" }}>All presets enabled. Cells dimmed when you've disabled that preset; the agent then falls back to plain DCA if it's enabled, otherwise stays out (paused regimes always stay out). DCA and Smart DCA never sell on a signal: their exits come from risk's take-profit and stop-loss safety rails.</div>}
           </div>
         </Card>
         <Card title="Preset agents">

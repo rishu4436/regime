@@ -25,6 +25,8 @@ export interface LiveLimits {
   stale_after_s?: number | null;             // 900
   bnb_gas_reserve?: number | null;           // 0.002 BNB
   fee_buffer_usdt?: number | null;
+  /** Smallest wallet that can place a live buy: token minimum order + fee buffer (bot3/live-fixes). */
+  min_wallet_usdt?: number | null;
   market_hours_utc?: string | null;
   daily_used_usdt?: number | null;           // LIVE BUY notional filled today
   daily_loss_usdt?: number | null;           // today's realized + unrealized loss

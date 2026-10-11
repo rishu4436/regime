@@ -231,6 +231,10 @@ export function WalletPanel() {
   const bnb = wallet?.balances.find((b) => balAsset(b) === "BNB");
   const gasLow = reserve != null && bnb ? balAmount(bnb) < reserve * 2 : false, gasOut = reserve != null && bnb ? balAmount(bnb) < reserve : false;
   const total = wallet?.balances.reduce((a, b) => a + (balValue(b) ?? 0), 0);
+  const minWallet = wallet?.limits?.min_wallet_usdt ?? null;
+  const usdtBal = wallet?.balances.find((b) => balAsset(b) === "USDT");
+  const usdtAmt = usdtBal ? balValue(usdtBal) ?? balAmount(usdtBal) : null;
+  const tooSmall = minWallet != null && usdtAmt != null && usdtAmt < minWallet;
   return (
     <Card title="Wallet" extra={<>{wallet && <span className={`pill ${wallet.connected ? "ok" : "bad"}`}><span className="dot" />{wallet.connected ? "connected" : "disconnected"}</span>}
       <button className="btn ghost" style={{ padding: "3px 9px", marginLeft: 6 }} onClick={refresh} title="Refresh balances">↻</button></>}>
@@ -244,6 +248,8 @@ export function WalletPanel() {
         <>
           {gasLow && <div className={`banner ${gasOut ? "red" : "amber"}`} style={{ marginBottom: 10 }}><span className="grow small">
             <b>{gasOut ? "Out of gas reserve:" : "BNB gas running low:"}</b> {balAmount(bnb!).toFixed(4)} BNB, reserve {reserve} BNB. {gasOut ? "New buys are blocked until you top up." : "Top up soon or buys will be blocked."}</span></div>}
+          {tooSmall && <div className="banner amber" style={{ marginBottom: 10 }}><span className="grow small">
+            <b>Wallet too small to trade live:</b> {usd(usdtAmt)} USDT, buys need about {usd(minWallet, 0)} or more (token minimum order plus fees){reserve != null ? `, plus ~${Math.max(0.005, reserve * 2.5).toFixed(3)} BNB for gas` : ""}. The agent stays out until you top up.</span></div>}
           <div className="kv">
             <span className="k">Address</span>
             <span>{wallet.address ? <><a className="mono" href={bscAddr(wallet.address)} target="_blank" rel="noreferrer" title={wallet.address}>{shortHex(wallet.address, 8)} ↗</a>

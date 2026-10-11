@@ -97,7 +97,7 @@ export class MockApi implements ApiClient {
     const loss = Math.max(0, -(this.portfolio.daily_pnl ?? 0) - (this.portfolio.positions ?? []).reduce((a, p) => a + (p.unrealized_pnl ?? 0), 0));
     return { live_allowed: true, per_order_cap_usdt: LIVE_CAP, daily_loss_cap_usdt: LIVE_DAILY_LOSS, daily_notional_cap_usdt: LIVE_DAILY_NOTIONAL,
       daily_limit_usdt: LIVE_DAILY_NOTIONAL, max_exposure_usdt: LIVE_EXPOSURE, max_slippage_pct: 1, stale_after_s: 900, bnb_gas_reserve: LIVE_GAS_RESERVE,
-      fee_buffer_usdt: 1, market_hours_utc: null, daily_used_usdt: this.dailyNotional, daily_loss_usdt: loss, open_exposure_usdt: exposure,
+      fee_buffer_usdt: 1, min_wallet_usdt: 70, market_hours_utc: null, daily_used_usdt: this.dailyNotional, daily_loss_usdt: loss, open_exposure_usdt: exposure,
       daily_remaining_usdt: Math.max(0, LIVE_DAILY_NOTIONAL - this.dailyNotional), warnings: exposure > Math.max(0, LIVE_DAILY_NOTIONAL - this.dailyNotional) ? [`Exit reserve: ${Math.max(0, LIVE_DAILY_NOTIONAL - this.dailyNotional).toFixed(2)} USDT of daily quota left can't cover selling all open positions (${exposure.toFixed(2)} USDT)`] : [], limit_source: { per_order_cap_usdt: "risk", daily_limit_usdt: "risk" },
       allowed_tokens: "ALL", tradable_tokens: TOKENS.filter((t) => !/x$/.test(t.symbol)).map((t) => t.symbol), wallet: { daily_limit_usdt: 200, per_order_cap_usdt: 50, allowed_tokens: null } };
   }
