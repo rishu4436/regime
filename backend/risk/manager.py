@@ -5,8 +5,8 @@ Deterministic, no network, no secrets. Inject ``clock`` in tests. See backend/ri
 from __future__ import annotations
 
 import threading
-from datetime import date, datetime
-from typing import Callable, Optional
+from datetime import date, datetime, timedelta
+from typing import Any, Callable, Mapping, Optional
 
 from backend.contracts import (
     Action,
@@ -28,7 +28,8 @@ from backend.contracts import (
 )
 
 from .config import RiskConfig, SymbolRiskRules
-from .live import LiveContext, as_utc, in_market_hours
+from .limits import apply_live_settings, profile_to_settings
+from .live import LiveContext, LiveRiskProfile, WalletLimits, as_utc, in_market_hours
 from .exits import Bar, ExitLevels, compute_levels, evaluate_bar, max_loss_level
 
 # Exit reasons produced by the risk layer itself (protective exits that never wait for user confirmation).
@@ -75,6 +76,8 @@ class DefaultRiskManager:
         self._live_bought: dict[date, float] = {}  # UTC day -> LIVE BUY notional filled (from record_execution)
         self._live_pending: dict[str, tuple[date, float]] = {}
         self._live_filled_ids: set[str] = set()  # client_order_id -> (UTC day, quoted notional) in flight
+        self._startup_live: LiveRiskProfile = self._config.live  # 'Reset to safe defaults' restores these values
+        self._reserved: dict[str, tuple[str, float, datetime]] = {}  # key -> (symbol, notional, expires_at)
 
     # ------------------------------------------------------------------ configuration
     @property
@@ -183,9 +186,15 @@ class DefaultRiskManager:
 
     # ------------------------------------------------------------------ check
     def check(self, signal: Signal, portfolio: Portfolio, control: ControlState,
-              context: Optional[LiveContext] = None) -> RiskVerdict:
+              context: Optional[LiveContext] = None, *, reserve_as: Optional[str] = None) -> RiskVerdict:
         """``context`` (optional, Bot 3 extension) carries LIVE facts: now, data_timestamp/bar, quote, balances,
-        reference_price, daily_live_notional_usdt. In LIVE, missing facts make the matching guard fail safe."""
+        reference_price, daily_live_notional_usdt. In LIVE, missing facts make the matching guard fail safe.
+
+        ``reserve_as`` (optional, BUY only): a key for this order (e.g. the decision id). An approved BUY then holds
+        its ``adjusted_notional`` as a reservation that every LATER check counts toward the caps (open positions, cash,
+        per-token / total / LIVE exposure, LIVE daily buys, wallet quota and balance) until ``release_reservation(key)``,
+        ``record_execution`` with ``client_order_id == key``, or expiry. A re-check with the same key replaces it (and a
+        blocked re-check drops it). Without ``reserve_as`` existing reservations are still counted."""
         with self._lock:
             if self._is_live(control, portfolio):
                 self._enforce_daily_loss_cap(portfolio, context)
@@ -196,7 +205,89 @@ class DefaultRiskManager:
                     detail=f"Signal is STAY_OUT - nothing to execute ({signal.reason})")], 0.0, 0.0, False)
             if signal.action == Action.SELL:
                 return self._check_sell(signal, portfolio, ctl)
-            return self._check_buy(signal, portfolio, ctl, context or LiveContext())
+            verdict = self._check_buy(signal, portfolio, ctl, context or LiveContext(), reserve_as)
+            if reserve_as is not None:
+                if verdict.approved and verdict.adjusted_notional > 0:
+                    self._reserved[reserve_as] = (signal.symbol, verdict.adjusted_notional,
+                                                  as_utc(self._clock()) + timedelta(seconds=self.RESERVATION_TTL_S))
+                else:
+                    self._reserved.pop(reserve_as, None)
+            return verdict
+
+    # ------------------------------------------------------------------ same-tick reservations (watchlist)
+    RESERVATION_TTL_S = 900.0  # safety net only: callers release explicitly (app confirmation window is 300 s)
+
+    def _active_reservations(self, exclude: Optional[str] = None) -> list[tuple[str, str, float]]:
+        """[(key, symbol, notional)] of unexpired reservations (expired ones are dropped). Caller holds the lock."""
+        now = as_utc(self._clock())
+        for k in [k for k, (_, _, exp) in self._reserved.items() if exp <= now]:
+            del self._reserved[k]
+        return [(k, sym, n) for k, (sym, n, _) in self._reserved.items() if k != exclude]
+
+    def reserve_buy(self, key: str, symbol: str, notional: float, ttl_seconds: Optional[float] = None) -> None:
+        """Manually hold ``notional`` USDT of ``symbol`` under ``key`` (same effect as ``check(..., reserve_as=key)``)."""
+        if not key:
+            raise ValueError("reservation key is required")
+        if not (notional > 0 and notional != float("inf")):
+            raise ValueError("reservation notional must be a positive number")
+        ttl = self.RESERVATION_TTL_S if ttl_seconds is None else float(ttl_seconds)
+        with self._lock:
+            self._reserved[key] = (symbol, float(notional), as_utc(self._clock()) + timedelta(seconds=ttl))
+
+    def release_reservation(self, key: str) -> bool:
+        """Drop the reservation held under ``key``; True if there was one. Call once the order is in the portfolio
+        (filled lot / in-flight synthetic position) or will not happen (blocked, no quote, failed, rejected, expired)."""
+        with self._lock:
+            return self._reserved.pop(key, None) is not None
+
+    def clear_reservations(self) -> int:
+        """Drop every reservation (e.g. agent switched / deactivated); returns how many were dropped."""
+        with self._lock:
+            n = len(self._reserved)
+            self._reserved.clear()
+            return n
+
+    def reservations(self) -> list[dict]:
+        """Unexpired reservations for the UI / logs: [{key, symbol, notional_usdt, expires_at}]."""
+        with self._lock:
+            self._active_reservations()
+            return [{"key": k, "symbol": sym, "notional_usdt": n, "expires_at": exp.isoformat()}
+                    for k, (sym, n, exp) in self._reserved.items()]
+
+    # ------------------------------------------------------------------ runtime trading limits (dashboard panel)
+    def live_limits_settings(self, wallet_limits: Optional[WalletLimits] = None) -> dict:
+        """Current 'Trading limits' panel values: {order_mode, order_usdt, order_pct, max_order_usdt, max_total_usdt,
+        max_per_token_usdt, daily_loss_usdt, daily_buy_usdt, defaults: {same keys}, wallet_daily_limit_usdt, notes: []}.
+        ``wallet_daily_limit_usdt`` is ``wallet_limits.daily_limit_usdt`` when supplied, else None."""
+        with self._lock:
+            out = profile_to_settings(self._config.live)
+            out["defaults"] = profile_to_settings(self._startup_live)
+        out["wallet_daily_limit_usdt"] = wallet_limits.daily_limit_usdt if wallet_limits is not None else None
+        out["notes"] = []
+        return out
+
+    def set_live_limits(self, settings: Mapping[str, Any], wallet_limits: Optional[WalletLimits] = None) -> dict:
+        """Validate and apply panel settings atomically (all or nothing; missing keys keep their value). Takes effect
+        on the next ``check`` - no restart. Raises ``ValueError`` (plain-English, '; '-joined) and changes nothing on
+        any invalid value. Returns ``live_limits_settings(wallet_limits)`` with ``notes`` (e.g. daily buy limit raised)."""
+        with self._lock:
+            new_lp, notes = apply_live_settings(self._config.live, settings, wallet_limits)
+            self._config = self._config.model_copy(update={"live": new_lp})
+            out = self.live_limits_settings(wallet_limits)
+        out["notes"] = notes
+        return out
+
+    def reset_live_limits(self, wallet_limits: Optional[WalletLimits] = None) -> dict:
+        """'Reset to safe defaults': restore the panel fields to the values this manager started with."""
+        keys = ("order_mode", "order_usdt", "order_pct", "max_order_notional_usdt", "max_open_exposure_usdt",
+                "max_token_exposure_usdt", "max_daily_loss_usdt", "max_daily_notional_usdt")
+        with self._lock:
+            d = self._startup_live
+            new_lp = self._config.live.model_copy(update={k: getattr(d, k) for k in keys})
+            self._config = self._config.model_copy(update={"live": new_lp})
+            out = self.live_limits_settings(wallet_limits)
+        out["notes"] = ["Trading limits reset to the safe defaults"]
+        return out
 
     def _is_live(self, control: ControlState | None, portfolio: Portfolio) -> bool:
         return TradingMode.LIVE in (self._control.trading_mode, portfolio.mode,
@@ -240,6 +331,9 @@ class DefaultRiskManager:
         cap (keyed by UTC day). A PENDING buy counts at once at ``result.notional`` or ``quote_notional`` (if notional is
         0) and is keyed by ``client_order_id``; a later FILLED/PARTIALLY_FILLED result for the same id replaces it with the
         real fill, and REJECTED/EXPIRED/FAILED releases it. Calling twice with the same final result is not double-counted."""
+        if result.side == OrderSide.BUY:  # any mode/status: the order now counts via the portfolio / LIVE ledger
+            with self._lock:
+                self._reserved.pop(result.client_order_id, None)  # same-tick reservation keyed by this order id
         if result.mode != TradingMode.LIVE or result.side != OrderSide.BUY:
             return
         coid = result.client_order_id
@@ -270,7 +364,12 @@ class DefaultRiskManager:
                 "(realized today + unrealized); all positions are being closed. Reset requires reset_emergency_stop()."))
 
     def live_limits(self, portfolio: Optional[Portfolio] = None, context: Optional[LiveContext] = None) -> dict:
-        """Active LIVE limits for the UI (/api/wallet). Usage fields are None when the inputs are not supplied."""
+        """Active LIVE limits for the UI (/api/wallet). Usage fields are None when the inputs are not supplied.
+        Reflects runtime changes from ``set_live_limits`` / ``reset_live_limits``."""
+        with self._lock:
+            return self._live_limits(portfolio, context)
+
+    def _live_limits(self, portfolio: Optional[Portfolio], context: Optional[LiveContext]) -> dict:
         lp = self._config.live
         eff = self._effective_caps(context)
         wl = context.wallet_limits if context else None
@@ -294,6 +393,11 @@ class DefaultRiskManager:
                 "allowed_tokens": wl.allowed_tokens, "allowed_contracts": wl.allowed_contracts,
                 "source": wl.source, "fetched_at": wl.fetched_at.isoformat() if wl.fetched_at else None},
             "max_exposure_usdt": lp.max_open_exposure_usdt,
+            "max_token_exposure_usdt": (lp.max_token_exposure_usdt if lp.max_token_exposure_usdt is not None
+                                        else lp.max_open_exposure_usdt),
+            "order_mode": lp.order_mode,
+            "order_usdt": lp.order_usdt,
+            "order_pct": lp.order_pct,
             "max_slippage_pct": lp.max_slippage_pct,
             "max_favorable_impact_pct": lp.max_favorable_impact_pct,
             "stale_after_s": lp.max_data_age_seconds,
@@ -560,7 +664,24 @@ class DefaultRiskManager:
             f"(per-order cap {_fmt(per['per_order'])}, set by {per['per_order_src']})"
             + ("" if ok else " - re-quote for the approved size"))))
 
-    def _check_buy(self, signal: Signal, portfolio: Portfolio, ctl: ControlState, ctx: LiveContext) -> RiskVerdict:
+    def _user_order_target(self, live: bool, ctx: LiveContext, portfolio: Portfolio) -> Optional[tuple[float, str]]:
+        """LIVE only: (target notional, explanation) from the user's order-size setting, or None = strategy size."""
+        lp = self._config.live
+        if not live:
+            return None
+        if lp.order_mode == "pct" and lp.order_pct:
+            if ctx.balances is not None:
+                bal, where = self._balance(ctx, lp.quote_asset), f"wallet {lp.quote_asset}"
+            else:
+                bal, where = max(portfolio.cash, 0.0), "cash (wallet balance not supplied)"
+            target = bal * lp.order_pct / 100.0
+            return target, f"order size setting {lp.order_pct:g}% of {where} {_fmt(bal)} = {_fmt(target)} USDT"
+        if lp.order_mode == "fixed" and lp.order_usdt:
+            return lp.order_usdt, f"order size setting {_fmt(lp.order_usdt)} USDT per order"
+        return None
+
+    def _check_buy(self, signal: Signal, portfolio: Portfolio, ctl: ControlState, ctx: LiveContext,
+                   reserve_as: Optional[str] = None) -> RiskVerdict:
         cfg = self._config
         prules, erules, activation = cfg.rules_for(signal.symbol)
         checks: list[RiskCheck] = [RiskCheck(name="signal_action", passed=True, detail=f"BUY {signal.symbol} proposed by {signal.strategy}")]
@@ -573,10 +694,20 @@ class DefaultRiskManager:
         checks.append(RiskCheck(name="paused", passed=not ctl.paused,
                                 detail="Agent is paused - new entries are blocked" if ctl.paused else "Agent is running"))
 
-        n_open = len(portfolio.positions)
+        reserved = self._active_reservations(exclude=reserve_as)
+        res_total = sum(n for _, _, n in reserved)
+        res_token = sum(n for _, sym, n in reserved if sym == signal.symbol)
+        if reserved:
+            checks.append(RiskCheck(name="reserved_orders", passed=True, detail=(
+                f"{len(reserved)} other approved BUY(s) not executed yet ("
+                + ", ".join(f"{sym} {_fmt(n)}" for _, sym, n in reserved)
+                + f" = {_fmt(res_total)} USDT) count toward positions, cash, exposure and daily limits")))
+
+        n_open = len(portfolio.positions) + len(reserved)
         checks.append(RiskCheck(
             name="max_open_positions", passed=n_open < prules.max_open_positions,
-            detail=f"{n_open} open position(s), limit {prules.max_open_positions}"
+            detail=f"{n_open} open position(s)" + (f" incl. {len(reserved)} approved BUY(s) not executed yet" if reserved else "")
+            + f", limit {prules.max_open_positions}"
             + ("" if n_open < prules.max_open_positions else " - limit reached")))
 
         bse = portfolio.bars_since_exit.get(signal.symbol)
@@ -621,20 +752,26 @@ class DefaultRiskManager:
         if equity <= 0:
             checks.append(RiskCheck(name="position_size", passed=False, detail="Portfolio equity is zero - cannot size an order"))
         else:
-            base_pct = prules.position_size_pct
-            want_pct = base_pct
-            src = f"rule {base_pct}% of equity"
-            if signal.proposed_notional > 0:
-                want_pct = signal.proposed_notional / equity * 100.0
-                src = f"signal asked {_fmt(signal.proposed_notional)} USDT ({want_pct:.2f}%)"
-            elif signal.proposed_size_pct > 0:
-                want_pct = signal.proposed_size_pct
-                src = f"signal asked {want_pct}%"
-            pct = min(want_pct, base_pct)
-            notional = equity * pct / 100.0
-            checks.append(RiskCheck(name="position_size", passed=True, detail=(
-                f"{src}; size {pct:.2f}% of equity {_fmt(equity)} = {_fmt(notional)} USDT"
-                + (f" (capped at max {base_pct}%)" if want_pct > base_pct else ""))))
+            user = self._user_order_target(live, ctx, portfolio)
+            if user is not None:  # LIVE + user order-size setting: replaces the strategy / %-of-equity size
+                notional, why = user
+                checks.append(RiskCheck(name="position_size", passed=True, detail=(
+                    f"LIVE {why} (replaces the strategy size; every cap below still applies)")))
+            else:
+                base_pct = prules.position_size_pct
+                want_pct = base_pct
+                src = f"rule {base_pct}% of equity"
+                if signal.proposed_notional > 0:
+                    want_pct = signal.proposed_notional / equity * 100.0
+                    src = f"signal asked {_fmt(signal.proposed_notional)} USDT ({want_pct:.2f}%)"
+                elif signal.proposed_size_pct > 0:
+                    want_pct = signal.proposed_size_pct
+                    src = f"signal asked {want_pct}%"
+                pct = min(want_pct, base_pct)
+                notional = equity * pct / 100.0
+                checks.append(RiskCheck(name="position_size", passed=True, detail=(
+                    f"{src}; size {pct:.2f}% of equity {_fmt(equity)} = {_fmt(notional)} USDT"
+                    + (f" (capped at max {base_pct}%)" if want_pct > base_pct else ""))))
 
             def cap(name: str, limit: float, what: str, hard: bool = False, reached: str = "") -> None:
                 """reached = text used if THIS cap turns out to be what pushed the order under the minimum."""
@@ -651,14 +788,16 @@ class DefaultRiskManager:
                 else:
                     checks.append(RiskCheck(name=name, passed=True, detail=f"{what}: {_fmt(notional)} USDT fits"))
 
-            cap("cash_available", portfolio.cash, f"Cash available {_fmt(portfolio.cash)} USDT", hard=True)
-            token_exp = sum(self._position_value(p) for p in portfolio.positions if p.symbol == signal.symbol)
+            cash = portfolio.cash - res_total
+            cap("cash_available", cash, f"Cash available {_fmt(cash)} USDT"
+                + (f" (after {_fmt(res_total)} USDT reserved)" if reserved else ""), hard=True)
+            token_exp = sum(self._position_value(p) for p in portfolio.positions if p.symbol == signal.symbol) + res_token
             token_lim = equity * cfg.max_token_exposure_pct / 100.0
             cap("max_token_exposure", token_lim - token_exp,
                 f"{signal.symbol} exposure {_fmt(token_exp)} USDT, limit {cfg.max_token_exposure_pct}% = {_fmt(token_lim)} USDT",
                 reached=(f"{signal.symbol} exposure limit reached: {_fmt(token_exp)} of {_fmt(token_lim)} USDT used "
                          f"({cfg.max_token_exposure_pct}% of equity)"))
-            total_exp = sum(self._position_value(p) for p in portfolio.positions)
+            total_exp = sum(self._position_value(p) for p in portfolio.positions) + res_total
             total_lim = equity * cfg.max_total_exposure_pct / 100.0
             cap("max_total_exposure", total_lim - total_exp,
                 f"Total exposure {_fmt(total_exp)} USDT, limit {cfg.max_total_exposure_pct}% = {_fmt(total_lim)} USDT",
@@ -680,7 +819,12 @@ class DefaultRiskManager:
                     f"LIVE open exposure {_fmt(total_exp)} USDT, cap {_fmt(lp.max_open_exposure_usdt)} USDT", hard=True,
                     reached=(f"LIVE exposure limit reached: {_fmt(total_exp)} of {_fmt(lp.max_open_exposure_usdt)} "
                              "USDT used"))
-                used = self.daily_live_notional_used(ctx)
+                if lp.max_token_exposure_usdt is not None:
+                    cap("live_token_exposure", lp.max_token_exposure_usdt - token_exp,
+                        f"LIVE {signal.symbol} exposure {_fmt(token_exp)} USDT, cap {_fmt(lp.max_token_exposure_usdt)} USDT",
+                        hard=True, reached=(f"LIVE {signal.symbol} limit reached: {_fmt(token_exp)} of "
+                                            f"{_fmt(lp.max_token_exposure_usdt)} USDT used"))
+                used = self.daily_live_notional_used(ctx) + res_total
                 cap("live_daily_notional", lp.max_daily_notional_usdt - used,
                     f"LIVE bought today {_fmt(used)} USDT, daily cap {_fmt(lp.max_daily_notional_usdt)} USDT", hard=True,
                     reached=(f"LIVE daily buy limit reached: {_fmt(used)} of {_fmt(lp.max_daily_notional_usdt)} "
@@ -692,6 +836,7 @@ class DefaultRiskManager:
                             f"Wallet per-transaction limit {_fmt(wl.per_tx_limit_usdt)} USDT", hard=True)
                     wleft = wl.daily_remaining_usdt()
                     if wleft is not None:
+                        wleft = max(0.0, wleft - res_total)
                         cap("wallet_daily_limit", wleft,
                             f"Wallet daily limit {self._opt(wl.daily_limit_usdt)}, used {self._opt(wl.daily_used_usdt)}, "
                             f"left {_fmt(wleft)} USDT", hard=True)
@@ -702,7 +847,7 @@ class DefaultRiskManager:
                                 f"sell it later, so the buy is at most (left - open exposure) / 2"
                                 f" = {_fmt(max((wleft - total_exp) / 2.0, 0.0))} USDT"), hard=True)
                 if ctx.balances is not None:
-                    stable = self._balance(ctx, lp.quote_asset)
+                    stable = self._balance(ctx, lp.quote_asset) - res_total
                     cap("live_wallet_balance", stable - lp.fee_buffer_usdt,
                         f"Wallet {lp.quote_asset} {_fmt(stable)} minus fee buffer {_fmt(lp.fee_buffer_usdt)}", hard=True)
 
@@ -747,7 +892,7 @@ class DefaultRiskManager:
             if live:
                 self._live_quote_checks(signal, ctx, notional, checks)
                 if ctx.quote is not None and ctx.balances is not None:
-                    stable = self._balance(ctx, lp.quote_asset)
+                    stable = self._balance(ctx, lp.quote_asset) - res_total
                     ok = ctx.quote.notional + ctx.quote.fee <= stable - lp.fee_buffer_usdt + 1e-9
                     checks.append(RiskCheck(name="live_wallet_quote", passed=ok, detail=(
                         f"Quote spends {_fmt(ctx.quote.notional + ctx.quote.fee)} {lp.quote_asset} incl. fee; wallet "

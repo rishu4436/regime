@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, time, timedelta, timezone
-from typing import Any, Mapping, Optional
+from typing import Any, Literal, Mapping, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -29,6 +29,14 @@ class LiveRiskProfile(BaseModel):
         default=25.0, gt=0, description="Today's realized + unrealized loss cap; hitting it triggers EMERGENCY STOP")
     max_daily_notional_usdt: float = Field(default=100.0, gt=0, description="Max LIVE BUY notional filled per UTC day")
     max_open_exposure_usdt: float = Field(default=50.0, gt=0, description="Max total value of open positions incl. new order")
+    max_token_exposure_usdt: Optional[float] = Field(default=None, gt=0, description=(
+        "Max value held in ONE token incl. the new order. None = same as max_open_exposure_usdt (no extra limit)"))
+
+    # Order sizing set by the user (dashboard 'Trading limits' panel). Default = the strategy's own size (unchanged).
+    order_mode: Literal["fixed", "pct"] = Field(default="fixed", description=(
+        "'fixed' = order_usdt per LIVE BUY (None = use the strategy's size); 'pct' = order_pct % of the wallet stablecoin"))
+    order_usdt: Optional[float] = Field(default=None, gt=0, description="Fixed LIVE BUY size in USDT (fixed mode)")
+    order_pct: Optional[float] = Field(default=None, gt=0, le=100, description="LIVE BUY size as % of wallet USDT (pct mode)")
 
     max_data_age_seconds: float = Field(default=900.0, gt=0, description="BUY blocked if the latest price/bar is older")
     max_future_skew_seconds: float = Field(default=60.0, ge=0, description="BUY blocked if the data timestamp is this far in the future")
