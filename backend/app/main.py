@@ -100,6 +100,11 @@ def create_app(settings: Optional[Settings] = None, components: Optional[Compone
     async def lifespan(app: FastAPI):
         st.aio = asyncio.get_running_loop()
         st.monitor = asyncio.create_task(_monitor(st))
+        if st.loop.live:  # first LIVE wallet read at startup; afterwards the monitor + loop refresh it on a slow schedule
+            try:
+                await run_in_threadpool(st.loop.wallet_refresh_if_due)
+            except Exception:  # pragma: no cover - never block startup on the wallet
+                log.exception("initial wallet read failed")
         if settings.loop_autostart:
             await run_in_threadpool(_autostart, st)
         yield
@@ -489,6 +494,8 @@ async def _monitor(st: AppState) -> None:
         await asyncio.sleep(max(st.interval, 0.05))
         try:
             check_stall(st)
+            if st.loop.live:  # WALLET_REFRESH_SEC schedule (no-op until due) even when no agent is running
+                await run_in_threadpool(st.loop.wallet_refresh_if_due)
             if st.want_running and (st.task is None or st.task.done()) and not st.loop.finished and st.loop.symbol:
                 st.loop.restarts += 1
                 st.loop._alert(AlertLevel.WARNING, "LOOP_RESTARTED", "loop task was not running; restarted by the watchdog")

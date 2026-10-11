@@ -266,7 +266,25 @@ The Vite dev proxy connects from localhost, so the dashboard on `http://localhos
   first). Positions the wallet doesn't fully hold are dropped from the book (no trade; listed in `dropped`), the
   wallet becomes the saved wallet and the block clears. In SIM the wallet is the book, so nothing is dropped.
 
+## Wallet cache (v0.9, LIVE): fewer `baw` calls
+baw wipes its own session when a token refresh fails during a network blip, so the backend reads the wallet much less:
+- `GET /api/wallet`, `GET /api/live/status` and `/api/system.live` serve the **last** wallet read and never call baw.
+  `/api/wallet` adds `read_at`, `age_s`, `stale`, `read_error`, `next_retry_at` (`updated_at` = `read_at`);
+  `/api/live/status` adds `wallet_read_at`, `wallet_age_s`, `wallet_stale`.
+- The loop re-reads the wallet (`baw wallet status/address/balance/settings`) every `WALLET_REFRESH_SEC` (default 300,
+  also while no agent runs) and **right before every order**: before each exit, and in pass 2 of the BUY risk check
+  (with the quote). Pass 2's `wallet_limits` are built from that fresh read's own `fetched_at`, so an older cached copy can
+  never approve a BUY. Pass 1 (no quote) uses the cached read and costs no baw call.
+- A read that fails for a network reason (ConnectError, getaddrinfo, timeouts, `service_unavailable`) does **not**
+  expire the session: the last good read is kept and marked `stale`, BUYs are blocked ("wallet read failed ...; BUYs wait
+  for a fresh wallet read"), stop-loss / take-profit / trailing exits still go out, and the next try backs off 60 s,
+  120 s, then every 300 s (alerts `WALLET_READ_FAILED` once, `WALLET_READ_OK` on recovery).
+- `illegal parameter` on `baw wallet status` is still an expired session (`session_expired`, pause, held exits).
+- A dashboard wallet sign-in and `POST /api/wallet/reconcile` force one fresh read, even during a back-off.
+- An expired session is re-checked by that schedule, by the next order, or immediately by a dashboard sign-in.
+
 ## Changelog
+- v0.9: LIVE wallet cache: `/api/wallet` + `/api/live/status` never call baw (`read_at`/`age_s`/`stale`); `WALLET_REFRESH_SEC` (300 s) + a fresh read before every order; network failures keep the last read, block BUYs, allow exits, back off 60/120/300 s.
 - v0.8: dashboard wallet sign-in (`POST/GET /api/wallet/connect`, `POST /api/wallet/reconcile`, localhost only), `wallet_block` in `/api/live/status`, "different wallet connected" LIVE block, fake baw for SIM/PAPER; app title "Regime".
 - v0.7: LIVE section (wallet, live status, cooldowns, in-flight buys with synthetic `pending` positions and `pending_exit` held exits, `order_in_flight`, executor extras on executions, `agent_identity` pass-through, `allowed_tokens` 'ALL'/'LIMITED' pass-through + `tradable_tokens`); `/api/portfolio` positions gain `pending`, `client_order_id`, `held_exit`; an unavailable quote is a STAY_OUT decision in every mode; `/api/tokens` adds `token_status`; activation defaults to `AUTO_EXECUTE` unless the request sets `activation`; `record_execution(res, quote_notional=)` at submission + after reconcile; slippage cap passed per order.
 - v0.6: LIVE needs both `LIVE_TRADING_ENABLED=true` and `BINANCE_LIVE_ENABLED=true` (+ keys); no per-token path assumptions.
