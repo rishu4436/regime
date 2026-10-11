@@ -82,7 +82,7 @@ ${filters.length ? `Filters: ${filters.join(", ")}\n` : ""}Result: ${pct(r.total
         </div>
       </Card>
       <div className="note">Backtest ran {new Date(run.ranAt).toLocaleTimeString()} · no fees or slippage in backtests (live/SIM execution includes them) · the live risk limits (30% per token, per-order and daily caps) aren't applied here, so live returns can be lower ·{" "}
-        results intentionally differ from the reference simulator: <a href="https://github.com/rishu4436/teamwork/blob/main/backend/engine/README.md" target="_blank" rel="noreferrer">why</a>.</div>
+        results intentionally differ from the reference simulator: <a href="https://github.com/rishu4436/regime/blob/main/backend/engine/README.md" target="_blank" rel="noreferrer">why</a>.</div>
     </div>
   );
 }

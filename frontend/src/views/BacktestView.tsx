@@ -1,7 +1,7 @@
 import { Card } from "../components/ui";
 import { BacktestResults, type BacktestRun } from "./BacktestResults";
 
-export const ENGINE_NOTES_URL = "https://github.com/rishu4436/teamwork/blob/main/backend/engine/README.md";
+export const ENGINE_NOTES_URL = "https://github.com/rishu4436/regime/blob/main/backend/engine/README.md";
 
 /** Full-width results of the latest backtest from the Manual Builder. */
 export function BacktestView({ run, onOpenBuilder }: { run: BacktestRun | null; onOpenBuilder: () => void }) {
