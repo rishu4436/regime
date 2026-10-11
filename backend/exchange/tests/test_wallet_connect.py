@@ -158,3 +158,21 @@ def test_signin_without_qr_raises():
     with pytest.raises(BawError):
         wc.start()
     assert procs == []
+
+
+def test_wallet_status_illegal_parameter_means_session_expired():
+    import pytest
+    from backend.exchange.baw import BawError, BawSessionExpired, SESSION_EXPIRED
+
+    def runner(argv, timeout_s):
+        return RunResult(1, json.dumps({"success": False,
+                                        "error": {"code": 2, "name": "SERVICE_ERROR", "message": "illegal parameter"}}))
+
+    cli = BawCli(runner=runner, cmd=["baw"])
+    with pytest.raises(BawSessionExpired) as ei:
+        cli.status()
+    assert ei.value.reason == SESSION_EXPIRED
+    # other commands keep their own classification (not forced to session_expired)
+    with pytest.raises(BawError) as e2:
+        cli.balances()
+    assert not isinstance(e2.value, BawSessionExpired)

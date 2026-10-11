@@ -290,8 +290,23 @@ class BawCli:
 
     # ------------------------------------------------------------------ reads
     def status(self) -> str:
-        """UNCONNECTED | CREATING | CONNECTED (no session -> UNCONNECTED, exit 0)."""
-        return str((self.call("wallet", "status") or {}).get("status") or "UNKNOWN")
+        """UNCONNECTED | CREATING | CONNECTED (no session -> UNCONNECTED, exit 0).
+
+        Observed twice on baw 1.10.0 (11 Oct 2026, Windows): when the session silently dies, `wallet status` itself fails
+        with SERVICE_ERROR code 2 "illegal parameter" (and every other call fails the same way) until `baw auth signin`.
+        `wallet status` takes no parameters, so on this command it means "no valid session": raise BawSessionExpired so
+        the app pauses LIVE and shows Reconnect. Scoped to `wallet status` only, so a real bad parameter on a quote or
+        swap keeps its own reason."""
+        try:
+            data = self.call("wallet", "status")
+        except BawSessionExpired:
+            raise
+        except BawError as e:
+            if "illegal parameter" in str(e).lower():
+                raise BawSessionExpired(f"baw wallet status: {e.args[0]} (treated as an expired session: sign in again)",
+                                        e.code, e.name, SESSION_EXPIRED, e.data) from e
+            raise
+        return str((data or {}).get("status") or "UNKNOWN")
 
     def addresses(self) -> list[dict]:
         return list((self.call("wallet", "address") or {}).get("addresses") or [])
