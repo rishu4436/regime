@@ -176,9 +176,9 @@ def test_breakout_condition():
     s.entry.price_above_sma.enabled = False
     s.entry.breakout.enabled = True
     s.entry.breakout.lookback = 5
-    cs = flat(30) + [bar(30, 100, 102, 100, 101.5)]
+    cs = flat(60) + [bar(60, 100, 102, 100, 101.5)]
     assert ENG.evaluate_manual(s, cs, pf()).conditions_met == ["breakout"]
-    cs = flat(30) + [bar(30, 100, 100, 99, 99.5)]
+    cs = flat(60) + [bar(60, 100, 100, 99, 99.5)]
     s.entry.breakout.direction = BreakoutDirection.LOW
     assert ENG.evaluate_manual(s, cs, pf()).action == Action.BUY
 

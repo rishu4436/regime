@@ -112,20 +112,26 @@ def select(
     return None, 0.0, f"{regime.value} + {style.value}: none of the suitable presets ({names}) is enabled; staying out"
 
 
-def _bar_number(candles: Sequence[Candle]) -> int:
-    """Index of the last bar on an absolute clock (epoch / bar length) so DCA schedules don't depend on window size."""
+def _slot(ts, bar_seconds: int, interval_bars: int) -> int:
+    ts = ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
+    return int(ts.timestamp() // bar_seconds) // interval_bars
+
+
+def _dca_due(candles: Sequence[Candle], sp: StyleParams, bar_seconds: int = 3600) -> bool:
+    """Clock-aligned schedule (every ``dca_interval_bars`` bars of ``bar_seconds``): due on the FIRST bar at or after
+    each slot boundary. With sparse real data (no bars while the market is closed) the buy happens on the first bar
+    after the boundary instead of being skipped; with regular data it is exactly the boundary bar."""
     last = candles[-1].timestamp
-    last = last.replace(tzinfo=timezone.utc) if last.tzinfo is None else last
-    step = (candles[-1].timestamp - candles[-2].timestamp).total_seconds() if len(candles) >= 2 else 3600.0
-    step = step if step > 0 else 3600.0
-    return int(last.timestamp() // step)
+    if len(candles) < 2:
+        return int(last.timestamp() // bar_seconds) % sp.dca_interval_bars == 0
+    return _slot(candles[-2].timestamp, bar_seconds, sp.dca_interval_bars) != _slot(
+        last, bar_seconds, sp.dca_interval_bars
+    )
 
 
-def _dca_due(candles: Sequence[Candle], sp: StyleParams) -> bool:
-    return _bar_number(candles) % sp.dca_interval_bars == 0
-
-
-def evaluate_preset(preset: PresetName, style: TraderStyle, candles: Sequence[Candle], holding: bool) -> PresetDecision:
+def evaluate_preset(
+    preset: PresetName, style: TraderStyle, candles: Sequence[Candle], holding: bool, bar_seconds: int = 3600
+) -> PresetDecision:
     """Evaluate ONE preset on the last bar. ``holding`` = an open position exists for this symbol."""
     sp = STYLE_PARAMS[style]
     closes = [c.close for c in candles]
@@ -134,7 +140,7 @@ def evaluate_preset(preset: PresetName, style: TraderStyle, candles: Sequence[Ca
     rsi = ind.rsi(closes, 14)[-1]
 
     if preset == PresetName.DCA:
-        if _dca_due(candles, sp):
+        if _dca_due(candles, sp, bar_seconds):
             return PresetDecision(
                 Action.BUY, f"DCA: scheduled buy (every {sp.dca_interval_bars} bars)", ["dca_schedule"]
             )
@@ -143,7 +149,7 @@ def evaluate_preset(preset: PresetName, style: TraderStyle, candles: Sequence[Ca
         )
 
     if preset == PresetName.SMART_DCA:
-        if not _dca_due(candles, sp):
+        if not _dca_due(candles, sp, bar_seconds):
             return PresetDecision(
                 Action.STAY_OUT,
                 f"Smart DCA: not a scheduled bar (every {sp.dca_interval_bars} bars)",
