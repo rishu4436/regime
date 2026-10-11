@@ -29,12 +29,18 @@ ParsedStrategy = Union[ManualStrategy, AutoConfig]
 
 KNOWN_SYMBOLS = ["NVDAon", "TSLAx", "AAPLB", "SPYon", "METAx"]
 _ALIASES: list[tuple[str, str]] = [
-    (r"nvidia|nvda", "NVDAon"),
-    (r"tesla|tsla", "TSLAx"),
+    (r"nvidia|nvda", "NVDAB"),
+    (r"tesla|tsla", "TSLAB"),
     (r"apple|aapl", "AAPLB"),
     (r"s&p\s*500|s&p|spy", "SPYon"),
-    (r"meta|facebook", "METAx"),
+    (r"meta|facebook", "METAB"),
 ]
+# Bare US tickers we know trade as Binance bStocks (live, BSC). "TSLA" -> "TSLAB". Ondo/xStock only when named explicitly.
+BSTOCK_TICKERS = frozenset({"NVDA", "TSLA", "AAPL", "META", "MSFT", "GOOGL", "AMZN", "AMD", "INTC", "MU", "PLTR", "ORCL",
+                            "COIN", "MSTR", "HOOD", "CRCL"})
+WEEKDAYS_NOTE = ("\"Weekdays only\" has no setting of its own, so the US market-hours filter is turned on instead. It "
+                 "only trades during the US session, which runs on weekdays.")
+MULTI_SYMBOL_NOTE = "Several tokens were named, so they are all on the watchlist: {syms}."
 _FALLBACK_SYMBOL = "NVDAon"
 # Team default entry when the text gives no entry rule (Bot 1 / Bot 2): price above EMA(20). The contract default
 # (RSI < 35 AND close > SMA50) practically never triggers, so it is not used for parsed strategies.
@@ -89,6 +95,9 @@ def unparsed_notes(text: str, enabled: set[str]) -> list[str]:
     return notes
 
 
+_WEEKDAY_RE = re.compile(r"\bweek\s?days?\b|monday\s*(?:to|-|through)\s*friday|mon\s*-\s*fri", re.I)
+
+
 def strategy_notes(text: str, strategy: ManualStrategy, default_entry_used: bool) -> list[str]:
     """User-facing notes for a parsed manual strategy (keyword or Grok path)."""
     notes: list[str] = [DEFAULT_ENTRY_NOTE] if default_entry_used else []
@@ -97,6 +106,11 @@ def strategy_notes(text: str, strategy: ManualStrategy, default_entry_used: bool
         notes += unparsed_notes(text, enabled)
     if strategy.exit.rsi_above.enabled and not _RSI_EXIT_MENTION_RE.search(text or ""):
         notes.append(RSI_EXIT_NOTE.format(thr=strategy.exit.rsi_above.threshold))
+    if _WEEKDAY_RE.search(text or ""):
+        notes.append(WEEKDAYS_NOTE)
+    wl = list(getattr(strategy, "watchlist", None) or [])
+    if len(wl) > 1:
+        notes.append(MULTI_SYMBOL_NOTE.format(syms=", ".join(wl)))
     return notes
 
 
@@ -118,18 +132,50 @@ def _int(pattern: str, text: str) -> Optional[int]:
     return int(v) if v is not None else None
 
 
-def detect_symbol(text: str, default_symbol: Optional[str] = None) -> str:
+def _underlying(sym: str) -> str:
+    u = sym.upper()
+    for suf in ("ON", "B", "X"):
+        if u.endswith(suf) and len(u) > len(suf) + 1:
+            return u[: -len(suf)]
+    return u
+
+
+def detect_symbols(text: str, default_symbol: Optional[str] = None) -> list[str]:
+    """Every token named in the text, in the order written (max 5). Explicit symbols (NVDAon, TSLAx, AAPLB) are kept;
+    bare tickers and company names map to the bStock (TSLA -> TSLAB). If a name refers to the same stock as
+    default_symbol, default_symbol is used, so "NVDA" with default NVDAB stays NVDAB."""
+    hits: list[tuple[int, str]] = []
+    taken: list[tuple[int, int]] = []
+
+    def add(pos: int, end: int, sym: str) -> None:
+        if any(a <= pos < b for a, b in taken):
+            return
+        taken.append((pos, end)); hits.append((pos, sym))
+
     for sym in KNOWN_SYMBOLS:
-        if re.search(rf"(?<![A-Za-z0-9]){re.escape(sym)}(?![A-Za-z0-9])", text, re.I):
-            return sym
-    # other tokenized-stock-looking symbols, e.g. AMZNon / GOOGLx / MSFTB
-    m = re.search(r"(?<![A-Za-z0-9])([A-Z]{2,5}(?:on|x|B))(?![A-Za-z0-9])", text)
-    if m:
-        return m.group(1)
+        for m in re.finditer(rf"(?<![A-Za-z0-9]){re.escape(sym)}(?![A-Za-z0-9])", text, re.I):
+            add(m.start(), m.end(), sym)
+    for m in re.finditer(r"(?<![A-Za-z0-9])([A-Z]{2,5}(?:on|x|B))(?![A-Za-z0-9])", text):
+        add(m.start(), m.end(), m.group(1))
+    for m in re.finditer(r"(?<![A-Za-z0-9$])\$?([A-Z]{2,5})(?![A-Za-z0-9])", text):
+        if m.group(1) in BSTOCK_TICKERS:
+            add(m.start(), m.end(), m.group(1) + "B")
     for pat, sym in _ALIASES:
-        if re.search(rf"(?<![A-Za-z0-9])(?:{pat})(?![A-Za-z0-9])", text, re.I):
-            return sym
-    return default_symbol or _FALLBACK_SYMBOL
+        for m in re.finditer(rf"(?<![A-Za-z0-9])(?:{pat})(?![A-Za-z0-9])", text, re.I):
+            add(m.start(), m.end(), sym)
+    out: list[str] = []
+    for _, sym in sorted(hits):
+        if default_symbol and _underlying(sym) == _underlying(default_symbol) and sym.upper() != default_symbol.upper() \
+                and not re.search(rf"(?<![A-Za-z0-9]){re.escape(sym)}(?![A-Za-z0-9])", text):
+            sym = default_symbol  # a bare name/ticker, not an explicit symbol: keep the caller's venue
+        if sym not in out:
+            out.append(sym)
+    return out[:5]
+
+
+def detect_symbol(text: str, default_symbol: Optional[str] = None) -> str:
+    syms = detect_symbols(text, default_symbol)
+    return syms[0] if syms else (default_symbol or _FALLBACK_SYMBOL)
 
 
 def detect_timeframe(text: str) -> Optional[Timeframe]:
@@ -197,6 +243,9 @@ def _parse_auto(text: str, default_symbol: Optional[str]) -> AutoConfig:
         kwargs["timeframe"] = tf
     if wants_auto_execute(text):
         kwargs["activation"] = ActivationMode.AUTO_EXECUTE
+    syms = detect_symbols(text, default_symbol)
+    if len(syms) > 1 and "watchlist" in AutoConfig.model_fields:
+        kwargs["watchlist"] = syms
     return AutoConfig(**kwargs)
 
 
@@ -323,7 +372,7 @@ def parse_manual_with_notes(text: str, default_symbol: Optional[str]) -> tuple[M
     if ml and ml > 0:
         r["max_loss_per_trade_pct"] = ml
 
-    if re.search(r"market hours|us session|trading hours|regular hours", t):
+    if re.search(r"market hours|us session|trading hours|regular hours", t) or _WEEKDAY_RE.search(t):
         f["market_hours"]["enabled"] = True
     if re.search(r"min(?:imum)?\s*volume|liquidity filter|require (?:above[\s-]average )?volume", t):
         f["min_volume"]["enabled"] = True
@@ -334,6 +383,9 @@ def parse_manual_with_notes(text: str, default_symbol: Optional[str]) -> tuple[M
     tf = detect_timeframe(text)
     if tf:
         s["timeframe"] = tf.value
+    syms = detect_symbols(text, default_symbol)
+    if len(syms) > 1 and "watchlist" in s:
+        s["watchlist"] = syms
     s["activation"] = (ActivationMode.AUTO_EXECUTE if wants_auto_execute(text) else ActivationMode.CONFIRMATION).value
     name = re.search(r"(?:call(?:ed)? it|name(?:d)?(?: it)?)\s*[\"']?([\w\s-]{1,40}?)[\"']?(?:[.,;]|$)", text, re.I)
     s["name"] = name.group(1).strip() if name else f"{s['symbol']} rule set"
@@ -504,6 +556,10 @@ def validate_llm_strategy(raw: str, text: str, default_symbol: Optional[str] = N
     sym = data.get("symbol")
     if not isinstance(sym, str) or not sym.strip():
         data["symbol"] = detect_symbol(text, default_symbol)
+    if not data.get("watchlist"):
+        syms = detect_symbols(text, default_symbol)
+        if len(syms) > 1 and "watchlist" in model.model_fields:
+            data["watchlist"] = syms
     if kind == "auto":
         cap = data.get("capital")
         if not isinstance(cap, (int, float)) or cap <= 0:

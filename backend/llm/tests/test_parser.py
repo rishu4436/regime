@@ -18,7 +18,7 @@ def _roundtrip(m):
 def test_manual_full_sentence():
     s = keyword_parse("Buy NVIDIA when RSI drops below 30 and price is above the 200 SMA, take profit 10%, "
                       "stop loss 5%, trailing stop 3%, sell when RSI above 75, position size 10%")
-    assert isinstance(s, ManualStrategy) and s.symbol == "NVDAon"
+    assert isinstance(s, ManualStrategy) and s.symbol == "NVDAB"
     assert s.entry.rsi_below.enabled and s.entry.rsi_below.threshold == 30
     assert s.entry.price_above_sma.enabled and s.entry.price_above_sma.period == 200
     assert not s.entry.macd_bullish_cross.enabled and not s.entry.price_above_ema.enabled
@@ -61,7 +61,7 @@ def test_unspecified_text_gives_defaults_with_team_default_entry():
 
 def test_auto_config():
     c = keyword_parse("auto mode, patient accumulator on tesla with $5k, only DCA and buy the dip")
-    assert isinstance(c, AutoConfig) and c.symbol == "TSLAx" and c.style == TraderStyle.PATIENT
+    assert isinstance(c, AutoConfig) and c.symbol == "TSLAB" and c.style == TraderStyle.PATIENT
     assert c.enabled_presets == [PresetName.DCA, PresetName.BUY_THE_DIP] and c.capital == 5000
     assert c.activation == ActivationMode.CONFIRMATION
 
@@ -81,7 +81,7 @@ def test_auto_execute_only_when_explicit():
 
 
 @pytest.mark.parametrize("text,default,expected", [
-    ("trade TSLAx", None, "TSLAx"), ("nvidia dip", None, "NVDAon"), ("apple", None, "AAPLB"),
+    ("trade TSLAx", None, "TSLAx"), ("nvidia dip", None, "NVDAB"), ("apple", None, "AAPLB"),
     ("s&p 500 dca", None, "SPYon"), ("AMZNon breakout", None, "AMZNon"), ("something", "METAx", "METAx"), ("x", None, "NVDAon"),
 ])
 def test_detect_symbol(text, default, expected):
@@ -147,3 +147,15 @@ def test_validate_rejects_garbage():
 def test_invalid_preset_list_is_dropped_to_default():
     c = validate_llm_strategy('{"kind":"auto","strategy":{"symbol":"NVDAon","capital":10,"enabled_presets":[]}}', "x")
     assert set(c.enabled_presets) == set(PresetName)
+
+
+def test_several_tokens_go_on_the_watchlist_and_weekdays_noted():
+    from backend.llm.parser import keyword_parse_with_notes
+    s, notes = keyword_parse_with_notes("Buy TSLA and NVDA when RSI below 35, only on weekdays", "NVDAB")
+    assert s.symbol == "TSLAB" and s.watchlist == ["TSLAB", "NVDAB"]
+    assert s.filters.market_hours.enabled
+    assert any("weekdays" in n.lower() for n in notes) and any("watchlist" in n for n in notes)
+
+
+def test_explicit_ondo_symbol_is_kept():
+    assert detect_symbol("buy NVDAon when RSI below 30", "NVDAB") == "NVDAon"
