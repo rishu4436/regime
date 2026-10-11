@@ -129,11 +129,14 @@ def risk_live_limits(risk: Any, portfolio: Portfolio, ctx: Any = None) -> dict:
         return {}
 
 
-def record_execution(risk: Any, res: Any) -> None:
+def record_execution(risk: Any, res: Any, quote_notional: Optional[float] = None) -> None:
+    """Bot 3 (04e0944): record_execution(res, quote_notional=...) at submission (incl. PENDING_CONFIRMATION) and again
+    with the final result for the same client_order_id; older signatures get record_execution(res)."""
     fn = getattr(risk, "record_execution", None)
     if callable(fn):
         try:
-            fn(res)
+            from .wiring import call_with_supported
+            call_with_supported(fn, res, quote_notional=quote_notional)
         except Exception:
             log.exception("risk.record_execution failed")
 

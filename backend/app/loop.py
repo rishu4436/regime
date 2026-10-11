@@ -29,7 +29,7 @@ from . import live as livemod
 from .portfolio import Lot, PortfolioBook
 from .settings import Settings
 from .state import AgentStateStore, state_path
-from .wiring import Components, call_with_supported
+from .wiring import Components, call_with_supported, supported_kwargs
 
 PENDING_EXIT = "pending_exit"        # exit held while the BUY settles on chain (Bot 1 / Bot 5 code)
 ORDER_IN_FLIGHT = "order_in_flight"  # Bot 4 executor single-flight refusal (verbatim)
@@ -83,6 +83,7 @@ class TradingLoop:
         self.cooldowns: dict[str, dict] = {}       # symbol -> {until, code, reason}: exchange off-hours errors (20 min)
         self.chain_pending: dict[str, dict] = {}   # client_order_id -> in-flight BUY (synthetic position)
         self._settled: set[str] = set()
+        self._token_status_cache: dict[str, tuple[float, Optional[dict]]] = {}
         self.bus.enrich = self.enrich_payload
         self.wallet_settings = livemod.WalletSettingsProvider(
             comps.exchange, settings.trading_mode, on_error=lambda m: self._alert(AlertLevel.WARNING, "WALLET_SETTINGS", m))
@@ -596,7 +597,7 @@ class TradingLoop:
             base = dict(p["base"] or dict(mode=self.s.trading_mode, agent_mode=self.agent_mode, symbol=res.symbol,
                                           regime=self.current_regime, strategy=p["strategy"], signal=sig), timestamp=self._now())
             self._remember_meta(res)
-            livemod.record_execution(self.c.risk, res)
+            livemod.record_execution(self.c.risk, res, quote_notional=p["notional"])  # final result, same client_order_id
             held = p.get("held_exit")
             why = sig.reason if sig else "restored in-flight order"
             if res.status in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED) and res.filled_quantity > 0:
@@ -693,6 +694,24 @@ class TradingLoop:
             setter(sym, ctx or None)
         except Exception:
             pass
+
+    def token_status(self, symbol: str) -> Optional[dict]:
+        """Bot 4 get_token_status(symbol) as JSON (duck-typed), cached ~60 s per symbol; None when unavailable."""
+        now = time.monotonic()
+        hit = self._token_status_cache.get(symbol)
+        if hit and now - hit[0] < 60:
+            return hit[1]
+        fn = getattr(self.c.exchange, "get_token_status", None)
+        val: Optional[dict] = None
+        if callable(fn):
+            try:
+                st = fn(symbol)
+                if st is not None:
+                    val = st.model_dump(mode="json") if hasattr(st, "model_dump") else (dict(st) if isinstance(st, dict) else dict(vars(st)))
+            except Exception:
+                val = None
+        self._token_status_cache[symbol] = (now, val)
+        return val
 
     def daily_live_notional(self) -> float:
         """Today's LIVE BUY notional: settled fills + in-flight buys."""
@@ -851,6 +870,11 @@ class TradingLoop:
         ctrl = st.get("control") or {}
         if "confirmation_mode" in ctrl:
             self.c.risk.set_confirmation_mode(bool(ctrl["confirmation_mode"]))
+        elif not agent:  # full autonomy by default: confirmation only when an activation explicitly asks for it
+            try:
+                self.c.risk.set_confirmation_mode(False)
+            except Exception:
+                pass
         if ctrl.get("paused"):
             self.c.risk.pause(ctrl.get("reason") or "")
         if ctrl.get("emergency_stopped"):
@@ -879,12 +903,17 @@ class TradingLoop:
                 if fill_price:
                     self._set_sim_price(sym, fill_price)  # SIM: protective exits fill at the stop / target / gap open
                 quote = quote or ex.get_quote(sym, side, notional)  # LIVE BUY: the quote the pre-trade checks approved
-                if self.live:
-                    self._cap_slippage()
                 order = OrderRequest(symbol=sym, side=side, notional=quote.notional, quantity=quantity, quote_id=quote.quote_id,
                                      path=quote.path, mode=mode, decision_id=decision_id)
                 # dispatch on Quote.path: the exchange rejects an order sent to the wrong path (Bot 4)
-                res = ex.execute_rfq(order, quote) if quote.path == ExecutionPath.RFQ else ex.execute_swap(order, quote)
+                fn = ex.execute_rfq if quote.path == ExecutionPath.RFQ else ex.execute_swap
+                slip = self._slippage_cap() if self.live else None
+                if slip is not None and "max_slippage_pct" in supported_kwargs(fn, {"max_slippage_pct": slip}):
+                    res = fn(order, quote, max_slippage_pct=slip)  # Bot 4 a34f988: risk's cap per order
+                else:
+                    if slip is not None:
+                        self._cap_slippage(slip)  # fallback for clients without the argument
+                    res = fn(order, quote)
             except Exception as e:  # never let an exchange error kill the loop
                 if livemod.is_session_expired(e):
                     self._session_expired(e)
@@ -894,7 +923,8 @@ class TradingLoop:
                 if fill_price and self._bar is not None:
                     self._set_sim_price(sym, self._bar.close)
         self._remember_meta(res, quote)
-        livemod.record_execution(self.c.risk, res)  # at submission too (incl. PENDING_CONFIRMATION); Bot 3 counts fills
+        # once at submission (incl. PENDING_CONFIRMATION), with the quote amount; the final result follows after reconcile
+        livemod.record_execution(self.c.risk, res, quote_notional=quote.notional if quote is not None else None)
         if not self.sim:
             self.wallet_settings.invalidate()  # wallet quota changed: re-read baw settings before the next trade
             if res.error and livemod.is_session_expired(res.error):
@@ -906,13 +936,16 @@ class TradingLoop:
             self._publish_alerts(self.alerts.on_execution(res))  # in flight is not a failure
         return res
 
-    def _cap_slippage(self) -> None:
-        """Bot 4 executor: never slip more than risk allows (the client's execute_* has no slippage arg)."""
+    def _slippage_cap(self) -> float:
+        """Risk's LIVE slippage cap (percent): risk.live_limits()['max_slippage_pct'], else RISK_LIVE_MAX_SLIPPAGE_PCT."""
+        rl = livemod.risk_live_limits(self.c.risk, self.book.portfolio(), None)
+        return float(rl.get("max_slippage_pct") or self.s.live_max_quote_deviation_pct)
+
+    def _cap_slippage(self, cap: float) -> None:
+        """Fallback only (execute_* without max_slippage_pct): lower the executor default to risk's cap."""
         execu = self._executor()
         if execu is None or not hasattr(execu, "max_slippage_pct"):
             return
-        rl = livemod.risk_live_limits(self.c.risk, self.book.portfolio(), None)
-        cap = rl.get("max_slippage_pct") or self.s.live_max_quote_deviation_pct
         try:
             cur = execu.max_slippage_pct
             execu.max_slippage_pct = float(cap) if cur is None else min(float(cur), float(cap))

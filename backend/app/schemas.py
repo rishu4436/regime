@@ -68,7 +68,7 @@ class PresetsTable(_M):
 # ---------------------------------------------------------------- LIVE / wallet (app-side until the contract has them)
 from datetime import datetime  # noqa: E402
 
-from backend.contracts import Decision, ExecutionResult, LoopState, Portfolio, Position, StatusSnapshot, SystemInfo  # noqa: E402
+from backend.contracts import Decision, ExecutionResult, LoopState, Portfolio, Position, StatusSnapshot, SystemInfo, TokenInfo  # noqa: E402
 
 
 class ExecutionView(ExecutionResult):
@@ -163,4 +163,12 @@ class PositionView(Position):
 
 class PortfolioView(Portfolio):
     positions: list[PositionView] = Field(default_factory=list)
+
+
+class TokenView(TokenInfo):
+    """TokenInfo + token_status (Bot 4 get_token_status as JSON: trading_status, min_order_usdt, reference_price_only,
+    ...); null when the exchange has no status for it."""
+    token_status: Optional[dict] = None
+
+
 StatusView.model_rebuild()

@@ -9,8 +9,16 @@ LIVE switch is opt-in, and the caps default to tiny amounts (25 USDT per order).
    - Windows: if `baw` is not on PATH, `run.ps1` sets
      `BAW_CMD=["node","<npm root -g>\@binance\agentic-wallet\dist\index.js"]` automatically. You can also set `BAW_CMD`
      yourself to a JSON argv list, a path to `dist\index.js`, or a binary.
-2. **Sign in.** Run the `baw` login and scan the **QR code** with the Binance app. Then `baw wallet status --json` must
-   report `CONNECTED`.
+2. **Sign in** (verified by Bot 4 with baw 1.10.0):
+   ```bash
+   baw auth signin --json                      # shows a QR code and returns a qrCodeId (--image opens the QR as a picture)
+   #   -> scan the QR with the Binance app and approve
+   baw auth verify --qrCodeId <id> --json      # completes the sign-in
+   baw wallet status --json                    # must report CONNECTED
+   python -m backend.exchange.baw_smoke        # read-only checks (status, balances, settings, a quote); never swaps
+   ```
+   The session can expire in **up to 48 h**. The agent then pauses with `session_expired` (alert
+   `WALLET_SESSION_EXPIRED`). Repeat these steps, then `POST /api/control/resume`.
 3. **Set `abnormalTxnHandling = AutoReject` in the Binance app** (Agentic Wallet → settings). If you skip this, a
    transaction that Binance flags as abnormal waits for manual review. While it waits, the wallet is tx-locked and
    **every** trade is blocked for up to 5 minutes. With AutoReject the flagged order fails at once. The agent logs it as
@@ -23,6 +31,20 @@ LIVE switch is opt-in, and the caps default to tiny amounts (25 USDT per order).
    - The **daily quota resets at 00:00 UTC = 05:30 IST**.
    - The `exit_quota_shortfall` warning (alert `LIVE_LIMIT_EXIT_QUOTA_SHORTFALL`) means the remaining quota could not
      cover selling every open position. Raise the quota or reduce exposure.
+
+### Optional: on-chain agent identity (ERC-8004, Bot 5)
+This step registers the agent's identity so `/api/system.agent_identity` shows it. It never touches the trading wallet.
+1. Create a **new, identity-only** EVM key. Don't use the trading wallet or any wallet holding funds. The command is in
+   `backend/agent_studio/README.md`:
+   `python -c "from eth_account import Account; a=Account.create(); print(a.address); print(a.key.hex())"`.
+   Store the key in your password manager and send about **0.002 BNB** to that address for gas.
+2. `pip install -r backend/agent_studio/requirements.txt`
+3. Set `AGENT_STUDIO_PRIVATE_KEY=<key>` in the shell only. Never put it in git.
+4. Dry run: `python -m backend.agent_studio.register --network mainnet --dry-run --estimate-gas`
+5. Register: `python -m backend.agent_studio.register --network mainnet --confirm-mainnet`
+
+`agent_identity` (`erc8004_id`, `registry`, `network`, `explorer_url`, ...) fills in automatically. It stays `null`
+until registered.
 
 ## 2. Configuration (`.env` at the repo root; git-ignored, never commit it)
 
@@ -89,8 +111,9 @@ happens for 3 intervals. Drop `--backend-only` / `-BackendOnly` to also run the 
   2. a quote for the approved size;
   then it re-checks with that quote, and only then executes.
 - **The baw session can silently expire within 48 h.** The agent detects `session_expired` / `wallet_not_ready`, then
-  **pauses** and raises the CRITICAL alert `WALLET_SESSION_EXPIRED`. Re-scan the QR (`baw` login), then
-  `POST /api/control/resume`. Re-scan proactively about every 24–36 h during a long demo.
+  **pauses** and raises the CRITICAL alert `WALLET_SESSION_EXPIRED`. Repeat the sign-in in step 1.2
+  (`baw auth signin` → scan → `baw auth verify`), then `POST /api/control/resume`. Re-sign proactively about every
+  24–36 h during a long demo.
 - **In-flight orders.** A swap whose on-chain outcome is not yet known is `PENDING_CONFIRMATION`, which is not a
   failure. Until it settles:
   - it counts as an open position (no second BUY; counts toward limits);

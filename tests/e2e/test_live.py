@@ -852,3 +852,78 @@ def test_open_intent_from_journal_becomes_pending_after_restart():
     pos = c.get("/api/portfolio").json()["positions"]
     assert [(p["client_order_id"], p["pending"]) for p in pos] == [("restored-1", True)]
     assert ex.executor.submitted == 0
+
+
+def test_slippage_cap_passed_per_order_when_supported():
+    class SlipEx(InflightEx):
+        seen = []
+
+        def execute_swap(self, order, quote, max_slippage_pct=None):
+            self.seen.append(max_slippage_pct)
+            return super().execute_swap(order, quote)
+    ex = SlipEx()
+    c, ex = live_client(ex=ex)
+    _buy(first_buy_tick(c, ex))
+    assert ex.seen == [1.0]  # risk / RISK_LIVE_MAX_SLIPPAGE_PCT cap, per order
+    assert ex.executor.max_slippage_pct == 3.0  # no executor-wide workaround when the argument exists
+
+
+def test_record_execution_with_quote_notional_at_submission_and_after_reconcile():
+    from backend.contracts import ControlState
+
+    class QNRisk(SLRisk):
+        def record_execution(self, res, quote_notional=None):
+            self.recorded.append(res)
+            self.qn = getattr(self, "qn", []) + [(res.client_order_id, res.status.value, quote_notional)]
+    risk = QNRisk(control=ControlState(trading_mode=TradingMode.LIVE), live_allowed=True)
+    c, ex = live_client(ex=InflightEx(), risk=risk)
+    d = _buy(first_buy_tick(c, ex))
+    cid = d["execution"]["client_order_id"]
+    sub = [x for x in risk.qn if x[0] == cid]
+    assert len(sub) == 1 and sub[0][1] == "PENDING_CONFIRMATION" and sub[0][2] and sub[0][2] > 0
+    ex.executor.settle(cid, "FINISHED", to_qty="0.1")
+    _tick(c, ex)
+    sub = [x for x in risk.qn if x[0] == cid]
+    assert [s[1] for s in sub] == ["PENDING_CONFIRMATION", "FILLED"] and sub[1][2] == sub[0][2]
+
+
+# ---------------------------------------------------------------- Bot 1: token_status, autonomy by default, monitor fields
+def test_tokens_carry_token_status_cached():
+    class StatusEx(MockExchangeClient):
+        calls = 0
+
+        def get_token_status(self, symbol):
+            StatusEx.calls += 1
+            return {"trading_status": "trading", "min_order_usdt": 20.0 if symbol.endswith("on") else None}
+    s = Settings(sim_seed=SEED, use_fallbacks_only=True)
+    c = TestClient(create_app(s, build_components(s, exchange=StatusEx(seed=SEED))))
+    toks = c.get("/api/tokens").json()
+    assert toks and all(t["token_status"]["trading_status"] == "trading" for t in toks)
+    n = StatusEx.calls
+    c.get("/api/tokens")
+    assert StatusEx.calls == n == len(toks)  # cached ~60 s
+    plain = TestClient(create_app(s, build_components(s, exchange=MockExchangeClient(seed=SEED))))
+    assert all(t["token_status"] is None for t in plain.get("/api/tokens").json())
+
+
+def test_activation_defaults_to_auto_execute_unless_asked():
+    c = TestClient(create_app(Settings(sim_seed=SEED)))
+    assert c.get("/api/control").json()["confirmation_mode"] is False  # fresh start: autonomous
+    c.post("/api/control/confirmation-mode", json={"enabled": True})
+    c.post("/api/auto/activate", json={"symbol": SYM, "capital": 1000})
+    assert c.get("/api/control").json()["confirmation_mode"] is False
+    c.post("/api/auto/activate", json={"symbol": SYM, "capital": 1000, "activation": "CONFIRMATION"})
+    assert c.get("/api/control").json()["confirmation_mode"] is True
+    d = trading_strategy(SYM).model_dump(mode="json")
+    d.pop("activation")
+    c.post("/api/manual/activate", json={"strategy": d})
+    assert c.get("/api/control").json()["confirmation_mode"] is False
+
+
+def test_live_status_exposes_cooldowns_and_in_flight_orders():
+    c, ex, risk, cid = inflight()
+    st = c.get("/api/live/status").json()
+    assert st["cooldowns"] == []
+    (p,) = st["chain_pending"]
+    assert p["client_order_id"] == cid and p["symbol"] == SYM and p["notional"] > 0 and p["since"] and p["held_exit"] is None
+    assert c.get("/api/system").json()["live"]["chain_pending"][0]["client_order_id"] == cid

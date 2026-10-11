@@ -24,6 +24,7 @@ from backend.monitoring import EventLog
 from .events import EventBus
 from .loop import AgentStateError, TradingLoop
 from .schemas import (
+    TokenView,
     PortfolioView,
     AskRequest, ConfirmationModeRequest, EmergencyStopRequest, LoopStartRequest, ManualActivateRequest, ParseRequest,
     ParseResponse, PresetsTable, PresetsTableEntry, ReasonRequest, DecisionView, Heartbeat, LiveStatus, LoopStateView,
@@ -103,12 +104,13 @@ def create_app(settings: Optional[Settings] = None, components: Optional[Compone
         return WalletInfo.model_validate(L.wallet())
 
     # ---------------------------------------------------------------- market data
-    @app.get("/api/tokens", response_model=list[TokenInfo])
-    def tokens(q: str = "") -> list[TokenInfo]:
+    @app.get("/api/tokens", response_model=list[TokenView])
+    def tokens(q: str = "") -> list[TokenView]:
         toks = comps.exchange.search_tokens(q)
-        if not L.sim:
-            return toks
-        return [t.model_copy(update={"price": guard(L.view_price, t.symbol)}) for t in toks]
+        if L.sim:
+            toks = [t.model_copy(update={"price": guard(L.view_price, t.symbol)}) for t in toks]
+        # + token_status (Bot 4 get_token_status, cached ~60 s; null if unavailable)
+        return [TokenView(**t.model_dump(), token_status=L.token_status(t.symbol)) for t in toks]
 
     @app.get("/api/candles/{symbol}", response_model=list[Candle])
     def candles(symbol: str, timeframe: Timeframe = Timeframe.H1, limit: Optional[int] = None, history: bool = False) -> list[Candle]:
@@ -174,6 +176,8 @@ def create_app(settings: Optional[Settings] = None, components: Optional[Compone
     def manual_activate(req: ManualActivateRequest) -> StatusSnapshot:
         if req.strategy is not None:
             s = req.strategy
+            if "activation" not in s.model_fields_set:  # full autonomy unless the request asks for confirmation
+                s = s.model_copy(update={"activation": ActivationMode.AUTO_EXECUTE})
         elif req.strategy_id:
             s = guard(st.store.get, req.strategy_id)
         else:
@@ -182,6 +186,8 @@ def create_app(settings: Optional[Settings] = None, components: Optional[Compone
 
     @app.post("/api/auto/activate", response_model=StatusSnapshot)
     def auto_activate(cfg: AutoConfig) -> StatusSnapshot:
+        if "activation" not in cfg.model_fields_set:  # full autonomy unless the request asks for confirmation
+            cfg = cfg.model_copy(update={"activation": ActivationMode.AUTO_EXECUTE})
         return guard(L.activate_auto, cfg)
 
     @app.post("/api/agent/deactivate", response_model=StatusSnapshot)

@@ -24,7 +24,7 @@ History is separate: in SIM the full seeded series per symbol/timeframe is built
 
 | Method | Path | Body | Response |
 |---|---|---|---|
-| GET | `/api/tokens?q=` | – | `TokenInfo[]` |
+| GET | `/api/tokens?q=` | – | `TokenInfo[]` + `token_status` per token (Bot 4 `get_token_status` as JSON: `trading_status`, `min_order_usdt`, `reference_price_only`, ...; `null` if unavailable; cached ~60 s) |
 | GET | `/api/candles/{symbol}?timeframe=1h&limit=200` | – | `Candle[]` (oldest first), replay-pinned in SIM (ends at the loop's current bar), last `limit` (default 200) |
 | GET | `/api/candles/{symbol}?history=true[&limit=N]` | – | `Candle[]` full history: SIM = the cached seeded series (`n_bars` candles, unchanged by ticks; the same bars `/api/backtest` uses), PAPER/LIVE = the exchange's candles (default 500). `limit` = last N; omit for all |
 | GET | `/api/price/{symbol}` | – | `{symbol, price}` |
@@ -54,7 +54,9 @@ History is separate: in SIM the full seeded series per symbol/timeframe is built
 | POST | `/api/loop/stop` | – | `LoopState` |
 | POST | `/api/loop/tick` | – | `Decision[]` (runs exactly one cycle now: exits first, then entry) |
 
-Activation sets the risk confirmation mode from `activation` (`CONFIRMATION` → on, `AUTO_EXECUTE` → off).
+Activation sets the risk confirmation mode from `activation` (`CONFIRMATION` → on, `AUTO_EXECUTE` → off). Full autonomy is the
+default in every mode: a request body without an explicit `activation` (AutoConfig, or an inline ManualStrategy) is treated as
+`AUTO_EXECUTE`, and a fresh start (no saved state) has `confirmation_mode = false`.
 Only one agent (one manual strategy **or** one auto config) is active at a time. Activating an agent (or
 deactivating) rejects any still-pending confirmations of the previous one: they become `STAY_OUT` with
 `execution.status = REJECTED` and `reason = "Not executed: agent switched"` / `"Not executed: agent deactivated"`.
@@ -179,7 +181,9 @@ is absent.
 explainer receives, so LIVE explanations carry the BscScan link.
 
 ### In-flight buys (`PENDING_CONFIRMATION` = submitted, waiting on chain — not a failure)
-- The BUY decision reads `"BUY submitted, waiting on chain ..."`; `risk.record_execution(res)` is called at submission.
+- The BUY decision reads `"BUY submitted, waiting on chain ..."`. `risk.record_execution(res, quote_notional=<quote amount>)` is called once
+  at submission and again with the final result for the same `client_order_id` after reconcile. Risk's slippage cap
+  (`live_limits().max_slippage_pct`) is passed per order as `execute_swap/execute_rfq(..., max_slippage_pct=)`.
 - Until `executor.reconcile()` (called every tick) settles it, the buy is a **synthetic open position** at its quote
   amount in the portfolio given to the engine and risk (no second BUY; counts toward exposure / max positions / cash).
   Orders found open in Bot 4's intent journal after a restart are added the same way.
@@ -210,7 +214,7 @@ Alert codes added: `WALLET_SESSION_EXPIRED`, `WALLET_SETTINGS`, `LIVE_LIMIT_<COD
 `LOOP_RESTARTED`, `LOOP_STALLED` (no tick for 3 intervals), `STATE_RESTORED`, `STATE_RESTORE`, `AUTOSTART`.
 
 ## Changelog
-- v0.7: LIVE section (wallet, live status, cooldowns, in-flight buys with synthetic `pending` positions and `pending_exit` held exits, `order_in_flight`, executor extras on executions, `agent_identity` pass-through, `allowed_tokens` 'ALL'/'LIMITED' pass-through + `tradable_tokens`); `/api/portfolio` positions gain `pending`, `client_order_id`, `held_exit`; an unavailable quote is a STAY_OUT decision in every mode.
+- v0.7: LIVE section (wallet, live status, cooldowns, in-flight buys with synthetic `pending` positions and `pending_exit` held exits, `order_in_flight`, executor extras on executions, `agent_identity` pass-through, `allowed_tokens` 'ALL'/'LIMITED' pass-through + `tradable_tokens`); `/api/portfolio` positions gain `pending`, `client_order_id`, `held_exit`; an unavailable quote is a STAY_OUT decision in every mode; `/api/tokens` adds `token_status`; activation defaults to `AUTO_EXECUTE` unless the request sets `activation`; `record_execution(res, quote_notional=)` at submission + after reconcile; slippage cap passed per order.
 - v0.6: LIVE needs both `LIVE_TRADING_ENABLED=true` and `BINANCE_LIVE_ENABLED=true` (+ keys); no per-token path assumptions.
 - v0.5: `GET /api/candles/{symbol}?history=true`; `/api/backtest` always uses the cached full history (no longer drifts with the replay).
 - v0.4: SIM market data never passes the loop's replay bar; agent switch rejects pending confirmations; single-prefix reason texts.
