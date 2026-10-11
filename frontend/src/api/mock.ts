@@ -144,7 +144,7 @@ export class MockApi implements ApiClient {
     return ok<WalletConnectStatus>(age > 120_000 ? { status: "expired" } : age > 6000 ? { status: "connected", address: DEMO_WALLET, wallet_changed: false } : { status: "pending" }, 150);
   }
   // mock Agent Studio: create key -> "funded" ~8 s later -> register
-  private studio: AgentStudioStatus & { keyAt?: number } = { registered: false, network: "BSC Mainnet", has_key: false, identity_address: null, bnb_balance: null, bnb_needed: 0.002 };
+  private studio: AgentStudioStatus & { keyAt?: number } = { registered: false, network: "mainnet", has_key: false, identity_address: null, bnb_balance: null, bnb_needed: 0.002 };
   getAgentStudio() {
     const st = { ...this.studio };
     if (st.keyAt && !st.registered) st.bnb_balance = Date.now() - st.keyAt > 8000 ? 0.0025 : 0;

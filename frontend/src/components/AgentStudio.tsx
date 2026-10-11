@@ -10,6 +10,10 @@ import { useToast } from "./ui";
 
 const errText = (e: unknown) => e instanceof ApiError && e.status === 403
   ? "This only works on the PC running the Regime backend. Open the dashboard there (http://localhost) and try again."
+  : e instanceof ApiError && e.status === 504
+  ? `The registration was sent but isn't confirmed yet. Check it on BscScan before trying again. ${e.message}`
+  : e instanceof ApiError && e.status === 503
+  ? `Agent Studio isn't installed on this PC yet (${e.message}). Run: pip install -r backend/agent_studio/requirements.txt`
   : e instanceof Error ? e.message : String(e);
 
 function AddrQr({ addr }: { addr: string }) {
@@ -31,6 +35,7 @@ export function RegisterOnChain({ onRegistered }: { onRegistered?: () => void })
   useEffect(() => { if (!needsFunds) return; const id = setInterval(load, 10_000); return () => clearInterval(id); }, [needsFunds, load]);
 
   if (st === undefined || st === null || st.registered) return null;
+  const netLabel = /^(bsc[ _-]?)?mainnet$/i.test(st.network ?? "mainnet") ? "BNB Chain mainnet" : /testnet/i.test(st.network ?? "") ? "BNB Chain testnet" : st.network!;
   const need = st.bnb_needed ?? 0.002, bal = st.bnb_balance ?? 0, step = !st.has_key ? 1 : needsFunds ? 2 : 3;
 
   const createKey = async () => {
@@ -68,7 +73,7 @@ export function RegisterOnChain({ onRegistered }: { onRegistered?: () => void })
           <div className="faint" style={{ marginTop: 2 }}>Send BNB on <b>BNB Smart Chain (BEP20)</b> only.</div>
         </div></div>}
 
-      <Step n={3} title={`Register on ${st.network ?? "mainnet"}`} />
+      <Step n={3} title={`Register on ${netLabel}`} />
       {step === 3 && <div style={{ marginTop: 6 }}>
         {st.identity_address && <div className="small faint" style={{ marginBottom: 6 }}>Identity wallet <a className="mono" href={bscAddr(st.identity_address)} target="_blank" rel="noreferrer">{shortHex(st.identity_address)}</a> · {bal.toFixed(4)} BNB</div>}
         <label className="small" style={{ display: "flex", gap: 6, alignItems: "flex-start", marginBottom: 8 }}>
