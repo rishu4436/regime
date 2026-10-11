@@ -16,6 +16,11 @@ app-only and defined in `backend/app/schemas.py`.
 | GET | `/api/system` | – | `SystemInfo`: `{trading_mode, live_enabled, contracts_version, sim_seed, components: {engine, risk, exchange, explainer}}` (`components.*` = class name, or `"fallback:<name>"` while a bot's module is still a stub) |
 
 ## Market data
+In SIM, everything here is "as of" the loop's current replay bar (before the first tick: the end of the 60-bar
+warm-up): candles end at that bar, prices are its close, the regime preview uses no later bars. The loop pins Bot 4's
+simulated client with `set_replay_index(i)` each tick and the app also trims, so no future bars ever leak to the UI.
+`POST /api/backtest` still uses the full historical series.
+
 | Method | Path | Body | Response |
 |---|---|---|---|
 | GET | `/api/tokens?q=` | – | `TokenInfo[]` |
@@ -48,7 +53,9 @@ app-only and defined in `backend/app/schemas.py`.
 | POST | `/api/loop/tick` | – | `Decision[]` (runs exactly one cycle now: exits first, then entry) |
 
 Activation sets the risk confirmation mode from `activation` (`CONFIRMATION` → on, `AUTO_EXECUTE` → off).
-Only one agent (one manual strategy **or** one auto config) is active at a time.
+Only one agent (one manual strategy **or** one auto config) is active at a time. Activating an agent (or
+deactivating) rejects any still-pending confirmations of the previous one: they become `STAY_OUT` with
+`execution.status = REJECTED` and `reason = "Not executed: agent switched"` / `"Not executed: agent deactivated"`.
 
 ## Decisions, confirmations, positions
 | Method | Path | Body | Response |
@@ -119,11 +126,20 @@ Client → server (optional): `{"type": "ping"}` → server replies with a `STAT
 `BINANCE_API_KEY` / `BINANCE_API_SECRET` are set). The mode is fixed per process and reported in
 `/api/system`, `ControlState.trading_mode` and every `Decision.mode`.
 
+## Reason texts (exactly one prefix)
+- Exit decisions: `"<EXIT_REASON>: <detail>"`, e.g. `"RSI_EXIT: RSI(14)=83.8 > 70"`, `"STOP_LOSS: low 94 reached stop loss 95 ..."`, `"MANUAL: close requested by user"`.
+- Blocked entries: `"BUY not executed: Blocked (<check>): <detail>"` (one "Blocked" per failed check).
+- Control / alerts: `ControlState.reason` is the raw reason (`"lunch"`, `"Paused by user"`, `"Emergency stop by user"`);
+  alerts read `"Paused: lunch"`, `"Paused by user"`, `"Emergency stop: test"`, `"Emergency stop by user"`.
+  Decisions during an emergency stop: `"Emergency stop: <reason>; staying out"`.
+- User rejection: `"Rejected by user: <reason>"` (or `"Rejected by user"`).
+
 ## Execution path
 The loop executes on the path the exchange quoted: `Quote.path == RFQ` → `execute_rfq`, otherwise `execute_swap`
 (the exchange rejects an order sent to the wrong path). `ExecutionResult.path` shows which one was used.
 
 ## Changelog
+- v0.4: SIM market data never passes the loop's replay bar; agent switch rejects pending confirmations; single-prefix reason texts.
 - v0.3: `GET /api/auto/presets-table`, `POST /api/positions/by-id/{position_id}/close`; emergency-stop exits at bar
   close; RFQ/SWAP dispatch on `Quote.path`; LLM summary/ask get performance + alerts; protective-exit edge rules (any stop beats TP, highest stop wins, strict trailing).
 - v0.2 (contracts 0.2.0): app types moved into the contracts; `POST /api/control/reset-emergency-stop` added and
