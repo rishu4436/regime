@@ -6,7 +6,10 @@ from typing import Callable
 import httpx
 import pytest
 
+from datetime import datetime, timedelta, timezone
+
 from backend.contracts import (
+    Alert, AlertLevel, EquityPoint, ExitReason, PerformanceSummary,
     Action, AgentMode, ControlState, Decision, ExecutionPath, ExecutionResult, OrderSide, OrderStatus, Portfolio,
     Position, PresetName, Regime, RiskCheck, RiskVerdict, Signal, StatusSnapshot, TradingMode,
 )
@@ -81,7 +84,7 @@ def blocked_decision() -> Decision:
 
 @pytest.fixture
 def status(buy_decision) -> StatusSnapshot:
-    pos = Position(symbol="NVDAon", quantity=7.0, avg_entry_price=142.5, strategy="TREND_FOLLOWING", current_price=150.0, unrealized_pnl=52.5)
+    pos = Position(id="pos0001aaaabbbb", symbol="NVDAon", quantity=7.0, avg_entry_price=142.5, strategy="TREND_FOLLOWING", current_price=150.0, unrealized_pnl=52.5)
     pf = Portfolio(starting_capital=10000, cash=9002.5, positions=[pos], realized_pnl=120.0, equity=10052.5, trades_today=2, daily_pnl=40.0)
     return StatusSnapshot(control=ControlState(), portfolio=pf, agent_mode=AgentMode.AUTO, active_symbol="NVDAon",
                           current_regime=Regime.STRONG_UPTREND, active_strategy="TREND_FOLLOWING", last_decision=buy_decision,
@@ -92,3 +95,58 @@ def status(buy_decision) -> StatusSnapshot:
 def empty_status() -> StatusSnapshot:
     return StatusSnapshot(control=ControlState(paused=True, reason="user pause"),
                           portfolio=Portfolio(starting_capital=10000, cash=10000, equity=10000))
+
+
+T0 = datetime(2026, 10, 10, 12, 0, tzinfo=timezone.utc)
+
+
+def _sell_signal(**kw) -> Signal:
+    base = dict(symbol="NVDAon", action=Action.SELL, source=AgentMode.AUTO, strategy="TREND_FOLLOWING",
+                reason="trailing stop 4% below high-water mark 160", price=153.6, exit_reason=ExitReason.TRAILING_STOP,
+                position_id="pos0001aaaabbbb")
+    base.update(kw)
+    return Signal(**base)
+
+
+@pytest.fixture
+def sell_filled() -> Decision:
+    sig = _sell_signal()
+    v = RiskVerdict(signal_id=sig.id, approved=True, adjusted_size_pct=100, adjusted_notional=1075.2)
+    ex = ExecutionResult(client_order_id="c2", symbol="NVDAon", side=OrderSide.SELL, status=OrderStatus.FILLED,
+                         path=ExecutionPath.SWAP, mode=TradingMode.SIM, filled_quantity=7.0, avg_price=153.6, notional=1075.2, fee=1.08)
+    return Decision(mode=TradingMode.SIM, agent_mode=AgentMode.AUTO, symbol="NVDAon", regime=Regime.HIGH_VOLATILITY,
+                    strategy="TREND_FOLLOWING", action=Action.SELL, reason="exit", signal=sig, risk_verdict=v, execution=ex)
+
+
+@pytest.fixture
+def make_sell():
+    """make_sell(signal_kwargs, execution_kwargs | None, action=SELL, approved=True) -> Decision."""
+    def _make(sig_kw=None, ex_kw=None, action=Action.SELL, approved=True):
+        sig = _sell_signal(**(sig_kw or {}))
+        v = RiskVerdict(signal_id=sig.id, approved=approved, reasons=[] if approved else ["emergency stop active"])
+        ex = None
+        if ex_kw is not None:
+            ex = ExecutionResult(**{**dict(client_order_id="c3", symbol=sig.symbol, side=OrderSide.SELL, status=OrderStatus.FILLED,
+                                           path=ExecutionPath.SWAP, mode=TradingMode.SIM, filled_quantity=7.0,
+                                           avg_price=sig.price, notional=1000.0), **ex_kw})
+        return Decision(mode=TradingMode.SIM, agent_mode=AgentMode.MANUAL, symbol=sig.symbol, strategy=sig.strategy,
+                        action=action, reason=sig.reason, signal=sig, risk_verdict=v, execution=ex)
+    return _make
+
+
+@pytest.fixture
+def perf() -> PerformanceSummary:
+    return PerformanceSummary(starting_capital=10000, equity=10452.5, realized_pnl=400.0, unrealized_pnl=52.5,
+                              total_return_pct=4.525, max_drawdown_pct=3.21, win_rate_pct=62.5, num_trades=8, wins=5,
+                              losses=3, consecutive_losses=2,
+                              equity_curve=[EquityPoint(timestamp=T0 + timedelta(hours=i), equity=10000 + i) for i in range(50)])
+
+
+@pytest.fixture
+def alerts() -> list[Alert]:
+    return [
+        Alert(level=AlertLevel.INFO, code="LIVE_MODE", message="old info", timestamp=T0),
+        Alert(level=AlertLevel.WARNING, code="QUOTE_EXPIRED", message="quote expired before execution", symbol="TSLAx", timestamp=T0 + timedelta(minutes=1)),
+        Alert(level=AlertLevel.WARNING, code="CONSECUTIVE_LOSSES", message="2 losses in a row", timestamp=T0 + timedelta(minutes=2)),
+        Alert(level=AlertLevel.CRITICAL, code="DAILY_LOSS", message="daily loss limit reached; trading paused ", timestamp=T0 + timedelta(minutes=3)),
+    ]

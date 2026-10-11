@@ -49,3 +49,12 @@ exchange client and must never place orders.
 
 **NL parsing:** Grok replies `{"kind": "manual"|"auto", "strategy": {...}}`; invalid/unrepairable output falls back to `keyword_parse`.
 Listing entry conditions (e.g. "RSI below 30 and above the 200 SMA") enables only those; unspecified text → simulator defaults.
+
+### Contracts v0.2.0
+- `explain_decision` uses `Signal.exit_reason`, `Signal.position_id` and the fill price (`execution.avg_price` when filled,
+  else `Signal.price` = intended fill), e.g. "Sold position ab12cd34 of NVDAon at 153.6 because the trailing stop was hit."
+  Gap fills note the intended level; failed/expired/blocked exits are never described as sold.
+- `StatusSnapshot` does not carry `PerformanceSummary` or `Alert`s, so `summarize_state` and `answer` accept optional
+  keyword-only extras (protocol-compatible): `summarize_state(status, *, performance=None, alerts=None)`,
+  `answer(question, status, *, performance=None, alerts=None)`. Templates show return / drawdown / win rate / loss streak
+  and the 3 most recent alerts; Grok prompts get the same data as JSON (equity curve trimmed to 20 points, last 10 alerts).

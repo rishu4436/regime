@@ -9,9 +9,9 @@ Configuration (env): XAI_API_KEY (enables Grok), XAI_MODEL (default grok-4.7), X
 from __future__ import annotations
 
 import logging
-from typing import Callable, Optional, TypeVar, Union
+from typing import Callable, Optional, Sequence, TypeVar, Union
 
-from backend.contracts import AutoConfig, Decision, ManualStrategy, StatusSnapshot
+from backend.contracts import Alert, AutoConfig, Decision, ManualStrategy, PerformanceSummary, StatusSnapshot
 
 from . import prompts, templates
 from .client import GrokClient, GrokConfig, LLMError
@@ -69,9 +69,12 @@ class DefaultExplainer:
         return self._try_llm(lambda: self._chat_text(prompts.explain_messages(decision)),
                              lambda: templates.explain_decision(decision))
 
-    def summarize_state(self, status: StatusSnapshot) -> str:
-        return self._try_llm(lambda: self._chat_text(prompts.summary_messages(status)),
-                             lambda: templates.summarize_state(status))
+    # `performance` / `alerts` are optional keyword-only extras (protocol-compatible): StatusSnapshot does not carry
+    # PerformanceSummary or Alert in contracts v0.2.0, so the app passes them alongside when it has them.
+    def summarize_state(self, status: StatusSnapshot, *, performance: Optional[PerformanceSummary] = None,
+                        alerts: Optional[Sequence[Alert]] = None) -> str:
+        return self._try_llm(lambda: self._chat_text(prompts.summary_messages(status, performance, alerts)),
+                             lambda: templates.summarize_state(status, performance, alerts))
 
     def parse_strategy_from_text(self, text: str, default_symbol: Optional[str] = None) -> Union[ManualStrategy, AutoConfig]:
         def via_llm() -> Union[ManualStrategy, AutoConfig]:
@@ -81,6 +84,7 @@ class DefaultExplainer:
 
         return self._try_llm(via_llm, lambda: keyword_parse(text, default_symbol))
 
-    def answer(self, question: str, status: StatusSnapshot) -> str:
-        return self._try_llm(lambda: self._chat_text(prompts.answer_messages(question, status)),
-                             lambda: templates.answer(question, status))
+    def answer(self, question: str, status: StatusSnapshot, *, performance: Optional[PerformanceSummary] = None,
+               alerts: Optional[Sequence[Alert]] = None) -> str:
+        return self._try_llm(lambda: self._chat_text(prompts.answer_messages(question, status, performance, alerts)),
+                             lambda: templates.answer(question, status, performance, alerts))

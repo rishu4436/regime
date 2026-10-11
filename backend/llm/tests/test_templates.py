@@ -31,7 +31,7 @@ def test_explain_is_deterministic(buy_decision):
 
 def test_summary(status, empty_status):
     s = templates.summarize_state(status)
-    for part in ["running in SIM mode", "strong uptrend", "TREND_FOLLOWING", "$10,052.50", "+0.53%", "NVDAon: 7 @ 142.5", "Last decision"]:
+    for part in ["running in SIM mode", "strong uptrend", "TREND_FOLLOWING", "$10,052.50", "+0.53%", "NVDAon #pos0001a: 7 @ 142.5", "Last decision"]:
         assert part in s, part
     e = templates.summarize_state(empty_status)
     assert "paused" in e and "user pause" in e and "No open positions." in e and "No decisions yet." in e

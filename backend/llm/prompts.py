@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import json
+from typing import Optional, Sequence
 
-from backend.contracts import Decision, StatusSnapshot
+from backend.contracts import Alert, Decision, PerformanceSummary, StatusSnapshot
 
 SYSTEM_BASE = (
     "You are the explanation layer of an autonomous trading agent for tokenized stocks (e.g. NVDAon, TSLAx, AAPLB). "
@@ -14,6 +15,21 @@ SYSTEM_BASE = (
 )
 
 MAX_RECENT_DECISIONS = 5
+MAX_ALERTS = 10
+MAX_EQUITY_POINTS = 20
+
+
+def _extras_json(performance: Optional[PerformanceSummary], alerts: Optional[Sequence[Alert]]) -> str:
+    """Optional PERFORMANCE / ALERTS blocks (StatusSnapshot does not carry them in contracts v0.2.0)."""
+    out = ""
+    if performance is not None:
+        perf = performance.model_dump(mode="json")
+        perf["equity_curve"] = perf.get("equity_curve", [])[-MAX_EQUITY_POINTS:]
+        out += "\n\nPERFORMANCE JSON:\n" + json.dumps(perf, separators=(",", ":"))
+    if alerts is not None:
+        recent = sorted(alerts, key=lambda a: a.timestamp)[-MAX_ALERTS:]
+        out += "\n\nRECENT ALERTS JSON (oldest first):\n" + json.dumps([a.model_dump(mode="json") for a in recent], separators=(",", ":"))
+    return out
 
 
 def _status_json(status: StatusSnapshot) -> str:
@@ -28,24 +44,31 @@ def explain_messages(decision: Decision) -> list[dict[str, str]]:
         {"role": "user", "content": (
             "Explain this trading decision to a non-expert in 2-4 sentences: what the agent did (BUY / SELL / STAY OUT), "
             "which strategy and market regime drove it, which conditions were or were not met, and what the risk layer "
-            "and execution did. Plain text only.\n\nDECISION JSON:\n" + decision.model_dump_json(exclude={"explanation"}))},
+            "and execution did. For exits (SELL), say which position (signal.position_id, first 8 chars), the fill price "
+            "(execution.avg_price if filled, otherwise signal.price = intended fill) and why (signal.exit_reason, e.g. "
+            "TRAILING_STOP -> 'the trailing stop was hit'), e.g. 'Sold position ab12cd34 at 151.2 because the trailing "
+            "stop was hit.' Plain text only.\n\nDECISION JSON:\n" + decision.model_dump_json(exclude={"explanation"}))},
     ]
 
 
-def summary_messages(status: StatusSnapshot) -> list[dict[str, str]]:
+def summary_messages(status: StatusSnapshot, performance: Optional[PerformanceSummary] = None,
+                     alerts: Optional[Sequence[Alert]] = None) -> list[dict[str, str]]:
     return [
         {"role": "system", "content": SYSTEM_BASE},
         {"role": "user", "content": (
             "Summarize the agent's current state in 3-5 sentences: running/paused/stopped and trading mode, current "
             "market regime, active strategy, performance (equity vs starting capital, PnL), open positions, and the "
-            "last decision. Plain text only.\n\nSTATUS JSON:\n" + _status_json(status))},
+            "last decision; if PERFORMANCE is given mention return, drawdown and win rate; if ALERTS are given mention "
+            "the most important recent ones. Plain text only.\n\nSTATUS JSON:\n" + _status_json(status)
+            + _extras_json(performance, alerts))},
     ]
 
 
-def answer_messages(question: str, status: StatusSnapshot) -> list[dict[str, str]]:
+def answer_messages(question: str, status: StatusSnapshot, performance: Optional[PerformanceSummary] = None,
+                    alerts: Optional[Sequence[Alert]] = None) -> list[dict[str, str]]:
     return [
         {"role": "system", "content": SYSTEM_BASE + " If the JSON does not contain the answer, say so."},
-        {"role": "user", "content": "STATUS JSON:\n" + _status_json(status) + "\n\nQUESTION (answer in 1-4 sentences, plain text):\n" + question[:2000]},
+        {"role": "user", "content": "STATUS JSON:\n" + _status_json(status) + _extras_json(performance, alerts) + "\n\nQUESTION (answer in 1-4 sentences, plain text):\n" + question[:2000]},
     ]
 
 
