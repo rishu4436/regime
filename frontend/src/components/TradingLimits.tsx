@@ -12,6 +12,7 @@ const FIELDS: { key: keyof Omit<TradingLimits, "order_mode" | "order_usdt" | "or
   { key: "max_total_usdt", label: "Max total invested", hint: "All open positions together." },
   { key: "max_per_token_usdt", label: "Max in one token", hint: "Keeps one stock from taking over." },
   { key: "daily_loss_usdt", label: "Daily loss limit", hint: "Losing this much in a day triggers the emergency stop." },
+  { key: "daily_buy_usdt", label: "Daily buy limit", hint: "The most Regime may buy in one day." },
 ];
 // no order_mode / no size from the backend = the strategy decides the size
 const modeOf = (l: Partial<TradingLimits>): TradingLimits["order_mode"] =>
@@ -19,6 +20,7 @@ const modeOf = (l: Partial<TradingLimits>): TradingLimits["order_mode"] =>
 const pick = (l: TradingLimitsResponse | TradingLimits): TradingLimits => ({
   order_mode: modeOf(l), order_usdt: l.order_usdt, order_pct: l.order_pct, max_order_usdt: l.max_order_usdt,
   max_total_usdt: l.max_total_usdt, max_per_token_usdt: l.max_per_token_usdt, daily_loss_usdt: l.daily_loss_usdt,
+  ...(l.daily_buy_usdt != null ? { daily_buy_usdt: l.daily_buy_usdt } : {}),
 });
 /** Only what the user changed: risk keeps every other value as it is (e.g. the per-token cap). */
 function changed(cur: TradingLimits, next: TradingLimits): Partial<TradingLimits> {
@@ -41,7 +43,7 @@ function raised(cur: TradingLimits, next: TradingLimits): string[] {
   if (next.order_mode === cur.order_mode && next.order_mode === "pct" && next.order_pct > cur.order_pct) out.push(`order size ${cur.order_pct}% → ${next.order_pct}% of wallet`);
   else if (next.order_mode !== cur.order_mode && next.order_mode !== "strategy") out.push(next.order_mode === "pct" ? `order size → ${next.order_pct}% of wallet` : `order size → ${usd(next.order_usdt)}`);
   else if ((perOrder(next) ?? 0) > (perOrder(cur) ?? 0)) out.push(`order size ${usd(cur.order_usdt)} → ${usd(next.order_usdt)}`);
-  for (const f of FIELDS) if (next[f.key] > cur[f.key]) out.push(`${f.label.toLowerCase()} ${usd(cur[f.key])} → ${usd(next[f.key])}`);
+  for (const f of FIELDS) if ((next[f.key] ?? 0) > (cur[f.key] ?? Infinity)) out.push(`${f.label.toLowerCase()} ${usd(cur[f.key])} → ${usd(next[f.key])}`);
   return out;
 }
 
@@ -110,10 +112,10 @@ export function TradingLimitsCard({ refresh }: { refresh?: () => void }) {
           </div>
         </div>
         <div className="field-grid">
-          {FIELDS.map((f) => (
+          {FIELDS.filter((f) => draft[f.key] != null).map((f) => (
             <div key={f.key}>
               <span className="lbl">{f.label}</span>
-              <NumberInput value={draft[f.key]} min={1} step={5} suffix="USDT" onChange={(v) => set(f.key, v ?? 1)} />
+              <NumberInput value={draft[f.key] as number} min={1} step={5} suffix="USDT" onChange={(v) => set(f.key, v ?? 1)} />
               <div className="small faint" style={{ marginTop: 3 }}>{f.hint}</div>
             </div>
           ))}
