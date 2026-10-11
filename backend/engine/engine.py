@@ -174,12 +174,12 @@ class DefaultStrategyEngine:
                 )  # fmt: skip
                 if pe is not None:
                     how = f"gapped through {pe.level:.6g}, fill at open" if pe.gap else "fill at level"
-                    return self._sell(p, pe.reason, pe.price, f"{pe.reason.value}: {how} {pe.price:.6g}", base)
+                    return self._sell(p, pe.reason, pe.price, f"{how} {pe.price:.6g}", base)
         ie = indicator_exit(s, mi, len(cs) - 1)
         if ie is not None and ordered:
             p = ordered[0]
             extra = f" ({len(ordered) - 1} more position(s) also qualify)" if len(ordered) > 1 else ""
-            return self._sell(p, ie[0], c.close, f"{ie[0].value}: {ie[1]}{extra}", base)
+            return self._sell(p, ie[0], c.close, f"{ie[1]}{extra}", base)
         return None
 
     @staticmethod
@@ -187,7 +187,7 @@ class DefaultStrategyEngine:
         b = {**base, "price": price}
         return Signal(
             action=Action.SELL,
-            reason=f"Exit {detail}",
+            reason=detail,
             conditions_met=[reason.value],
             exit_reason=reason,
             position_id=p.id,
