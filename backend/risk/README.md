@@ -135,7 +135,7 @@ never ratchets.
 `emergency_stopped=True` (`paused` untouched), blocks every BUY and makes `check_exits` emit an `EMERGENCY_STOP` SELL for
 every position (closing SELLs still pass `check`); `reset_emergency_stop()` (interface method) clears it and leaves
 `paused` as it was; `set_confirmation_mode(bool)`; `set_trading_mode(mode)` refuses LIVE unless
-`RiskConfig.allow_live=True` (default False, and `check` blocks everything in LIVE without it). Every change sets
+`RiskConfig.allow_live=True` (default False; without it `check` blocks every LIVE BUY, closing SELLs still pass). Every change sets
 `reason` and `updated_at`.
 
 ### Notes for other bots
@@ -148,3 +148,82 @@ every position (closing SELLs still pass `check`); `reset_emergency_stop()` (int
 - **Bot 1 (UI):** show `RiskVerdict.checks` as a pass/fail list with `detail`, `reasons[0]` as the headline, the
   control `reason`, a separate "Reset emergency stop" button, and `exit_levels()` (SL / TP / trail lines) per position.
 - **Bot 2:** match the exit semantics above in `backtest_manual`.
+
+---
+
+## LIVE (real funds) profile — `live.py`
+
+Applied **automatically** whenever the trading mode is LIVE (manager control state, the `control` passed to `check`,
+or `Portfolio.mode`). SIM/PAPER are unaffected. The agent is **autonomous**: a LIVE BUY that passes every hard limit is
+approved with `requires_confirmation=False`; confirmation is only requested if the user explicitly turns confirmation
+mode on (or the strategy's activation is `CONFIRMATION`). Protective SELLs (SL/TP/trailing/max-loss/emergency) are never
+blocked by a LIVE guard and never wait.
+
+### Three switches (all required for a LIVE BUY)
+| Switch | Owner | Effect |
+|---|---|---|
+| `LIVE_TRADING_ENABLED=true` | Bot 6 app | app refuses to run the LIVE loop otherwise |
+| `BINANCE_LIVE_ENABLED=true` | Bot 4 exchange | LIVE exchange client cannot be built otherwise |
+| `RiskConfig.allow_live=True` | Bot 3 risk | otherwise every LIVE BUY fails check `trading_mode` |
+
+`DefaultRiskManager()` without `config=` uses `RiskConfig.from_env()`, which sets `allow_live=True` only when
+`RISK_ALLOW_LIVE`, `LIVE_TRADING_ENABLED` and `BINANCE_LIVE_ENABLED` are all exactly `true`. An explicit
+`RiskConfig(allow_live=True)` (tests / code) bypasses env. No secrets are read.
+
+### `LiveRiskProfile` (`RiskConfig.live`) — defaults
+| Field | Default | Env override (`from_env`) | Check name |
+|---|---|---|---|
+| `max_order_notional_usdt` | 25 | `RISK_LIVE_MAX_ORDER_USDT` | `live_order_cap` (reduces size) |
+| `max_daily_loss_usdt` | 25 | `RISK_LIVE_MAX_DAILY_LOSS_USDT` | `live_daily_loss_cap` (**auto emergency stop**) |
+| `max_daily_notional_usdt` | 100 | `RISK_LIVE_MAX_DAILY_NOTIONAL_USDT` | `live_daily_notional` (reduces size) |
+| `max_open_exposure_usdt` | 50 | `RISK_LIVE_MAX_EXPOSURE_USDT` | `live_max_exposure` (reduces size) |
+| `max_data_age_seconds` | 900 | `RISK_LIVE_MAX_DATA_AGE_S` | `live_stale_data` |
+| `max_future_skew_seconds` | 60 | — | `live_stale_data` |
+| `max_quote_age_seconds` | 30 (quote TTL) | — | `live_quote` |
+| `max_slippage_pct` | 1.0 | `RISK_LIVE_MAX_SLIPPAGE_PCT` | `live_slippage` |
+| `require_quote` | False | — | `live_quote` |
+| `market_hours_enabled` / `market_open_utc` / `market_close_utc` / `market_weekdays_only` | True / 13:30 / 20:00 / True | `RISK_LIVE_MARKET_HOURS=false` | `live_market_hours` |
+| `market_hours_exempt_symbols` | [] | — | `live_market_hours` |
+| `require_wallet_balances` | True | — | `live_gas_reserve` |
+| `quote_asset` / `fee_buffer_usdt` | USDT / 1.0 | `RISK_LIVE_FEE_BUFFER_USDT` | `live_wallet_balance` (reduces), `live_wallet_quote` |
+| `gas_asset` / `min_gas_reserve` | BNB / 0.002 | `RISK_LIVE_MIN_BNB` | `live_gas_reserve` |
+
+Size caps only **reduce** the order (each logged as "reduced from X to Y"); if it ends below `min_order_notional`
+(10 USDT) the BUY is blocked. The other guards block outright.
+
+Semantics:
+- **Daily loss** = `-(Portfolio.daily_pnl + Σ unrealized)` where unrealized = `qty * (current_price - entry)` (or
+  `Position.unrealized_pnl` if no `current_price`). Unrealized includes positions opened before today. When it reaches the
+  cap, `check()` or `check_exits()` sets `emergency_stopped=True` with the reason
+  "Auto emergency stop: LIVE daily loss X USDT reached the cap of Y USDT ...". `check_exits` then emits `EMERGENCY_STOP`
+  SELLs for every position. Only `reset_emergency_stop()` clears it.
+- **Daily notional** = LIVE BUY fills today (UTC). This is the larger of the internal ledger fed by `record_execution(result)`
+  (LIVE, BUY, FILLED/PARTIALLY_FILLED only) and `LiveContext.daily_live_notional_usdt` (use this so the count survives
+  restarts). SELLs don't count.
+- **Stale data** uses `LiveContext.data_timestamp`, or `bar.timestamp + bar_interval` (bar close). `Candle.timestamp` is the
+  bar OPEN time, so a 1h bar's open is always more than 900 s old: pass `data_timestamp` = when the price was fetched (or the bar
+  close). Missing → blocked. Naive datetimes are treated as UTC.
+- **Quote** (if supplied): symbol/side must match; it must not be expired or older than `max_quote_age_seconds`.
+  `|quote.price - ref| / ref` and `quote.slippage_bps/100` must both be `<= max_slippage_pct` (ref =
+  `context.reference_price` → `signal.price` → `context.bar.close`; none → blocked). `quote.notional` must be `<=` the approved
+  size. With balances, `quote.notional + quote.fee <= stable balance - fee buffer`.
+- **Market hours**: 13:30–20:00 UTC Mon–Fri matches the US session during EDT. During EST the session is 14:30–21:00 UTC, so
+  adjust `market_open_utc`/`market_close_utc`. Exchange holidays are not modelled. Uses `context.now` or the clock.
+- **Balances**: `{"USDT": 40.0, "BNB": 0.01}` (keys are case-insensitive). BUY notional is capped at `USDT - fee_buffer`. BNB must be
+  `>= min_gas_reserve`. If no balances are given and `require_wallet_balances` is set → blocked.
+
+### What the loop (Bot 6) must pass in LIVE
+```python
+ctx = LiveContext(now=utc_now(), data_timestamp=<price fetch time or bar close>, bar=last_bar, reference_price=last_price,
+                  balances=wallet_balances,                 # e.g. from baw / exchange: {"USDT": .., "BNB": ..}
+                  daily_live_notional_usdt=<persisted LIVE BUY notional today>)   # optional; ledger also used
+v = risk.check(signal, portfolio, control, context=ctx)      # phase 1: size (adjusted_notional)
+q = exchange.get_quote(sym, BUY, v.adjusted_notional)
+v = risk.check(signal, portfolio, control, context=ctx.model_copy(update={"quote": q, "now": utc_now()}))  # phase 2
+if v.approved: res = exchange.execute_swap(order, q); risk.record_execution(res)
+risk.check_exits(portfolio, prices, bars)                    # every tick (also enforces the daily loss cap)
+risk.live_limits(portfolio, ctx)                             # -> dict for GET /api/wallet "limits"
+```
+`live_limits()` returns `live_allowed, per_order_cap_usdt, daily_loss_cap_usdt, daily_notional_cap_usdt,
+max_exposure_usdt, max_slippage_pct, stale_after_s, bnb_gas_reserve, fee_buffer_usdt, market_hours_utc,
+daily_used_usdt, daily_loss_usdt, open_exposure_usdt`. The last two are `None` without a portfolio.
