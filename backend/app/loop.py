@@ -470,6 +470,8 @@ class TradingLoop:
                 if self.sim and primary and not self.finished:
                     self.finished = True
                     self._alert(AlertLevel.INFO, "REPLAY_FINISHED", f"SIM replay of {sym} reached the last bar", sym)
+                if not self.sim:  # PAPER/LIVE: no new candle yet, but stop-loss / take-profit still run on the latest price
+                    return self._exits_on_price(sym)
                 return None
             bar = self._bar = window[-1]
             now = self._now()
@@ -596,6 +598,38 @@ class TradingLoop:
     def _set_sim_price(self, sym: str, price: float) -> None:
         if self.sim and hasattr(self.c.exchange, "set_price"):
             self.c.exchange.set_price(sym, price)
+
+    def _exits_on_price(self, sym: str) -> Optional[list[Decision]]:
+        """Protective exits between candle windows (Bot 4: new windows arrive only every 9-14 min in LIVE). Uses the
+        latest price as a flat bar; only SL / TP / trailing, never entries. None = nothing held or nothing hit."""
+        if self.wallet_block or not self.book.lots_for(sym):
+            return None
+        try:
+            price = float(self.c.exchange.get_price(sym))
+        except Exception as e:  # no price: wait for the next wake-up or candle
+            log.debug("exit price check for %s failed: %s", sym, e)
+            return None
+        if not price or price <= 0:
+            return None
+        now = self._now()
+        bar = Candle(timestamp=now, open=price, high=price, low=price, close=price, volume=0.0)
+        out: list[Decision] = []
+        if not self.sim:
+            out.extend(self._poll_chain_pending())
+        sigs = call_check_exits(self.c.risk, self._pf(), {sym: price}, {sym: bar})
+        used: set[int] = set()
+        for sig in sigs:
+            if sig.action != Action.SELL:
+                continue
+            if self._is_pending_target(sig):
+                out.append(self._hold_exit(sig, "risk.check_exits", self.current_regime))
+                continue
+            lot = self._match_lot(sig, bar, used)
+            if lot is not None:
+                used.add(id(lot))
+                out.append(self._exit([lot], sig, exit_reason_of(sig), self.current_regime, verdict=None))
+        self.book.raise_highs(sym, price)
+        return out or None
 
     def _match_lot(self, sig: Signal, bar: Candle, used: set[int]) -> Optional[Lot]:
         lots = [l for l in self.book.lots_for(sig.symbol) if id(l) not in used]
@@ -1687,6 +1721,14 @@ class TradingLoop:
                 return self._finalize(Decision(id=did, action=Action.STAY_OUT, risk_verdict=v2,
                                                reason="BUY not executed: " + _blocked(v2.reasons), **base))
             verdict = v2
+            smaller = v2.adjusted_notional
+            if smaller and 0 < smaller < notional * 0.99:  # Bot 3: the second check shrank the size - honour it
+                try:
+                    quote = self.c.exchange.get_quote(signal.symbol, OrderSide.BUY, smaller)
+                except Exception as e:
+                    return self._finalize(Decision(id=did, action=Action.STAY_OUT, risk_verdict=v2,
+                                                   reason=f"BUY not executed: no quote for the reduced size ({_quote_error(e)})", **base))
+                notional = smaller
         res = self._execute(OrderSide.BUY, signal.symbol, notional, did, quote=quote)
         if livemod.result_reason(res) == ORDER_IN_FLIGHT:  # Bot 4 single-flight: an earlier order is unresolved
             sig = base.get("signal")
