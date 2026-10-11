@@ -76,24 +76,32 @@ Only show what is on the screen. If something isn't there on the day, skip it an
 
 **Emergency stop in LIVE:** confirming it sells the open NVDAB lots on the next bar. Only confirm if Rishu wants that. Otherwise show the dialog and cancel, as above.
 
-## 2:25–2:45: Agent Studio identity
+## 2:25–2:35: Agent Studio identity
 
 | Time | Shot | Say |
 |---|---|---|
 | 2:25 | **Agent identity** card (BNB Agent Studio · ERC-8004). Show the three steps: create identity wallet, fund it with BNB for gas, register. | "Regime is ready for an on-chain identity with BNB Agent Studio, using ERC-8004. It uses a separate small wallet that never touches trading funds." |
-| 2:37 | Card reads "not registered yet". | "It's ready, but not registered yet." |
+| 2:32 | Card reads "not registered yet". | "It's ready, but not registered yet." |
 
-<!-- AGENT STUDIO REGISTRATION: if Rishu registers before recording, replace the 2:37 row with:
-| 2:37 | Card shows the ERC-8004 id and network. Open the registration tx on BscScan. | "It's registered. Here's its ERC-8004 id, and the registration tx on BscScan." |
+<!-- AGENT STUDIO REGISTRATION: if Rishu registers before recording, replace the 2:32 row with:
+| 2:32 | Card shows the ERC-8004 id and network. Open the registration tx on BscScan. | "It's registered. Here's its ERC-8004 id, and the registration tx on BscScan." |
 Registration tx: https://bscscan.com/tx/<REGISTRATION_TX_HASH>
 ERC-8004 id: <ID>
 -->
 
-## 2:45–2:55: Manual Strategy Builder
+## 2:35–2:50: Watchlist and Auto-pick
 
 | Time | Shot | Say |
 |---|---|---|
-| 2:45 | **Manual Builder** tab. Scroll past the entry rules (RSI, SMA, EMA, MACD, Bollinger, volume, breakout, AND/OR) and exits (take-profit, stop-loss, trailing). | "If you want your own rules, build them here without code, backtest them, then run them live with the same engine." |
+| 2:35 | **Auto Mode** tab: the watchlist picker. Search the full token list (about 680 tokenized stocks) and show the Watchlist (up to 5). | "Regime can watch up to five tokens at once, picked from about 680 tokenized stocks on BNB Chain." |
+| 2:40 | Turn on **Auto-pick tokens** and choose a theme, such as AI & chips. Show the picks with their reasons. | "Or let Auto-pick choose them by theme, using momentum, trend and volume. Each pick says why, and the risk limits cover all of them together." |
+| 2:47 | Dashboard **Watchlist** card with the Auto-pick pill. | "It checks each one every tick." |
+
+## 2:50–2:55: Manual Strategy Builder
+
+| Time | Shot | Say |
+|---|---|---|
+| 2:50 | **Manual Builder** tab. Scroll quickly past the entry rules (RSI, SMA, EMA, MACD, Bollinger, volume, breakout, AND/OR) and exits (take-profit, stop-loss, trailing). | "If you want your own rules, build them here without code, backtest them, then run them live with the same engine." |
 
 ## 2:55–3:00: Close
 
@@ -101,17 +109,6 @@ ERC-8004 id: <ID>
 |---|---|
 | Back to the dashboard. Repo link on screen: https://github.com/rishu4436/regime | "That's Regime. It trades by itself, explains every move, and stays inside your limits." |
 
-<!-- WATCHLIST: uncomment if merged by 13:45
-Time budget: 15 s. Take it from 2:25–2:45 (Agent Studio, cut to 10 s) and 2:45–2:55 (Manual Builder, cut to 5 s).
-
-## Watchlist and Auto-pick (15 s)
-
-| Shot | Say |
-|---|---|
-| **Auto Mode** tab: the watchlist picker. Search the full token list (about 680 tokenized stocks) and add tokens, up to 5. | "Regime can watch up to five tokens at once. Pick them from about 680 tokenized stocks." |
-| Turn on **Auto-pick** and choose a narrative, such as AI & chips. Show the picks. | "Or let Auto-pick choose them by theme, using momentum, trend and volume. The risk caps cover all of them together." |
-| Dashboard **Watchlist** card. | "It checks each one every tick." |
--->
 
 ---
 
@@ -119,5 +116,6 @@ Time budget: 15 s. Take it from 2:25–2:45 (Agent Studio, cut to 10 s) and 2:45
 
 - Mode: both trades are Auto mode with Grid, made by Regime on its own (confirmed from the PC decision log).
 - Agent Studio: still not registered unless Rishu registers. If he does, fill in the placeholder above.
-- Watchlist: the picker is in the frontend, but the backend (PR #28) isn't merged yet. Keep that section commented
-  out unless it merges by 13:45.
+- Watchlist: merged on main (`37ca2b8`). Before recording, check Auto-pick returns trading tokens live; Ondo tokens
+  show as skipped outside US market hours, which is expected. Don't switch the live agent off NVDAB just for the shot
+  unless Rishu wants it to trade those tokens.
