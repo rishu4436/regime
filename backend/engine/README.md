@@ -201,7 +201,7 @@ candles. That is intentional: the kickoff required the fixes. The README line ab
 trade list") is superseded.
 
 ## Tests
-`pytest backend/engine` runs 166 tests:
+`pytest backend/engine` runs 196 tests:
 - indicators against hand-computed values and independent pandas references
 - regime detection on all mock shapes and 25 seeds per regime
 - the full preset map and evaluate_auto
@@ -212,6 +212,9 @@ trade list") is superseded.
 - `test_real_data.py`: real-shaped candles (sparse sessions, weekend/overnight gaps, zero volume, bad rows, duplicates,
   unsorted input, tiny prices, 24/7 data with thin overnight/weekend liquidity)
 - `test_live_safety.py`: every `live_safe` gate, the size caps, SELL never blocked, config validation
+- `test_binance_samples.py`: REAL Binance responses (`tests/fixtures/binance/`, fetched Sun 11 Oct 2026 01:47 UTC
+  from the public skill endpoints: NVDAB / NVDAon / TSLAx 1h K-lines, NVDAon status, rwa/dynamic): token families,
+  the Ondo zero-volume fix, min-order floor / 25 USDT cap, market context (status, price impact)
 
 ## Live / mainnet (branch `bot2/live`)
 The team now trades LIVE on BNB Chain mainnet (BNB Hack: Tokenized Stocks Edition) with real funds. The agent is
@@ -281,6 +284,9 @@ allowed, even on stale data.
 
 ### What other bots must wire up
 - **Bot 6 (loop):**
+  - Before each `evaluate_*` call, `eng.set_market_context(symbol, {"status": <Bot 3 token status>,
+    "reference_price_only": <bool>, "priceImpactPercent": <best route of a probe quote>, "equity": <wallet USDT>})`.
+    Pass `None` when the data is unknown or stale.
   - In PAPER/LIVE, construct `DefaultStrategyEngine(live_safe=True, clock=<the loop's clock>)`. Keep the default
     engine for SIM and backtests.
   - Pass the `ManualStrategy.timeframe` / `AutoConfig.timeframe` that matches the candle interval actually fetched,
@@ -292,10 +298,59 @@ allowed, even on stale data.
   `proposed_notional` before risk sees them. Because there is no per-trade user approval, risk's caps and kill
   switch are the binding limits.
 
+### Token families, min order, market context (BNB Hack findings, Sun 11 Oct 2026)
+`data.token_family(symbol)` → `"bstock"` (`…B`), `"ondo"` (`…on`), `"xstock"` (`…x`) or `"other"`.
+
+| Family | What the real data shows | `live_safe` default |
+|---|---|---|
+| bStock | Trades 24/7 with real DEX volume (NVDAB: 48/48 weekend hourly bars traded) | Full volume rules (`live_no_volume`, `live_thin_liquidity`, thin size x0.5) |
+| Ondo | Off-hours hourly bars are all volume `0`, ~0.2% range, price ≈ reference | Volume is **not applicable**: the `volume_above_avg` condition and min-volume filter are left out (not failed, not "warming up"), and the no-volume / thin-liquidity gates are skipped. Stale data is still refused. Min order **20 USDT** (Binance `40375`) |
+| xStock | Zero liquidity on BSC (TSLAx bars weeks apart) | Entries blocked: `live_illiquid_family` |
+
+The Ondo bug: before this change, Ondo's zero-volume candles made every live entry fail `live_no_volume` and
+`live_thin_liquidity`, so Ondo could never be bought.
+
+New `LiveSafetyConfig` fields:
+- `blocked_families` (default `{"xstock"}`)
+- `volume_exempt_families` (default `{"ondo"}`)
+- `min_order_usdt` (default `{"ondo": 20.0}`; other families have no floor) and `bump_to_min_order` (default True)
+- `max_order_usdt` (default 25.0)
+- `equity_hint_usdt` (optional; sizes from min(equity, hint))
+- `impact_halve_pct` (default 1.0) and `impact_max_pct` (default 2.0)
+
+**BUY sizing order:**
+1. proposed % ×0.25, capped at 2%
+2. thin-liquidity ×0.5 (volume families only)
+3. price impact > 1% → ×0.5
+4. notional on min(equity, hint)
+5. below the family's min order → bump to the floor, but only if the floor ≤ `max_order_usdt`, the floor ≤ the
+   equity basis, and the size was not halved for price impact. Otherwise STAY_OUT `live_below_min_order`.
+6. Never above `max_order_usdt` (25 USDT).
+
+`proposed_size_pct` is always `notional / equity × 100`.
+
+**Market context (no contract change):** `eng.set_market_context(symbol, ctx)` or
+`DefaultStrategyEngine(market_context={symbol: ctx})`. `ctx=None` clears it. Accepted keys:
+- `status`: Bot 3's `trading` / `off-hours` / `closed` / `no liquidity`, also `open` / `paused`, or the raw Binance
+  `statusInfo` keys `marketStatus` / `openState` / `reasonCode`. Status is case-, `-`-, `_`- and space-insensitive.
+- `reference_price_only`
+- `price_impact_pct`, or the Web3 quote's per-route `priceImpactPercent` (percent units, e.g. 0.0001)
+- `reference_price`
+- `equity`
+
+Effects on BUYs only (SELLs are never blocked):
+- off-hours, closed, no liquidity, paused, `openState=false`, a reasonCode of ASSET_PAUSED / MARKET_PAUSED /
+  MAINTENANCE, or `reference_price_only` → STAY_OUT `live_token_paused`
+- price impact > 2% → STAY_OUT `live_price_impact`
+- price impact > 1% → size ×0.5
+
+The context gates apply even without `live_safe`, because the loop only sets a context when it has real data.
+
 ### Fixtures
-No real Binance candle responses are on the box yet: the box's US IP gets 40304, and
-`/workspace/binance-check/samples/` did not exist when this was written. `tests/real_fixtures.py` builds hand-made
-real-shaped data instead:
+`tests/fixtures/binance/` holds real public samples (see Tests above). They only have 48 bars, so
+`binance_samples.extended()` prepends rescaled copies of the real bars so there is enough warm-up history.
+`/workspace/binance-check/samples/` (Bot 4's Web3 API dumps) did not exist at the time of writing.
+`tests/real_fixtures.py` adds hand-made real-shaped data:
 - string rows `[o, h, l, c, v, ts_ms, tradeCount]` parsed the way Bot 4 parses them
 - NVDAon at about 230.88
 - weekday 13:00–20:00 UTC sessions with missing bars and about 30% zero-volume bars
