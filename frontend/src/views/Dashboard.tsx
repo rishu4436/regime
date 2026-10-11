@@ -5,7 +5,7 @@ import { ActionBadge, RegimeBadge } from "../components/Badges";
 import { PriceChart, type TradeMarker } from "../components/Charts";
 import { Card, Segmented, Skeleton, StatCard, useToast } from "../components/ui";
 import { cls, humanize, num, time, usd } from "../lib/format";
-import { conditionLabel, controlReason, EXIT_LABEL, strategyLabel, TOKENS } from "../lib/strategy";
+import { conditionLabel, controlReason, EXIT_LABEL, isExitQueued, isPendingPos, strategyLabel, TOKENS } from "../lib/strategy";
 import { Controls } from "./Controls";
 import { AlertsPanel, AskAgent } from "./Insights";
 import { ApiError, type PerformanceSummary } from "../api/types";
@@ -36,7 +36,7 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
   useEffect(() => { api.getCandles(symbol, "1h", 150).then(setCandles).catch(() => status?.active_symbol ? setCandles([]) : api.getCandles("NVDAon", "1h", 150).then(setCandles).catch(() => setCandles([]))); }, [symbol, tick]);
 
   const pf = status?.portfolio;
-  const unreal = pf ? (pf.positions ?? []).reduce((a, p) => a + (p.unrealized_pnl ?? 0), 0) : null;
+  const unreal = pf ? (pf.positions ?? []).reduce((a, p) => a + (isPendingPos(p) ? 0 : p.unrealized_pnl ?? 0), 0) : null;
   const totalPnl = pf ? pf.equity - pf.starting_capital : null;
   const decisions = status?.recent_decisions ?? [];
   // authoritative list from GET /api/confirmations (recent_decisions only holds the last 20); refreshed on every snapshot
@@ -144,12 +144,13 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
                 <thead><tr><th>Token</th><th className="r">Qty</th><th className="r">Entry</th><th className="r">Price</th><th className="r">uPnL</th><th>Stops</th><th>Strategy</th><th></th></tr></thead>
                 <tbody>
                   {(pf?.positions ?? []).map((p, i) => (
-                    <tr key={p.id ?? `${p.symbol}-${i}`}>
-                      <td><b>{p.symbol}</b>{p.id && <div className="faint small" title={p.id}>lot {p.id.slice(0, 6)}</div>}</td><td className="r">{num(p.quantity)}</td><td className="r">{usd(p.avg_entry_price)}</td><td className="r">{usd(p.current_price)}</td>
-                      <td className={`r ${cls(p.unrealized_pnl)}`}>{usd(p.unrealized_pnl)}</td>
+                    <tr key={p.id ?? `${p.symbol}-${i}`} className={isPendingPos(p) ? "settling" : undefined}>
+                      <td><b>{p.symbol}</b>{isPendingPos(p) && <span className="pill warn" style={{ marginLeft: 6 }} title={`In-flight buy${(p as { client_order_id?: string }).client_order_id ? ` · order ${(p as { client_order_id?: string }).client_order_id}` : ""}`}>⏳ Settling on-chain</span>}
+                        {p.id && <div className="faint small" title={p.id}>lot {p.id.slice(0, 6)}</div>}</td><td className="r">{num(p.quantity)}</td><td className="r">{usd(p.avg_entry_price)}</td><td className="r">{usd(p.current_price)}</td>
+                      <td className={`r ${isPendingPos(p) ? "" : cls(p.unrealized_pnl)}`}>{isPendingPos(p) ? "—" : usd(p.unrealized_pnl)}</td>
                       <td className="small">SL {usd(p.stop_loss_price)} · TP {usd(p.take_profit_price)}{p.trailing_stop_pct ? ` · trail ${p.trailing_stop_pct}%` : ""}</td>
                       <td className="small trunc" title={p.strategy}>{p.strategy}</td>
-                      <td><button className="btn ghost" style={{ padding: "4px 10px" }} title="Close this lot at the last price"
+                      <td><button className="btn ghost" style={{ padding: "4px 10px" }} disabled={isPendingPos(p)} title={isPendingPos(p) ? "Buy still settling on-chain: exit queued until fill" : "Close this lot at the last price"}
                         onClick={() => setCloseTarget(p.id ? { kind: "lot", id: p.id, symbol: p.symbol } : { kind: "all", symbol: p.symbol })}>Close</button></td>
                     </tr>
                   ))}
@@ -194,7 +195,7 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
                   <td className="small muted">{time(d.timestamp)}</td><td><ActionBadge action={d.action} /></td><td>{d.symbol}</td>
                   <td><RegimeBadge regime={d.regime} /></td><td className="small trunc" title={d.strategy}>{strategyLabel(d.strategy)}</td>
                   <td className="small">{d.execution ? (d.execution.status === "PENDING_CONFIRMATION" && !status?.control.confirmation_mode ? "Waiting on chain" : humanize(d.execution.status)) : "—"} <TxLink exec={d.execution} /></td>
-                  <td className="wrap small">{d.signal?.exit_reason && <><ExitPill d={d} />{" "}</>}{d.reason}</td>
+                  <td className="wrap small">{isExitQueued(d.reason) && <><span className="pill warn">Exit queued until fill</span>{" "}</>}{d.signal?.exit_reason && <><ExitPill d={d} />{" "}</>}{d.reason}</td>
                 </tr>
               ))}
             </tbody>

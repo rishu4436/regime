@@ -231,7 +231,7 @@ export const CONDITION_LABEL: Record<string, string> = {
   live_quote: "Valid quote", live_quote_notional: "Quote amount matches", live_slippage: "Slippage within limit",
   live_wallet_quote: "Wallet can cover quote", live_daily_notional: "Daily traded cap", live_max_exposure: "Max open exposure",
   live_order_cap: "Per-order cap", live_wallet_balance: "Wallet balance",
-  live_below_min_order: "Below minimum order", session_expired: "Agentic Wallet session expired, re-scan QR on host PC", wallet_not_ready: "Agentic Wallet session expired, re-scan QR on host PC", live_illiquid_family: "xStock excluded (no liquidity on BNB Chain)", live_token_paused: "Token paused", live_price_impact: "Price impact above limit",
+  live_below_min_order: "Below minimum order", order_in_flight: "Earlier swap still settling, waiting", pending_exit: "Exit queued until fill", exit_pending: "Exit queued until fill", session_expired: "Agentic Wallet session expired, re-scan QR on host PC", wallet_not_ready: "Agentic Wallet session expired, re-scan QR on host PC", live_illiquid_family: "xStock excluded (no liquidity on BNB Chain)", live_token_paused: "Token paused", live_price_impact: "Price impact above limit",
   // Binance Web3 exchange quote errors (Bot 4) used as market-state signals: a stay-out, not a failed trade
   // Bot 4 exchange reasons and Bot 3 wallet / live checks
   market_closed: "Market closed", insufficient_liquidity: "Insufficient liquidity", below_minimum: "Below minimum order",
@@ -250,6 +250,10 @@ export const controlReason = (r?: string | null) => (r ?? "").replace(/^\s*(EMER
 /** Exchange error codes found in a reason text (e.g. "QuoteUnavailable 40367 ..."), as friendly labels. */
 export const exchangeCodeLabels = (text?: string | null) =>
   [...new Set((text ?? "").match(/\b403(66|67|69|74|75)\b/g) ?? [])].map((c) => CONDITION_LABEL[c]);
+/** Exit held because the position's buy is still settling on-chain (Bot 6 reason text or code). */
+export const isExitQueued = (text?: string | null) => /still settling on-chain|settling on-chain|\b(pending_exit|exit_pending)\b|exit (held|queued)/i.test(text ?? "");
+/** In-flight LIVE buy flagged by Bot 6 (Position.pending + client_order_id); tolerate missing fields. */
+export const isPendingPos = (p: object) => (p as { pending?: boolean }).pending === true;
 /** xStock (…x) on BNB Chain has no liquidity: greyed out in pickers, selectable only in SIM. */
 export const isXStock = (sym: string) => /x$/.test(sym);
 /** Signal.strategy / active_strategy "NONE" means Auto Mode is staying out. */

@@ -426,6 +426,7 @@ export class MockApi implements ApiClient {
     const pos: Position = { id: uid(), symbol, quantity: q, avg_entry_price: px, opened_at: now(), strategy, current_price: px, highest_price: px,
       stop_loss_price: px * (1 - (x?.stop_loss_pct ?? 6) / 100), take_profit_price: px * (1 + (x?.take_profit_pct ?? 12) / 100) };
     if (x?.trailing_stop.enabled) { pos.trailing_stop_pct = x.trailing_stop.pct; this.trails[pos.id!] = px * (1 - x.trailing_stop.pct / 100); }
+    if (LIVE) Object.assign(pos, { pending: true, client_order_id: base.client_order_id, pendingTick: this.loop.ticks });
     ps.push(pos);
     pf.cash -= notional; pf.trades_today = (pf.trades_today ?? 0) + 1; this.barsSinceEntry[symbol] = 0;
     this.markToMarket();
@@ -492,7 +493,16 @@ export class MockApi implements ApiClient {
     }
 
     // 1. protective exits: no confirmation needed, run even while emergency stopped
+    // LIVE demo: a fresh buy is "settling on-chain" for one tick; its exits wait until it fills
+    for (const p of this.portfolio.positions ?? []) if ((p as { pending?: boolean }).pending) {
+      const age = this.loop.ticks - ((p as { pendingTick?: number }).pendingTick ?? 0);
+      if (age >= 2) { delete (p as { pending?: boolean }).pending; delete (p as { pendingTick?: number }).pendingTick; }
+    }
     for (const p of [...(this.portfolio.positions ?? [])]) {
+      if ((p as { pending?: boolean }).pending) {
+        out.push(this.log({ symbol: p.symbol, action: "STAY_OUT", strategy: p.strategy ?? "-", reason: `Exit check held for lot ${p.id?.slice(0, 6)}: buy still settling on-chain` }));
+        continue;
+      }
       const bar = this.candles[p.symbol][this.candles[p.symbol].length - 1];
       const trail = p.id ? this.trails[p.id] : undefined;
       let why: ExitReason | null = null, level = bar.close;
