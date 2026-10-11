@@ -88,8 +88,13 @@ def create_app(settings: Optional[Settings] = None, components: Optional[Compone
         return [t.model_copy(update={"price": guard(L.view_price, t.symbol)}) for t in toks]
 
     @app.get("/api/candles/{symbol}", response_model=list[Candle])
-    def candles(symbol: str, timeframe: Timeframe = Timeframe.H1, limit: int = 200) -> list[Candle]:
-        return guard(L.view_candles, symbol, timeframe, limit)
+    def candles(symbol: str, timeframe: Timeframe = Timeframe.H1, limit: Optional[int] = None, history: bool = False) -> list[Candle]:
+        """Default: replay-pinned (SIM: never past the loop's bar), last `limit` (200). history=true: full history
+        (SIM: the cached seeded series, same bars /api/backtest uses; PAPER/LIVE: the exchange's candles), last
+        `limit` if given."""
+        if history:
+            return guard(L.history_candles, symbol, timeframe, limit)
+        return guard(L.view_candles, symbol, timeframe, 200 if limit is None else limit)
 
     @app.get("/api/price/{symbol}")
     def price(symbol: str) -> dict:
@@ -138,7 +143,7 @@ def create_app(settings: Optional[Settings] = None, components: Optional[Compone
 
     @app.post("/api/backtest", response_model=BacktestResult)
     def backtest(req: BacktestRequest) -> BacktestResult:
-        c = guard(comps.exchange.get_candles, req.strategy.symbol, req.strategy.timeframe, req.limit)
+        c = guard(L.history_candles, req.strategy.symbol, req.strategy.timeframe, req.limit)  # never replay-pinned
         return comps.engine.backtest_manual(req.strategy, c, req.initial_capital)
 
     # ---------------------------------------------------------------- agent & loop

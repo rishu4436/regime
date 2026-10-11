@@ -2,20 +2,42 @@
 reproducible; PAPER/LIVE poll the latest candles and only act once per new bar."""
 from __future__ import annotations
 
+import threading
 from typing import Optional
 
 from backend.contracts import SIM_WARMUP_BARS, Candle, ExchangeClient, Timeframe
 
 
 class ReplayFeed:
+    """SIM bar-by-bar replay over a cached, full, seeded series per (symbol, timeframe).
+
+    The full series are built ONCE, eagerly, when the feed is created - i.e. before the loop ever pins the client
+    with set_replay_index(i) - and cached under a lock. The feed never toggles set_replay_index to fetch history
+    (that raced with the live loop); the only call is the per-tick pin in next_window(). Backtests and
+    `/api/candles?history=true` read the same cached bars, so they do not move while the loop advances.
+    """
+
     def __init__(self, exchange: ExchangeClient, total_bars: int = 500, window: int = 200, warmup: int = SIM_WARMUP_BARS) -> None:
         self.exchange, self.total, self.window, self.warmup = exchange, total_bars, window, warmup
         self._series: dict[tuple[str, Timeframe], list[Candle]] = {}
         self._cursor: dict[tuple[str, Timeframe], int] = {}
+        self._lock = threading.RLock()
+        if self.has_replay:
+            self._prebuild()
+
+    def _prebuild(self) -> None:
+        """Every token x timeframe, while the client is still unpinned (cheap: seeded mock data, no network)."""
+        try:
+            symbols = [t.symbol for t in self.exchange.search_tokens("")]
+        except Exception:  # pragma: no cover - a client without a token list falls back to lazy building
+            symbols = []
+        for sym in symbols:
+            for tf in Timeframe:
+                self.series(sym, tf)
 
     def reset(self, symbol: str, timeframe: Timeframe) -> None:
-        self._series.pop((symbol, timeframe), None)
-        self._cursor.pop((symbol, timeframe), None)
+        with self._lock:
+            self._cursor.pop((symbol, timeframe), None)  # the cached history stays
 
     @property
     def has_replay(self) -> bool:
@@ -27,35 +49,38 @@ class ReplayFeed:
         return int(n_bars(symbol)) if callable(n_bars) else self.total  # replay indices refer to the client's series
 
     def series(self, symbol: str, timeframe: Timeframe) -> list[Candle]:
+        """Full cached history (oldest first). Built on first use; with a replay client that is feed construction."""
         k = (symbol, timeframe)
-        if k not in self._series:
-            if self.has_replay:  # fetch the FULL series, then restore the client's current bar
-                cur = getattr(self.exchange, "replay_index", None)
-                self.exchange.set_replay_index(None)
-                try:
-                    self._series[k] = self.exchange.get_candles(symbol, timeframe, limit=self._total(symbol))
-                finally:
-                    self.exchange.set_replay_index(cur)
-            else:
-                self._series[k] = self.exchange.get_candles(symbol, timeframe, limit=self._total(symbol))
-            self._cursor[k] = min(self.warmup, len(self._series[k])) - 1
-        return self._series[k]
+        with self._lock:
+            if k not in self._series:
+                # Only reached lazily for clients without set_replay_index (nothing to race with) or for a symbol that
+                # was not in the token list at start-up (then the client's current view is the best we can get).
+                self._series[k] = list(self.exchange.get_candles(symbol, timeframe, limit=self._total(symbol)))
+            if k not in self._cursor:
+                self._cursor[k] = min(self.warmup, len(self._series[k])) - 1
+            return self._series[k]
+
+    def history(self, symbol: str, timeframe: Timeframe, limit: Optional[int] = None) -> list[Candle]:
+        s = self.series(symbol, timeframe)
+        return list(s if not limit else s[-limit:])
 
     def start_time(self, symbol: str, timeframe: Timeframe):
         """Timestamp of the bar the replay of `symbol` currently sits on (warm-up end before the first tick)."""
-        s = self.series(symbol, timeframe)
-        return s[max(self._cursor[(symbol, timeframe)], 0)].timestamp if s else None
+        with self._lock:
+            s = self.series(symbol, timeframe)
+            return s[max(self._cursor[(symbol, timeframe)], 0)].timestamp if s else None
 
     def next_window(self, symbol: str, timeframe: Timeframe) -> Optional[list[Candle]]:
-        s = self.series(symbol, timeframe)
-        k = (symbol, timeframe)
-        if self._cursor[k] + 1 >= len(s):
-            return None  # replay finished
-        self._cursor[k] += 1
-        i = self._cursor[k]
-        if self.has_replay:
-            self.exchange.set_replay_index(i)  # candles end at bar i; price / quotes / fills use bar i close
-        return s[max(0, i + 1 - self.window):i + 1]
+        with self._lock:
+            s = self.series(symbol, timeframe)
+            k = (symbol, timeframe)
+            if self._cursor[k] + 1 >= len(s):
+                return None  # replay finished
+            self._cursor[k] += 1
+            i = self._cursor[k]
+            if self.has_replay:
+                self.exchange.set_replay_index(i)  # candles end at bar i; price / quotes / fills use bar i close
+            return s[max(0, i + 1 - self.window):i + 1]
 
     def position(self, symbol: str, timeframe: Timeframe) -> tuple[int, int]:
         self.series(symbol, timeframe)

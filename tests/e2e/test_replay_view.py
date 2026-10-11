@@ -88,4 +88,32 @@ def test_candles_and_prices_never_pass_the_loop_bar(make):
         idx = getattr(ex, "replay_index")
         assert idx == SIM_WARMUP_BARS - 1 + 40  # the loop pinned the client to its current bar
     if isinstance(ex, ReplayMock):
-        assert ex.calls[-1] == idx and None in ex.calls  # full series fetched with the index cleared, then pinned
+        assert ex.calls[-1] == idx and None not in ex.calls  # history is cached up front, never fetched by un-pinning
+
+
+def _n_bars(ex, s):
+    return ex.n_bars("AAPLB") if hasattr(ex, "n_bars") else s.sim_replay_bars
+
+
+@pytest.mark.parametrize("make", CLIENTS)
+def test_backtest_and_history_do_not_move_with_the_loop(make):
+    s = Settings(sim_seed=SEED, sim_replay_bars=300)
+    ex = make(s.sim_replay_bars)
+    c = TestClient(create_app(s, build_components(s, exchange=ex)))
+    strat = trading_strategy(activation="AUTO_EXECUTE")
+    req = {"strategy": strat.model_dump(mode="json"), "initial_capital": 10000, "limit": 250}
+    bt0 = c.post("/api/backtest", json=req).json()
+    hist0 = c.get("/api/candles/AAPLB?history=true").json()
+    other0 = c.get("/api/candles/NVDAon?history=true&limit=100").json()
+    assert len(hist0) == _n_bars(ex, s) and len(other0) == 100 and other0 == c.get("/api/candles/NVDAon?history=true").json()[-100:]
+    assert bt0["equity_curve"][-1]["timestamp"] == hist0[-1]["timestamp"]  # backtest runs to the end of history
+    c.post("/api/manual/activate", json={"strategy": strat.model_dump(mode="json")})
+    for _ in range(25):
+        c.post("/api/loop/tick")
+    assert c.post("/api/backtest", json=req).json() == bt0
+    assert c.get("/api/candles/AAPLB?history=true").json() == hist0
+    assert c.get("/api/candles/NVDAon?history=true&limit=100").json() == other0
+    pinned = c.get("/api/candles/AAPLB").json()  # default unchanged: replay-pinned, 200 bars
+    now = c.get("/api/status").json()["timestamp"].replace("+00:00", "Z")
+    assert len(pinned) == min(200, 60 + 25) and pinned[-1]["timestamp"] == now and pinned[-1]["timestamp"] < hist0[-1]["timestamp"]
+    assert pinned == [x for x in hist0 if x["timestamp"] <= now][-200:]

@@ -457,6 +457,13 @@ class TradingLoop:
             out = [c for c in series if now is None or c.timestamp <= now]
             return out[-limit:] if limit > 0 else []
 
+    def history_candles(self, symbol: str, timeframe: Timeframe, limit: Optional[int] = None) -> list[Candle]:
+        """Full history, independent of the replay position: SIM -> the feed's cached seeded series (last `limit`),
+        PAPER/LIVE -> the exchange's candles (`limit` or 500)."""
+        if self.sim:
+            return self.feed.history(symbol, timeframe, limit)
+        return self.c.exchange.get_candles(symbol, timeframe, limit or 500)
+
     def view_price(self, symbol: str) -> float:
         if not self.sim:
             return self.c.exchange.get_price(symbol)
