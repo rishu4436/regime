@@ -42,9 +42,11 @@ Status: `DefaultStrategyEngine` implements every `StrategyEngine` method. No I/O
 ## Module map
 | File | What |
 |---|---|
-| `engine.py` | `DefaultStrategyEngine(fee_pct=0.0, slippage_bps=0.0, warmup_bars=60, manual_price_exits=False)`, the Protocol implementation |
+| `engine.py` | `DefaultStrategyEngine(fee_pct=0.0, slippage_bps=0.0, warmup_bars=60, manual_price_exits=False, live_safe=False, live_config=None, clock=utc_now)`, the Protocol implementation |
+| `data.py` | `sanitize_candles()` + `DataReport`, timeframe inference, gap / dead-bar helpers, token-type suffix rule, staleness |
+| `live.py` | Live / mainnet safety layer: `LiveSafetyConfig`, `entry_blockers()`, `cap_size_pct()`, liquidity measures |
 | `indicators.py` | Causal indicators: `sma`, `ema`, `rsi` (Wilder), `macd`, `bollinger`, `volume_average`, `atr`, `rolling_max/min`, `crossed_above/below`; `rsi_simulator` (the old buggy formula, only for parity tests) |
-| `regime.py` | `detect_regime(candles)`: 6 regimes, thresholds as module constants |
+| `regime.py` | `detect_regime(candles, timeframe=None)`: 6 regimes, thresholds as module constants scaled by the bar length |
 | `presets.py` | `PRESET_MAP` (regime x style → ordered preset preferences + size multiplier), `STYLE_PARAMS`, `BASE_SIZE_PCT`, `evaluate_preset()` for the 5 presets |
 | `manual.py` | Manual rule evaluation shared by live + backtest: indicators, AND/OR entry, hard filters, RSI/MACD exits |
 | `exits.py` | Intrabar price exits (TP/SL/trailing/max-loss): the contracts v0.2 `ExitRules` rules, identical to Bot 3's `backend/risk/exits.py` |
@@ -199,7 +201,7 @@ candles. That is intentional: the kickoff required the fixes. The README line ab
 trade list") is superseded.
 
 ## Tests
-`pytest backend/engine` runs 122 tests:
+`pytest backend/engine` runs 166 tests:
 - indicators against hand-computed values and independent pandas references
 - regime detection on all mock shapes and 25 seeds per regime
 - the full preset map and evaluate_auto
@@ -207,3 +209,98 @@ trade list") is superseded.
 - every exit rule in isolation and inside the backtest, plus a copy of Bot 6's exit-parity fixtures from `tests/e2e/test_exit_parity.py`
 - backtest determinism and invariants, mark-to-market drawdown, fees and slippage, edge cases
 - live/backtest consistency
+- `test_real_data.py`: real-shaped candles (sparse sessions, weekend/overnight gaps, zero volume, bad rows, duplicates,
+  unsorted input, tiny prices, 24/7 data with thin overnight/weekend liquidity)
+- `test_live_safety.py`: every `live_safe` gate, the size caps, SELL never blocked, config validation
+
+## Live / mainnet (branch `bot2/live`)
+The team now trades LIVE on BNB Chain mainnet (BNB Hack: Tokenized Stocks Edition) with real funds. The agent is
+**fully autonomous and runs 24/7 with no per-trade approval**, so the engine has to cope with real on-chain data and
+must never be the weak link. Simulator/backtest behaviour is unchanged unless noted.
+
+### Real data handling (always on, every entry point)
+Real Binance Web3 `market/candles` data for tokenized stocks (Bot 4, `backend/exchange/live.py`) is sparse and
+irregular: hourly bars are missing off-hours and at weekends, DEX volume is often 0, and the API returns strings.
+- `sanitize_candles()` runs first in `evaluate_manual`, `evaluate_auto`, `detect_regime` and `backtest_manual`. It:
+  - drops `None` rows, missing or unparseable timestamps, NaN/inf/<=0 prices and `high < low`
+  - widens high/low to contain open/close
+  - turns volume `None`/NaN/negative into 0 (counted as missing)
+  - keeps the LAST copy of a duplicated timestamp (a re-sent in-progress bar) and sorts by time
+  - treats naive datetimes as UTC and accepts `Candle`, `model_construct` objects and dicts
+  - fills in a `DataReport` whose issues are appended to signal reasons as `[data: ...]`
+- **Warm-up:** live evaluation needs at least `warmup_bars + 1` (61) valid candles, the same rule as the backtest
+  (which never trades before bar 60). Otherwise it returns `STAY_OUT` with `conditions_failed=["insufficient_data"]`
+  and a reason like "Insufficient data: 40 valid candles, need at least 61".
+- **Volume:** the volume condition and the min-volume filter need a real baseline: this bar traded, the average is
+  > 0 and at least 50% of the bars in the window traded. Otherwise the condition is False and the filter fails with
+  "no volume data". No divide-by-zero, and one stray trade among empty bars is never a "spike".
+- **Regime:**
+  - Dead bars (high == low and volume == 0, i.e. a closed or illiquid market) are ignored. If more than 50% of the
+    last 20 bars are dead, the result is SIDEWAYS at confidence 0.2 with `features["insufficient_data"]=1`, so a
+    flat closed-market stretch is never read as a trend.
+  - Fewer than 61 active bars gives the same insufficient-data result.
+  - Volatility uses only returns between contiguous bars (gap <= 1.5 bars), so overnight and weekend gaps are not
+    counted as volatility.
+  - Percent thresholds are multiplied by `clamp(sqrt(bar_hours), 0.25, 5)`. 1h is x1, 4h is x2 and 1d is about x4.9,
+    so normal 3% daily moves are not HIGH_VOLATILITY on D1. RSI thresholds are not scaled.
+  - The timeframe comes from `AutoConfig.timeframe` in auto mode, otherwise it is inferred from the bar spacing.
+  - Price features keep full precision, so tiny prices work.
+  - In `evaluate_auto`, an insufficient-data regime means STAY_OUT (strategy `NONE`) when nothing is held. When a
+    position is held, it allows exits only.
+- **DCA on sparse data:** a buy is due on the first bar at or after a slot boundary (`ts // (interval * bar)`), so a
+  missing boundary bar does not skip a DCA. Regular data behaves exactly as before.
+- 24/7 data works the same way. Thin overnight or weekend liquidity just produces more zero-volume or dead bars,
+  which the rules above (and the `live_safe` liquidity gates below) handle.
+
+### `live_safe=True`: conservative layer for PAPER / LIVE
+```python
+eng = DefaultStrategyEngine(live_safe=True, clock=lambda: datetime.now(timezone.utc))  # clock is injectable
+eng = DefaultStrategyEngine(live_safe=True, live_config=LiveSafetyConfig(max_size_pct=1.0))
+```
+This layer only ever makes the engine more conservative. It never touches SELLs, because reducing exposure is always
+allowed, even on stale data.
+
+| `LiveSafetyConfig` field | Default | Effect on new BUYs (`conditions_failed` name) |
+|---|---|---|
+| `max_stale_bars` | 2.0 | Last candle opened more than 2 bars before `now` → blocked (`live_stale_data`) |
+| `max_future_bars` | 1.0 | Last candle more than 1 bar in the future → blocked (`live_future_data`) |
+| `require_volume` | True | Last bar volume 0 → blocked (`live_no_volume`) |
+| `min_active_fraction` / `liquidity_lookback` | 0.25 / 20 | Fewer than 25% of the last 20 bars traded → blocked (`live_thin_liquidity`) |
+| `thin_active_fraction`, `thin_relative_volume`, `thin_size_factor` | 0.6, 0.25, 0.5 | Fewer than 60% of bars traded, or the last bar is below 0.25x the average traded volume → size x0.5 |
+| `require_all_conditions_ready` | True | Manual: any enabled entry indicator still warming up → STAY_OUT ("indicators still warming up") |
+| `size_factor`, `max_size_pct` | 0.25, 2.0 | BUY size = min(proposed x 0.25, 2%), then x thin factor. Manual 15% → 2%; auto BALANCED 10% → 2%; PATIENT 5% → 1.25% |
+| `market_hours` | **OFF** (`MarketHoursFilter(enabled=False)`) | Opt-in. When enabled, stock tokens (`…on`/`…x`/`…B`) only enter if both the last bar and `now` are inside the session (`live_market_hours`, `live_market_hours_now`). Off by default because the agent trades 24/7 and tokenized stocks may trade on-chain around the clock (Bot 4 is researching). |
+
+- Blocked entries are `STAY_OUT` with `conditions_failed` set to the blocker names and the reason
+  "Live safety blocked entry: …".
+- BUY reasons end with "[live-safe size 10% x0.25 capped at 2%, thin liquidity (…) x0.5 -> 1%]".
+- On a 1000 USDT account a live-safe BUY is at most 20 USDT, below Bot 3's hard caps (25 USDT per order, 25 USDT
+  daily loss, 50 USDT exposure). Risk still enforces those caps.
+- Token type uses Bot 4's suffix rule. `BNB`/`WBNB` end in `B` and are treated as bStocks, which only matters when
+  market hours are enabled and errs on the safe side.
+
+### What other bots must wire up
+- **Bot 6 (loop):**
+  - In PAPER/LIVE, construct `DefaultStrategyEngine(live_safe=True, clock=<the loop's clock>)`. Keep the default
+    engine for SIM and backtests.
+  - Pass the `ManualStrategy.timeframe` / `AutoConfig.timeframe` that matches the candle interval actually fetched,
+    because staleness and regime scaling use it.
+  - Fetch at least 61 bars, and more when a strategy uses a long indicator period (for example SMA(200)).
+  - Treat `STAY_OUT` with `live_*` or `insufficient_data` in `conditions_failed` as "no trade" and log the reason.
+  - Always execute SELL signals.
+- **Bot 3 (risk):** the hard USDT caps stay in risk. `live_safe` only reduces `proposed_size_pct` and
+  `proposed_notional` before risk sees them. Because there is no per-trade user approval, risk's caps and kill
+  switch are the binding limits.
+
+### Fixtures
+No real Binance candle responses are on the box yet: the box's US IP gets 40304, and
+`/workspace/binance-check/samples/` did not exist when this was written. `tests/real_fixtures.py` builds hand-made
+real-shaped data instead:
+- string rows `[o, h, l, c, v, ts_ms, tradeCount]` parsed the way Bot 4 parses them
+- NVDAon at about 230.88
+- weekday 13:00–20:00 UTC sessions with missing bars and about 30% zero-volume bars
+- weekend and overnight gap jumps
+- dead closed-market bars
+- a 24/7 series with thin overnight and weekend liquidity
+
+When Bot 4 saves real samples, add a fixture test that loads them through `rows_to_candles`.
