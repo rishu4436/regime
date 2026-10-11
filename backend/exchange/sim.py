@@ -60,7 +60,9 @@ from .status import (
     xstock_enabled,
 )
 from .sim_series import SymbolSeries, index_at, timeline
+from .sim_universe import SIM_DEFAULT_VOLUME, SIM_UNIVERSE, SIM_UNIVERSE_REGIMES
 from .tokens import DEFAULT_TOKENS
+from .universe import merge_rows, rows_from_tokens
 from .wallet import SimWalletMixin
 
 ONDO_MIN_ORDER_USD = 20.0
@@ -135,6 +137,66 @@ class SimulatedBinanceClient(SimWalletMixin, TokenStatusMixin, MockExchangeClien
         self.enable_xstock = xstock_enabled() if enable_xstock is None else enable_xstock
         self._quote_meta = {}
         self._status_override: dict[str, TradingStatus] = {}
+        # Wider universe (list_tokens / Auto-pick): resolvable everywhere, but not in search_tokens("").
+        self._universe: dict[str, TokenInfo] = {t.symbol: t for t in SIM_UNIVERSE if t.symbol not in self._tokens}
+        for sym in self._universe:
+            self._regimes.setdefault(sym, SIM_UNIVERSE_REGIMES.get(sym, Regime.SIDEWAYS))
+        self._live_limits: Optional[dict] = None
+
+    # ------------------------------------------------------------------ tokens
+    def _token(self, symbol: str) -> TokenInfo:
+        if symbol in self._tokens:
+            return self._tokens[symbol]
+        if symbol in getattr(self, "_universe", {}):
+            return self._universe[symbol]
+        raise KeyError(f"unknown token {symbol!r}")
+
+    def search_tokens(self, query: str) -> list[TokenInfo]:
+        """Empty query: the default SIM tokens (unchanged). A named query also searches the wider SIM universe."""
+        out = super().search_tokens(query)
+        q = query.strip().lower()
+        if q:
+            for t in self._universe.values():
+                if q in t.symbol.lower() or q in t.name.lower() or q in (t.underlying or "").lower():
+                    out.append(t.model_copy(update={"price": self.get_price(t.symbol)}))
+        return out
+
+    def list_tokens(self, refresh: bool = False) -> list[dict]:
+        """Same row shape as BinanceWeb3Client.list_tokens (see universe.py): the default SIM tokens plus the
+        SIM universe of real bStock / Ondo tokens, with SIM prices and status (get_token_status)."""
+        toks = list(self._tokens.values()) + list(self._universe.values())
+        rows = merge_rows(rows_from_tokens(toks, "sim", self.enable_xstock))
+        for r in rows:
+            st = self.get_token_status(r["symbol"])
+            tok = self._token(r["symbol"])
+            vol = tok.volume_24h if tok.volume_24h is not None else SIM_DEFAULT_VOLUME.get(
+                r["symbol"], 0.0 if is_xstock(r["symbol"], tok.token_type) else 50_000.0)
+            r.update(price=st.price, volume_24h=vol, status=st.trading_status.value, tradable=st.tradable,
+                     reason=st.reason, min_order_usdt=st.min_order_usdt, max_order_usdt=st.max_order_usdt,
+                     reference_price=st.reference_price, shares_multiplier=st.shares_multiplier,
+                     market_status=st.market_status)
+        return rows
+
+    # ------------------------------------------------------------------ runtime LIVE limits (SIM: stored only)
+    def set_live_limits(self, max_order_usdt: float, max_sell_usdt: Optional[float] = None) -> dict:
+        """Same validation as LIVE; SIM never sends real orders, so the value is only stored and echoed back."""
+        from .limits import hard_max_order_usdt, validate_max_order_usdt
+
+        buy = validate_max_order_usdt(max_order_usdt, hard_max_order_usdt())
+        sell = validate_max_order_usdt(max_sell_usdt, None, "max_sell_usdt") if max_sell_usdt is not None else 2 * buy
+        if sell < buy:
+            raise ValueError(f"max_sell_usdt {sell:.2f} must be >= max_order_usdt {buy:.2f}")
+        self._live_limits = {"max_order_usdt": buy, "max_sell_usdt": sell}
+        return self.live_limits()
+
+    def live_limits(self) -> dict:
+        from .baw_executor import max_order_usdt as env_max_order
+        from .limits import hard_max_order_usdt
+
+        d = env_max_order()
+        cur = self._live_limits or {"max_order_usdt": d, "max_sell_usdt": 2 * d}
+        return {**cur, "max_live_notional": cur["max_sell_usdt"], "default_max_order_usdt": d,
+                "hard_max_order_usdt": hard_max_order_usdt()}
 
     # ------------------------------------------------------------------ token status
     def set_trading_status(self, symbol: str, status: Optional[TradingStatus]) -> None:

@@ -11,7 +11,8 @@ Env vars (never commit values):
   BINANCE_LIVE_MAX_NOTIONAL client-side per-order cap in USDT for LIVE (default 25; with baw: BINANCE_LIVE_MAX_SELL_USDT)
   -- Agentic Wallet executor (baw_executor.py) --
   LIVE_TRADING_ENABLED, RISK_ALLOW_LIVE   must also be "true" or every baw order is refused (live_disabled)
-  BINANCE_LIVE_MAX_ORDER_USDT    hard cap per BUY (default 25)
+  BINANCE_LIVE_MAX_ORDER_USDT    cap per BUY (default 25); the startup default for client.set_live_limits(max_order_usdt=)
+  BINANCE_LIVE_HARD_MAX_ORDER_USDT  optional ceiling: set_live_limits refuses anything above it (unset = no ceiling)
   BINANCE_LIVE_MAX_SELL_USDT     hard cap per SELL/exit (default 2 x the buy cap)
   BINANCE_LIVE_MAX_SLIPPAGE_PCT  --slippage passed to every swap, percent 0-100 (default 1; never "auto")
   BINANCE_BNB_GAS_RESERVE        BNB kept for gas, warning below it (default 0.002)
