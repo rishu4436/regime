@@ -177,6 +177,11 @@ def build_components(settings: Settings, exchange: Optional[ExchangeClient] = No
         if settings.trading_mode == TradingMode.SIM and type(exchange).__name__ == "MockExchangeClient":
             from backend.mocks import MockExchangeClient
             exchange = MockExchangeClient(seed=settings.sim_seed)  # honour SIM_SEED for reproducible demos
+        elif settings.trading_mode == TradingMode.SIM and callable(getattr(exchange, "set_replay_index", None)):
+            try:  # Bot 4's SimulatedBinanceClient: same seed / replay length as the settings
+                exchange = type(exchange)(seed=settings.sim_seed, n_candles=settings.sim_replay_bars)
+            except TypeError:
+                pass
     if exchange.mode != settings.trading_mode:
         raise RuntimeError(f"exchange client mode {exchange.mode.value} != TRADING_MODE {settings.trading_mode.value}")
     for obj, proto in ((engine, StrategyEngine), (risk, RiskManager), (exchange, ExchangeClient), (explainer, Explainer)):

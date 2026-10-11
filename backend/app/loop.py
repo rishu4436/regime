@@ -19,7 +19,7 @@ from backend.contracts import (
     StatusSnapshot, Timeframe, TradingMode, utc_now,
 )
 from backend.contracts import AlertLevel
-from backend.monitoring import AlertManager, EventLog, PerformanceTracker
+from backend.monitoring import AlertManager, EventLog, PerformanceTracker, one_prefix
 
 from .events import EventBus
 from .exits import check_protective_exit, exit_reason_of, trailing_level
@@ -37,6 +37,11 @@ class AgentStateError(RuntimeError):
 def call_check_exits(risk: Any, portfolio, prices: dict[str, float], bars: dict[str, Candle]) -> list[Signal]:
     """The loop's exit path: RiskManager.check_exits with the latest bar OHLC (contract v0.2 `bars`)."""
     return list(risk.check_exits(portfolio, prices, bars=bars))
+
+
+def _blocked(reasons: list[str]) -> str:
+    """Risk reasons with exactly one 'Blocked' prefix each (Bot 3 already writes 'Blocked (<check>): ...')."""
+    return "; ".join(one_prefix("Blocked", r) for r in reasons) or "Blocked"
 
 
 @dataclass
@@ -129,6 +134,7 @@ class TradingLoop:
             return self.status()
 
     def _on_activate(self, symbol: str, tf: Timeframe, activation: ActivationMode) -> None:
+        self._reject_all_pending("agent switched")
         self.finished = False
         self.current_regime = None
         ctrl = self.c.risk.set_confirmation_mode(activation == ActivationMode.CONFIRMATION)
@@ -137,9 +143,9 @@ class TradingLoop:
 
     def deactivate(self) -> StatusSnapshot:
         with self.lock:
+            self._reject_all_pending("agent deactivated")
             self.manual = self.auto = None
             self.active_strategy = None
-            self.pending.clear()
             st = self.status()
             self.bus.publish(EventType.STATUS, st)
             return st
@@ -182,7 +188,7 @@ class TradingLoop:
                 out.append(self._finalize(Decision(
                     mode=self.s.trading_mode, agent_mode=self.agent_mode, symbol=sym, regime=regime, timestamp=now,
                     strategy=self.active_strategy or "NONE", action=Action.STAY_OUT,
-                    reason=f"emergency stop active: {control.reason or ''}".strip())))
+                    reason=one_prefix("Emergency stop", control.reason, "active") + "; staying out")))
                 return self._end_tick(out)
 
             # 3) strategy (engine) -> 4) risk -> 5) execute / confirm
@@ -202,7 +208,7 @@ class TradingLoop:
             verdict = self.c.risk.check(signal, pf, control)
             if not verdict.approved:
                 out.append(self._finalize(Decision(action=Action.STAY_OUT, risk_verdict=verdict,
-                                                   reason=f"{signal.action.value} blocked by risk: " + "; ".join(verdict.reasons), **base)))
+                                                   reason=f"{signal.action.value} not executed: " + _blocked(verdict.reasons), **base)))
             elif signal.action == Action.SELL:
                 lots = self.book.lots_for(sym)
                 out.append(self._exit(lots, signal, exit_reason_of(signal), regime, verdict))
@@ -310,7 +316,8 @@ class TradingLoop:
                 self._publish_alerts(self.alerts.on_trade_closed(self.perf.consecutive_losses, self.book.daily_pnl, limit, sym))
         tag = reason.value if reason else "EXIT"
         if filled:
-            return self._finalize(Decision(id=did, action=Action.SELL, execution=last, reason=f"{tag}: {signal.reason}", **base))
+            return self._finalize(Decision(id=did, action=Action.SELL, execution=last,
+                                           reason=one_prefix(tag, signal.reason, keep_sentence=False), **base))
         return self._finalize(Decision(id=did, action=Action.STAY_OUT, execution=last,
                                        reason=f"{tag} exit not filled ({last.status.value if last else '-'}), retrying next bar", **base))
 
@@ -346,20 +353,27 @@ class TradingLoop:
             verdict = self.c.risk.check(p.signal, self.book.portfolio(), control)  # re-check at approval time
             if not verdict.approved:
                 return self._finalize(Decision(id=decision_id, action=Action.STAY_OUT, risk_verdict=verdict,
-                                               reason="approved by user but blocked by risk: " + "; ".join(verdict.reasons), **base))
+                                               reason="approved by user but not executed: " + _blocked(verdict.reasons), **base))
             d = self._buy(p.signal, verdict, base, decision_id=decision_id)
             self.bus.publish(EventType.STATUS, self.status())
             return d
 
-    def reject(self, decision_id: str, reason: str = "") -> Decision:
+    def reject(self, decision_id: str, reason: str = "", by_user: bool = True) -> Decision:
         with self.lock:
             p = self.pending.pop(decision_id, None)
             if p is None:
                 raise KeyError(decision_id)
             d0 = p.decision
-            ex = d0.execution.model_copy(update={"status": OrderStatus.REJECTED, "error": reason or "rejected by user"})
+            who = "Rejected by user" if by_user else "Not executed"
+            text = one_prefix(who, reason) if reason else who
+            ex = d0.execution.model_copy(update={"status": OrderStatus.REJECTED, "error": text})
             return self._finalize(d0.model_copy(update={"action": Action.STAY_OUT, "execution": ex, "explanation": None,
-                                                        "reason": f"rejected by user{': ' + reason if reason else ''}"}))
+                                                        "reason": text}))
+
+    def _reject_all_pending(self, reason: str) -> None:
+        """A previous agent's confirmations must never execute under a new agent (or after deactivation)."""
+        for did in list(self.pending):
+            self.reject(did, reason, by_user=False)
 
     def close_position(self, position_id: str, reason: ExitReason = ExitReason.MANUAL) -> Decision:
         """Close one lot (Position.id) at the last price."""
@@ -381,7 +395,7 @@ class TradingLoop:
         with self.lock:
             px = self.book.prices.get(symbol) or self.c.exchange.get_price(symbol)
             sig = Signal(symbol=symbol, action=Action.SELL, source=self.agent_mode or AgentMode.MANUAL,
-                         strategy=lots[0].position.strategy, reason=f"{reason.value} close requested", price=px,
+                         strategy=lots[0].position.strategy, reason="close requested by user" if reason == ExitReason.MANUAL else "close requested (emergency flatten)", price=px,
                          exit_reason=reason, position_id=lots[0].position.id if len(lots) == 1 else None,
                          timestamp=self._now())
             d = self._exit(lots, sig, reason, self.current_regime, None)
@@ -408,8 +422,7 @@ class TradingLoop:
     def emergency_stop(self, reason: str = "", flatten: bool = False) -> ControlState:
         with self.lock:
             ctrl = self.c.risk.emergency_stop(reason)
-            for did in list(self.pending):
-                self.reject(did, "emergency stop")
+            self._reject_all_pending("emergency stop")
             if flatten:
                 for sym in sorted({l.position.symbol for l in self.book.lots}):
                     self.close_symbol(sym, ExitReason.EMERGENCY_STOP)
@@ -420,6 +433,36 @@ class TradingLoop:
         self._publish_alerts(self.alerts.on_control(ctrl))
         self.bus.publish(EventType.STATUS, self.status())
         return ctrl
+
+    # ------------------------------------------------------------------ market view (no future bars in SIM)
+    def sim_now(self, symbol: str, timeframe: Timeframe) -> Optional[datetime]:
+        """SIM: the time of the bar the loop is on (before the first tick: the end of the warm-up). None otherwise."""
+        if not self.sim:
+            return None
+        with self.lock:
+            if self._bar is not None:
+                return self._bar.timestamp
+            if self.symbol is not None:
+                return self.feed.start_time(self.symbol, self.timeframe)
+            return self.feed.start_time(symbol, timeframe)
+
+    def view_candles(self, symbol: str, timeframe: Timeframe, limit: int) -> list[Candle]:
+        """Candles for the UI / regime preview. In SIM never past the loop's current bar: the client trims itself
+        when it supports set_replay_index; otherwise (or before the first tick) trim the replay series here."""
+        if not self.sim:
+            return self.c.exchange.get_candles(symbol, timeframe, limit)
+        with self.lock:
+            now = self.sim_now(symbol, timeframe)
+            series = self.feed.series(symbol, timeframe)
+            out = [c for c in series if now is None or c.timestamp <= now]
+            return out[-limit:] if limit > 0 else []
+
+    def view_price(self, symbol: str) -> float:
+        if not self.sim:
+            return self.c.exchange.get_price(symbol)
+        with self.lock:
+            c = self.view_candles(symbol, self.timeframe, 1)
+            return c[-1].close if c else self.c.exchange.get_price(symbol)
 
     # ------------------------------------------------------------------ LLM (read-only)
     def llm_context(self) -> tuple[StatusSnapshot, dict]:

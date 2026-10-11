@@ -82,19 +82,22 @@ def create_app(settings: Optional[Settings] = None, components: Optional[Compone
     # ---------------------------------------------------------------- market data
     @app.get("/api/tokens", response_model=list[TokenInfo])
     def tokens(q: str = "") -> list[TokenInfo]:
-        return comps.exchange.search_tokens(q)
+        toks = comps.exchange.search_tokens(q)
+        if not L.sim:
+            return toks
+        return [t.model_copy(update={"price": guard(L.view_price, t.symbol)}) for t in toks]
 
     @app.get("/api/candles/{symbol}", response_model=list[Candle])
     def candles(symbol: str, timeframe: Timeframe = Timeframe.H1, limit: int = 200) -> list[Candle]:
-        return guard(comps.exchange.get_candles, symbol, timeframe, limit)
+        return guard(L.view_candles, symbol, timeframe, limit)
 
     @app.get("/api/price/{symbol}")
     def price(symbol: str) -> dict:
-        return {"symbol": symbol, "price": guard(comps.exchange.get_price, symbol)}
+        return {"symbol": symbol, "price": guard(L.view_price, symbol)}
 
     @app.get("/api/regime/{symbol}", response_model=RegimeAnalysis)
     def regime(symbol: str, timeframe: Timeframe = Timeframe.H1) -> RegimeAnalysis:
-        return comps.engine.detect_regime(guard(comps.exchange.get_candles, symbol, timeframe, settings.window_bars))
+        return comps.engine.detect_regime(guard(L.view_candles, symbol, timeframe, settings.window_bars))
 
     @app.get("/api/auto/selection", response_model=StrategySelection)
     def selection(symbol: str, style: TraderStyle = TraderStyle.BALANCED, timeframe: Timeframe = Timeframe.H1) -> StrategySelection:

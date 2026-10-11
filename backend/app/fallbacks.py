@@ -119,6 +119,13 @@ def _strategy_exit_on_close(s: ManualStrategy, x: _Ind, i: int) -> Optional[Exit
     return None
 
 
+def _exit_detail(s: ManualStrategy, x: "_Ind", i: int, r: ExitReason) -> str:
+    """Detail only - the code lives in Signal.exit_reason and the loop adds it once ('RSI_EXIT: RSI(14)=83.8 > 70')."""
+    if r == ExitReason.RSI_EXIT:
+        return f"RSI({s.exit.rsi_above.period})={x.rsi_exit[i]:.1f} > {s.exit.rsi_above.threshold:g}"
+    return f"MACD line {x.xmacd[i]:.4f} crossed below signal {x.xmacd_sig[i]:.4f}"
+
+
 def _capital(p: Portfolio) -> float:
     return p.starting_capital + p.realized_pnl
 
@@ -187,7 +194,7 @@ class FallbackStrategyEngine:
         if open_pos:
             r = _strategy_exit_on_close(strategy, x, i)
             if r is not None:
-                return Signal(action=Action.SELL, reason=f"{r.value}: strategy exit on close", exit_reason=r, **base)
+                return Signal(action=Action.SELL, reason=_exit_detail(strategy, x, i, r), exit_reason=r, **base)
         if len(open_pos) >= strategy.risk.max_open_positions:
             return Signal(action=Action.STAY_OUT, reason=f"max open positions ({strategy.risk.max_open_positions}) reached", **base)
         since = portfolio.bars_since_exit.get(sym)
@@ -340,8 +347,9 @@ class FallbackRiskManager:
             held = any(p.symbol == signal.symbol for p in portfolio.positions)
             chk("has_position", held, "" if held else f"no open position in {signal.symbol}")
         else:
-            chk("emergency_stop", not control.emergency_stopped, control.reason or "" if control.emergency_stopped else "")
-            chk("paused", not control.paused, control.reason or "" if control.paused else "")
+            chk("emergency_stop", not control.emergency_stopped,
+                "Emergency stop is active - all new entries are blocked" if control.emergency_stopped else "")
+            chk("paused", not control.paused, "Agent is paused - new entries are blocked" if control.paused else "")
             eq = max(portfolio.equity, 1e-9)
             exposure = sum(p.quantity * (p.current_price or p.avg_entry_price) for p in portfolio.positions)
             notional = min(signal.proposed_notional, eq * MAX_TRADE_PCT / 100, portfolio.cash)
@@ -365,7 +373,7 @@ class FallbackRiskManager:
             adj, size_pct = signal.proposed_notional, signal.proposed_size_pct
         return RiskVerdict(
             signal_id=signal.id, approved=approved, checks=checks,
-            reasons=[f"{c.name}: {c.detail}".rstrip(": ") for c in hard] or ["all risk checks passed"],
+            reasons=[f"Blocked ({c.name}): {c.detail}".rstrip(": ") for c in hard] or ["All risk checks passed"],
             adjusted_size_pct=size_pct, adjusted_notional=adj,
             requires_confirmation=approved and signal.action == Action.BUY and control.confirmation_mode,
         )
@@ -392,7 +400,8 @@ class FallbackRiskManager:
                     max_loss_price=max_loss_level(pos.avg_entry_price, pos.quantity, self._max_loss_pct.get(pos.symbol), portfolio.starting_capital))
             if hit:
                 out.append(Signal(symbol=pos.symbol, action=Action.SELL, source=AgentMode.MANUAL if pos.strategy.startswith("MANUAL:") else AgentMode.AUTO,
-                                  strategy=pos.strategy, reason=f"{hit.reason.value} hit at {hit.price:.6g}",
+                                  strategy=pos.strategy, reason=(f"closing at market {hit.price:.6g}" if hit.reason == ExitReason.EMERGENCY_STOP
+                                                                 else f"level hit, fill at {hit.price:.6g}"),
                                   exit_reason=hit.reason, position_id=pos.id, price=hit.price,
                                   proposed_notional=round(pos.quantity * hit.price, 8),
                                   timestamp=bar.timestamp if bar else utc_now()))
@@ -402,14 +411,14 @@ class FallbackRiskManager:
         return self._control
 
     def pause(self, reason: str = "") -> ControlState:
-        return self._set(paused=True, reason=reason or "paused by user")
+        return self._set(paused=True, reason=reason or "Paused by user")  # raw; the loop/alerts add the prefix
 
     def resume(self) -> ControlState:
         """Clears `paused` only; an emergency stop stays until reset_emergency_stop() (contract v0.2)."""
         return self._set(paused=False, reason=self._control.reason if self._control.emergency_stopped else None)
 
     def emergency_stop(self, reason: str = "") -> ControlState:
-        return self._set(emergency_stopped=True, reason=reason or "emergency stop")
+        return self._set(emergency_stopped=True, reason=reason or "Emergency stop by user")
 
     def reset_emergency_stop(self) -> ControlState:
         return self._set(emergency_stopped=False, reason=None if not self._control.paused else self._control.reason)
