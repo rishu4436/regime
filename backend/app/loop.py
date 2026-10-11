@@ -269,16 +269,26 @@ class TradingLoop:
             if cd:
                 out.append(self._finalize(Decision(action=Action.STAY_OUT, reason=f"BUY not executed: {cd}", **base)))
                 return self._end_tick(out)
+            waiting = self._pending_buy_for(sym) if signal.action == Action.BUY else None
+            if waiting is not None:  # one confirmation per symbol/agent at a time: no stale approval queue
+                out.append(self._finalize(Decision(action=Action.STAY_OUT, reason=(
+                    f"BUY not executed: awaiting your approval of the pending BUY ({waiting.decision.id}); "
+                    f"no new order until you approve or reject it"), **base)))
+                return self._end_tick(out)
             verdict = self._risk_check(signal, pf, control)  # LIVE BUY: pass 1 with LiveContext (no quote yet)
             if not verdict.approved:
                 out.append(self._finalize(Decision(action=Action.STAY_OUT, risk_verdict=verdict,
                                                    reason=f"{signal.action.value} not executed: " + _blocked(verdict.reasons), **base)))
             elif signal.action == Action.SELL:
                 lots = self.book.lots_for(sym)
+                if signal.position_id:  # the engine targeted one lot: sell only that one (others exit on their own signal)
+                    lots = [l for l in lots if l.position.id == signal.position_id] or lots
                 if self._pending_for(sym):
                     out.append(self._hold_exit(signal, "engine", regime))
-                if lots or not self._pending_for(sym):
-                    out.append(self._exit(lots, signal, exit_reason_of(signal), regime, verdict))
+                if not lots and not self._pending_for(sym):
+                    out.append(self._exit([], signal, exit_reason_of(signal), regime, verdict))
+                for lot in lots:  # one Decision + execution per lot, so the log replays to the real book
+                    out.append(self._exit([lot], signal, exit_reason_of(signal), regime, verdict))
             elif verdict.requires_confirmation:  # only when confirmation mode / CONFIRMATION activation is on (LIVE too)
                 d = self._pending_decision(signal, verdict, base)
                 out.append(d)
@@ -1028,6 +1038,12 @@ class TradingLoop:
         return self._finalize(Decision(id=did, action=Action.STAY_OUT, execution=last,
                                        reason=f"{tag} exit not filled ({last.status.value if last else '-'}), retrying next bar", **base))
 
+    def _pending_buy_for(self, sym: str) -> Optional[Pending]:
+        """The pending (awaiting approval) BUY for this symbol under the current agent, if any."""
+        return next((p for p in self.pending.values()
+                     if p.decision.symbol == sym and p.decision.action == Action.BUY
+                     and p.decision.agent_mode == self.agent_mode), None)
+
     def _pending_decision(self, signal: Signal, verdict: RiskVerdict, base: dict) -> Decision:
         did = Decision.model_fields["id"].default_factory()
         notional = verdict.adjusted_notional or signal.proposed_notional
@@ -1125,7 +1141,22 @@ class TradingLoop:
             return self._control_changed(self.c.risk.reset_emergency_stop())
 
     def set_confirmation_mode(self, enabled: bool) -> ControlState:
+        """The toggle also sets the active agent's activation (OFF -> AUTO_EXECUTE, ON -> CONFIRMATION), so a strategy
+        activated with CONFIRMATION doesn't keep requiring approval after the user switched confirmation off."""
         with self.lock:
+            act = ActivationMode.CONFIRMATION if enabled else ActivationMode.AUTO_EXECUTE
+            if self.manual is not None and self.manual.activation != act:
+                self.manual = self.manual.model_copy(update={"activation": act})
+                hook = getattr(self.c.risk, "apply_manual_strategy", None)  # risk reads activation per symbol
+                if callable(hook):
+                    try:
+                        hook(self.manual)
+                    except Exception as e:
+                        self._alert(AlertLevel.WARNING, "CONFIRMATION_MODE", f"risk could not apply the new activation: {e}")
+                self.state.update(agent={"kind": "manual", "strategy": self.manual.model_dump(mode="json")})
+            elif self.auto is not None and self.auto.activation != act:
+                self.auto = self.auto.model_copy(update={"activation": act})
+                self.state.update(agent={"kind": "auto", "config": self.auto.model_dump(mode="json")})
             return self._control_changed(self.c.risk.set_confirmation_mode(enabled))
 
     def emergency_stop(self, reason: str = "", flatten: bool = False) -> ControlState:
