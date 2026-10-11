@@ -19,12 +19,14 @@ app-only and defined in `backend/app/schemas.py`.
 In SIM, everything here is "as of" the loop's current replay bar (before the first tick: the end of the 60-bar
 warm-up): candles end at that bar, prices are its close, the regime preview uses no later bars. The loop pins Bot 4's
 simulated client with `set_replay_index(i)` each tick and the app also trims, so no future bars ever leak to the UI.
-`POST /api/backtest` still uses the full historical series.
+History is separate: in SIM the full seeded series per symbol/timeframe is built once at start-up and cached;
+`POST /api/backtest` and `GET /api/candles/{symbol}?history=true` read that cache, so they never move as the loop advances.
 
 | Method | Path | Body | Response |
 |---|---|---|---|
 | GET | `/api/tokens?q=` | – | `TokenInfo[]` |
-| GET | `/api/candles/{symbol}?timeframe=1h&limit=200` | – | `Candle[]` (oldest first) |
+| GET | `/api/candles/{symbol}?timeframe=1h&limit=200` | – | `Candle[]` (oldest first), replay-pinned in SIM (ends at the loop's current bar), last `limit` (default 200) |
+| GET | `/api/candles/{symbol}?history=true[&limit=N]` | – | `Candle[]` full history: SIM = the cached seeded series (`n_bars` candles, unchanged by ticks; the same bars `/api/backtest` uses), PAPER/LIVE = the exchange's candles (default 500). `limit` = last N; omit for all |
 | GET | `/api/price/{symbol}` | – | `{symbol, price}` |
 | GET | `/api/regime/{symbol}?timeframe=1h` | – | `RegimeAnalysis` |
 | GET | `/api/auto/selection?symbol=&style=BALANCED&timeframe=1h` | – | `StrategySelection` (preview of map(regime, style)) |
@@ -39,7 +41,7 @@ simulated client with `set_replay_index(i)` each tick and the app also trims, so
 | PUT | `/api/strategies/{id}` | `ManualStrategy` | `ManualStrategy` (`version` += 1) |
 | DELETE | `/api/strategies/{id}` | – | `{deleted: id}` |
 | POST | `/api/strategies/validate` | any JSON | `ManualStrategy` (normalised) or 422 |
-| POST | `/api/backtest` | `BacktestRequest`: `{strategy: ManualStrategy, initial_capital?: 10000, limit?: 500}` | `BacktestResult` |
+| POST | `/api/backtest` | `BacktestRequest`: `{strategy: ManualStrategy, initial_capital?: 10000, limit?: 500}` | `BacktestResult` on the last `limit` bars of full history (same as `candles?history=true&limit=…`); identical results regardless of the loop's position |
 
 ## Agent activation & loop
 | Method | Path | Body | Response |
@@ -139,6 +141,7 @@ The loop executes on the path the exchange quoted: `Quote.path == RFQ` → `exec
 (the exchange rejects an order sent to the wrong path). `ExecutionResult.path` shows which one was used.
 
 ## Changelog
+- v0.5: `GET /api/candles/{symbol}?history=true`; `/api/backtest` always uses the cached full history (no longer drifts with the replay).
 - v0.4: SIM market data never passes the loop's replay bar; agent switch rejects pending confirmations; single-prefix reason texts.
 - v0.3: `GET /api/auto/presets-table`, `POST /api/positions/by-id/{position_id}/close`; emergency-stop exits at bar
   close; RFQ/SWAP dispatch on `Quote.path`; LLM summary/ask get performance + alerts; protective-exit edge rules (any stop beats TP, highest stop wins, strict trailing).
