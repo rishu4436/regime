@@ -10,7 +10,7 @@ import { detectRegime, presetWantsBuy, STYLE_MAP } from "../lib/auto";
 import { appendCandle, generateMixedCandles, rng } from "../lib/candles";
 import { parseStrategyText } from "../lib/parseText";
 import { backtest, conditionLabel, evaluateLast, fillStrategy, type FullStrategy } from "../lib/strategy";
-import { ApiError, type ActivateManualBody, type ApiClient, type LiveCooldown, type LiveGate, type LiveLimits, type ParseResult, type PresetsTable, type WalletInfo, type WalletConnectStatus } from "./types";
+import { ApiError, type ActivateManualBody, type ApiClient, type LiveCooldown, type LiveGate, type LiveLimits, type ParseResult, type PresetsTable, type WalletInfo, type WalletConnectStatus, type AgentStudioStatus, type X402JobStatus } from "./types";
 
 /** Mock-only demo scenario: "LIVE" pretends to be a LIVE (mainnet) backend with an Agentic Wallet so the LIVE UI can be
  * shown without funds. Nothing leaves the browser; tx hashes are random and labelled as demo. Persisted; switching reloads. */
@@ -142,6 +142,37 @@ export class MockApi implements ApiClient {
     if (t0 == null) return fail(404, `unknown session ${session_id}`);
     const age = Date.now() - t0;
     return ok<WalletConnectStatus>(age > 120_000 ? { status: "expired" } : age > 6000 ? { status: "connected", address: DEMO_WALLET, wallet_changed: false } : { status: "pending" }, 150);
+  }
+  // mock Agent Studio: create key -> "funded" ~8 s later -> register
+  private studio: AgentStudioStatus & { keyAt?: number } = { registered: false, network: "BSC Mainnet", has_key: false, identity_address: null, bnb_balance: null, bnb_needed: 0.002 };
+  getAgentStudio() {
+    const st = { ...this.studio };
+    if (st.keyAt && !st.registered) st.bnb_balance = Date.now() - st.keyAt > 8000 ? 0.0025 : 0;
+    delete st.keyAt; return ok<AgentStudioStatus | null>(st, 150);
+  }
+  createAgentStudioKey() {
+    this.studio = { ...this.studio, has_key: true, identity_address: "0x4e1D2c9A7b3F0e8D6a5C4b3A2f1E0d9C8b7A6f51", bnb_balance: 0, keyAt: Date.now() };
+    return ok({ identity_address: this.studio.identity_address! }, 400);
+  }
+  registerAgentStudio(network: string) {
+    if (!this.studio.has_key) return fail(409, "Create the identity wallet first");
+    if (this.studio.keyAt && Date.now() - this.studio.keyAt < 8000) return fail(409, "Identity wallet needs about 0.002 BNB for gas first");
+    this.studio = { ...this.studio, registered: true, network, erc8004_id: "1234 (mock)", explorer_url: "https://8004scan.io", bnb_balance: 0.0013 };
+    return ok({ erc8004_id: "1234 (mock)", explorer_url: "https://8004scan.io", tx_hash: null }, 1500);
+  }
+  // mock x402: report ready ~4 s after paying
+  private x402Jobs = new Map<string, { at: number; symbol: string }>();
+  private x402Calls = 0;
+  getX402Price(_symbol: string) { return ok({ enabled: true, price_usdt: 0.1, cap_usdt: 0.1, calls_left_today: Math.max(0, 5 - this.x402Calls), quota_usdt_left: 1.0 - this.x402Calls * 0.1 }, 120); }
+  startX402Analysis(symbol: string) {
+    if (this.x402Calls >= 5) return fail(429, "Daily x402 call cap reached");
+    this.x402Calls += 1; const id = `x402-${Date.now().toString(36)}`; this.x402Jobs.set(id, { at: Date.now(), symbol });
+    return ok({ job_id: id, paid_usdt: 0.1, tx_hash: null }, 600);
+  }
+  getX402Job(job_id: string) {
+    const j = this.x402Jobs.get(job_id);
+    if (!j) return fail(404, `unknown job ${job_id}`);
+    return ok<X402JobStatus>(Date.now() - j.at < 4000 ? { status: "pending" } : { status: "done", report: `Example report (mock data) for ${j.symbol}.\n\nThis is placeholder text; with a real backend the report comes from Binance Stock Agent.` }, 150);
   }
   reconcileWallet() { return ok({ address: DEMO_WALLET, was_blocked: false, kept: [], dropped: [], wallet_blocked: false }, 300); }
   getTokens(q = "") {
