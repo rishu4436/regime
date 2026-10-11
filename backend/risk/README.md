@@ -350,7 +350,7 @@ rm.reset_live_limits(wallet_limits: WalletLimits | None = None) -> dict         
 All three return the same shape:
 
 ```json
-{"order_mode": "fixed"|"pct", "order_usdt": null|float, "order_pct": null|float,
+{"order_mode": "strategy"|"fixed"|"pct", "order_usdt": null|float, "order_pct": null|float,
  "max_order_usdt": 25, "max_total_usdt": 50, "max_per_token_usdt": 50, "daily_loss_usdt": 25, "daily_buy_usdt": 100,
  "defaults": {same 8 keys, the values this manager started with (env RISK_LIVE_* included)},
  "wallet_daily_limit_usdt": null|float,   // wallet_limits.daily_limit_usdt when passed
@@ -359,9 +359,9 @@ All three return the same shape:
 
 | Panel key | LiveRiskProfile field | Notes |
 |---|---|---|
-| `order_mode` | `order_mode` | `fixed` (default) or `pct` |
-| `order_usdt` | `order_usdt` | fixed USDT per LIVE BUY; `null` = use the strategy's size (today's behaviour) |
-| `order_pct` | `order_pct` | % of the wallet stablecoin per LIVE BUY, (0, 100]; required in `pct` mode |
+| `order_mode` | `order_mode` | `strategy` (default, "Strategy decides"), `fixed` or `pct`. `null` = `strategy`. GET returns `strategy` whenever no fixed/% size is in force |
+| `order_usdt` | `order_usdt` | fixed USDT per LIVE BUY; required in `fixed` mode; always `null` in `strategy` mode |
+| `order_pct` | `order_pct` | % of the wallet stablecoin per LIVE BUY, (0, 100]; required in `pct` mode; always `null` in `strategy` mode |
 | `max_order_usdt` | `max_order_notional_usdt` | per-order cap |
 | `max_total_usdt` | `max_open_exposure_usdt` | total open positions incl. the new order |
 | `max_per_token_usdt` | `max_token_exposure_usdt` (new, LIVE only) | stored `null` = same as `max_total_usdt` |
@@ -376,6 +376,17 @@ missing keys keep their value (partial PUT works); `defaults`, `wallet_daily_lim
 GET are ignored. `live_limits()` (the /api/wallet info) reflects changes at once and now also has
 `max_token_exposure_usdt`, `order_mode`, `order_usdt`, `order_pct`. `set_config()` replaces the whole config including
 these runtime values.
+
+**Order size mode.** `strategy` (the default; also `order_mode: null`) means neither a fixed nor a % size is set: the
+strategy's own size is used and only the caps trim it (DCA/Grid keep their small buys). Setting it clears `order_usdt`
+and `order_pct` to `null`, so `{"order_mode": "strategy", "order_usdt": null, "order_pct": null}` (the panel's "Strategy
+decides") always succeeds; non-null sizes sent alongside `strategy` are ignored (not validated) and reported in
+`notes`. `fixed` sent without any `order_usdt` (none in the body and none stored) is rejected ("Order size (USDT) is
+required when the order size mode is 'fixed' ..."); `fixed` with `order_usdt: null` sent explicitly is accepted and
+stored as `strategy` (the pre-`strategy` meaning, so old saved settings still load). A bare `{"order_usdt": 40}` with no
+mode switches to `fixed` (the old default mode). `pct` still requires `order_pct`. `LiveRiskProfile` normalizes the same
+way (`fixed` without `order_usdt` / `pct` without `order_pct` become `strategy`), so `defaults`, `reset_live_limits()`
+and `live_limits()` all report `strategy` when no size is set. Env overrides (`RISK_LIVE_*`) are unchanged.
 
 **Order sizing (LIVE BUYs only; SIM/PAPER unchanged).** `pct`: target = wallet stablecoin balance
 (`LiveContext.balances[quote_asset]`, or `portfolio.cash` if balances are missing) × `order_pct` / 100. `fixed` with
