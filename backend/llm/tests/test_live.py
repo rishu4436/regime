@@ -307,3 +307,9 @@ def test_bot4_new_codes():
     from backend.llm.live import plain_reason
     assert "maximum" in plain_reason("above_maximum")
     assert "xStock" in plain_reason("xstock_disabled")
+
+
+def test_baw_session_codes():
+    from backend.llm.live import plain_reason
+    assert "re-scans the QR" in plain_reason("session_expired")
+    assert "QR" in plain_reason("wallet_not_ready")
