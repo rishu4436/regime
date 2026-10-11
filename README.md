@@ -122,45 +122,47 @@ Every rule above is covered by tests in [`backend/risk/tests/`](backend/risk/tes
 - **Tokens:** bStocks (`…B`, such as NVDAB) trade 24/7. Ondo tokens (`…on`) only fill during US market hours. xStocks (`…x`) are off by default because they have no BSC liquidity.
 - **Proof:** Regime's first autonomous mainnet trade bought 10 USDT of NVDAB on 11 Oct 2026. [View it on BscScan](https://bscscan.com/tx/0x228c02688cd2a8170b38dba6abfdb4f95fca9e9e22ae6bed6a191d0b88a19f22).
 
-### More screenshots
+## More screenshots
 
-| Trade explanation | Auto mode |
+| | |
 |---|---|
-| ![Trade explanation](docs/screenshots/trade-explanation.png) | ![Auto mode](docs/screenshots/auto-mode.png) |
-| **Manual strategy builder** | **Backtest** |
-| ![Manual strategy builder](docs/screenshots/manual-builder.png) | ![Backtest](docs/screenshots/backtest.png) |
+| ![Trade explanation](docs/screenshots/trade-explanation.png)<br/>**Trade explanation:** every decision with its plain-English reason. | ![Auto mode](docs/screenshots/auto-mode.png)<br/>**Auto mode:** the regime picks one preset for your trading style. |
+| ![Manual strategy builder](docs/screenshots/manual-builder.png)<br/>**Manual builder:** your own entry and exit rules, no code. | ![Backtest](docs/screenshots/backtest.png)<br/>**Backtest:** the same engine run on past candles before going live. |
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    UI["Dashboard · frontend<br/>React + Vite + TS<br/>Manual Builder · Auto Mode · Dashboard"]
-    APP["App/Integration · backend/app<br/>FastAPI REST + WebSocket<br/>decision loop"]
-    ENG["Strategy engine · backend/engine<br/>regime · presets · manual evaluator · backtest"]
-    RISK["Risk · backend/risk<br/>limits · SL/TP/trailing · pause/stop · confirmation"]
-    EX["Exchange/Wallet · backend/exchange<br/>Binance Web3 API · Agentic Wallet · SIM"]
-    LLM["Explainer · backend/llm<br/>templates or Grok<br/>NL→strategy · explanations · Q&A"]
-    MON["Monitoring · backend/monitoring<br/>logs · alerts · performance"]
-    C[("backend/contracts<br/>pydantic models + Protocols<br/>→ contracts/schema/*.json<br/>→ frontend/src/contracts.ts")]
-    MOCK["backend/mocks<br/>seeded candles · MockExchangeClient"]
-    BN[("Binance Web3 API<br/>+ Agentic Wallet")]
+    U(["You, in a browser"]) --> UI
+    subgraph PC["Your PC"]
+        UI["Regime dashboard<br/>React + Vite<br/>Dashboard · Auto Mode · Manual Builder<br/>Backtest · Connect wallet · Token picker"]
+        APP["Backend API + 24/7 trading loop<br/>FastAPI REST + WebSocket"]
+        ENG["Strategy engine<br/>regime detector · 5 presets<br/>manual rules · backtester"]
+        RISK["Risk layer<br/>order and daily caps · SL/TP/trailing<br/>pause and emergency stop"]
+        EX["Exchange layer<br/>quotes · swap / RFQ<br/>SIM · PAPER · LIVE"]
+        LLM["Explainer<br/>text to strategy · trade explanations<br/>template fallback"]
+        MON["Monitoring<br/>decision log · alerts · performance"]
+        AS["Agent Studio identity<br/>ERC-8004, ready, not yet registered"]
+    end
+    BAW[("Binance Agentic Wallet<br/>sign in with a QR from the Binance App")]
+    BN[("Binance Web3 API<br/>tokenized stock prices and quotes")]
+    BSC[("BNB Smart Chain<br/>trades viewable on BscScan")]
     GROK[("xAI Grok API")]
-
-    UI <-->|REST / WS| APP
+    UI <-->|REST / live WebSocket| APP
     APP --> ENG
     APP --> RISK
     APP --> EX
     APP --> LLM
     APP --> MON
-    EX -->|PAPER / LIVE| BN
-    EX -.->|SIM| MOCK
+    APP --> AS
+    EX -->|LIVE orders| BAW
+    EX -->|market data| BN
+    BAW --> BSC
+    AS -.->|identity| BSC
     LLM -.->|optional| GROK
-    C -.- UI & APP & ENG & RISK & EX & LLM
 ```
 
-Per-candle loop (in `backend/app`): `RiskManager.check_exits` → `StrategyEngine.evaluate_manual | evaluate_auto` → `Signal`
-→ `RiskManager.check` → `RiskVerdict` → (confirmation?) → `ExchangeClient.get_quote` + `execute_swap | execute_rfq` → `Decision`
-→ `Explainer.explain_decision` → log + WebSocket `Event`. The risk layer can always force STAY_OUT; the explainer never trades.
+On every new bar, the loop first checks stop-loss, take-profit and trailing stops. Then the engine detects the market regime and either picks a preset or runs your manual rules. The risk layer approves or blocks the trade, and it can always force Stay Out. Approved trades get a quote and execute through the Agentic Wallet. The explainer writes up why in plain English, and the result shows up on the dashboard right away. The LLM never places trades.
 
 | Path | Module | What |
 |---|---|---|
