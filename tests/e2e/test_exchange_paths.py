@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from backend.app.main import create_app
 from backend.app.settings import Settings
 from backend.app.wiring import build_components
-from backend.contracts import ExecutionPath, ExecutionResult, OrderStatus
+from backend.contracts import ExecutionPath, ExecutionResult, ManualStrategy, OrderStatus
 from backend.mocks import MockExchangeClient
 
 from .helpers import SEED, tick_until, trading_strategy
@@ -49,4 +49,44 @@ def test_loop_dispatches_on_quote_path(path):
     assert sell is not None and sell["execution"]["path"] == path.value
     want = "execute_rfq" if path == ExecutionPath.RFQ else "execute_swap"
     assert ex.calls and set(ex.calls) == {want}
+    assert not [a for a in c.get("/api/alerts").json() if a["code"] == "EXECUTION_FAILED"]
+
+
+@pytest.mark.parametrize("symbol", ["NVDAon", "TSLAx", "AAPLB", "SPYon", "METAx"])
+def test_every_token_executes_on_whatever_path_it_was_quoted(symbol):
+    """No per-token path assumption: SIM routing is the exchange's business (Bot 4 #5: Ondo + xStock -> RFQ,
+    bStock -> SWAP; the plain mock quotes SWAP). Whatever the installed SIM client quotes, the fill must be on it."""
+    s = Settings(sim_seed=SEED)
+    comps = build_components(s)
+    ex = comps.exchange
+    quoted: list[ExecutionPath] = []
+    orig = ex.get_quote
+
+    def spy(*a, **kw):
+        q = orig(*a, **kw)
+        quoted.append(q.path)
+        return q
+
+    ex.get_quote = spy  # instance attribute: works for the mock and for Bot 4's client
+    c = TestClient(create_app(s, comps))
+    d = trading_strategy(symbol, activation="AUTO_EXECUTE").model_dump()
+    d["entry"]["rsi_below"]["threshold"] = 100  # enter on (almost) any bar: this test is about routing, not signals
+    strat = ManualStrategy.model_validate(d)
+    c.post("/api/manual/activate", json={"strategy": strat.model_dump(mode="json")})
+    fills = []
+    for _ in range(440):
+        fills += [d["execution"] for d in c.post("/api/loop/tick").json() if d.get("execution")]
+        if len(fills) >= 2 or (not quoted and _ > 30):
+            break
+    if symbol.endswith("x") and not quoted:  # Bot 4 d1aeef4: xStock off by default -> a no-trade decision, not a failure
+        ds = [d for d in c.get("/api/decisions?limit=50").json() if d["symbol"] == symbol]
+        assert not fills and ds and all(d["action"] == "STAY_OUT" for d in ds)
+        assert any("no quote" in d["reason"] and "xStock" in d["reason"] for d in ds)
+        assert not [a for a in c.get("/api/alerts").json() if a["code"] == "EXECUTION_FAILED"]
+        return
+    assert fills, f"no executions for {symbol}"
+    assert len(quoted) >= len(fills)
+    for e, q in zip(fills, quoted):
+        assert e["status"] == "FILLED", e
+        assert e["path"] == q.value
     assert not [a for a in c.get("/api/alerts").json() if a["code"] == "EXECUTION_FAILED"]

@@ -1,7 +1,8 @@
 # docker compose -f backend/app/deploy/docker-compose.yml up --build
 #   UI  -> http://localhost:8080   API -> http://localhost:8000/docs
 # Defaults to TRADING_MODE=SIM (offline, no keys). Secrets only via env / a git-ignored .env at the repo root:
-#   TRADING_MODE=PAPER|LIVE, LIVE_TRADING_ENABLED=true, BINANCE_API_KEY, BINANCE_API_SECRET, XAI_API_KEY
+#   TRADING_MODE=PAPER|LIVE, LIVE_TRADING_ENABLED=true + BINANCE_LIVE_ENABLED=true (LIVE), BINANCE_API_KEY,
+#   BINANCE_API_SECRET, BINANCE_WALLET_ADDRESS (xStock RFQ quotes), XAI_API_KEY
 services:
   backend:
     build:
@@ -10,6 +11,8 @@ services:
     environment:
       TRADING_MODE: ${TRADING_MODE:-SIM}
       LIVE_TRADING_ENABLED: ${LIVE_TRADING_ENABLED:-false}
+      BINANCE_LIVE_ENABLED: ${BINANCE_LIVE_ENABLED:-false}
+      BINANCE_WALLET_ADDRESS: ${BINANCE_WALLET_ADDRESS:-}
       BINANCE_API_KEY: ${BINANCE_API_KEY:-}
       BINANCE_API_SECRET: ${BINANCE_API_SECRET:-}
       XAI_API_KEY: ${XAI_API_KEY:-}

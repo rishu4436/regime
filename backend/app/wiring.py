@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from backend.contracts import (
+    utc_now,
     Action, AgentMode, ControlState, Decision, ExchangeClient, Explainer, Portfolio, RiskManager, Signal, StrategyEngine,
     StrategySelection,
     TradingMode,
@@ -146,6 +147,7 @@ class Components:
     exchange: ExchangeClient
     explainer: Explainer
     describe: Any = None
+    backtest_engine: Any = None  # PAPER/LIVE: plain engine for backtests (the live engine adds live-only guards)
 
     def names(self) -> dict[str, str]:
         d = self.describe or (lambda o: type(o).__name__)
@@ -157,9 +159,18 @@ def build_components(settings: Settings, exchange: Optional[ExchangeClient] = No
     """Explicit arguments override discovery (used by tests)."""
     settings.validate()
     fb = settings.use_fallbacks_only
+    backtest_engine = None
     if engine is None:
         from backend.engine.engine import DefaultStrategyEngine
-        engine = ResilientEngine(None if fb else DefaultStrategyEngine(), FallbackStrategyEngine())
+        primary = None if fb else DefaultStrategyEngine()
+        if not fb and settings.trading_mode != TradingMode.SIM:
+            try:  # Bot 2 live engine: live-safety layer (stale data, token status, min order, ...)
+                live_primary = DefaultStrategyEngine(live_safe=True, clock=utc_now)
+                backtest_engine = ResilientEngine(primary, FallbackStrategyEngine())
+                primary = live_primary
+            except TypeError:  # older engine without live_safe
+                pass
+        engine = ResilientEngine(primary, FallbackStrategyEngine())
     if explainer is None:
         from backend.llm.explainer import DefaultExplainer
         explainer = ResilientExplainer(None if fb else DefaultExplainer(), FallbackExplainer())
@@ -170,7 +181,7 @@ def build_components(settings: Settings, exchange: Optional[ExchangeClient] = No
             from backend.risk.manager import DefaultRiskManager
             cand = DefaultRiskManager(control=ctrl)
             risk = cand if _probe_risk(cand) else None
-        risk = risk or FallbackRiskManager(control=ctrl, live_allowed=settings.live_enabled)
+        risk = risk or FallbackRiskManager(control=ctrl, live_allowed=settings.live_enabled and settings.risk_allow_live)
     if exchange is None:
         from backend.exchange.factory import get_exchange_client
         exchange = get_exchange_client(settings.trading_mode)
@@ -194,4 +205,5 @@ def build_components(settings: Settings, exchange: Optional[ExchangeClient] = No
         n = type(o).__name__
         return f"fallback:{n}" if n.startswith("Fallback") else n
 
-    return Components(engine=engine, risk=risk, exchange=exchange, explainer=explainer, describe=name)
+    return Components(engine=engine, risk=risk, exchange=exchange, explainer=explainer, describe=name,
+                      backtest_engine=backtest_engine)

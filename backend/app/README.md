@@ -44,5 +44,6 @@ fall back to `backend.mocks` until a bot's module is ready). Decision loop per b
 - `backend/app/deploy/run.sh` (backend :8000 + Vite :5173) or `run.sh --backend-only`.
 - `docker compose -f backend/app/deploy/docker-compose.yml up --build` (UI :8080, API :8000).
   These live here because root files / `scripts/` belong to the coordinator; they can be moved to the root later.
-- Env: `TRADING_MODE` (SIM default), `LIVE_TRADING_ENABLED` + `BINANCE_API_KEY/SECRET` (LIVE only), `SIM_SEED`,
+- Env: `TRADING_MODE` (SIM default), `LIVE_TRADING_ENABLED=true` + `BINANCE_LIVE_ENABLED=true` + `BINANCE_API_KEY/SECRET` (LIVE only; startup error
+  names whichever is missing), `BINANCE_WALLET_ADDRESS` (PAPER/LIVE xStock RFQ quotes), `SIM_SEED`,
   `SIM_REPLAY_BARS`, `STARTING_CAPITAL`, `LOOP_INTERVAL_SECONDS`, `PENDING_TTL_SECONDS`, `LOG_DIR`, `USE_FALLBACKS_ONLY`.
