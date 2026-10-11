@@ -8,7 +8,7 @@ import { cls, humanize, num, time, usd } from "../lib/format";
 import { conditionLabel, controlReason, EXIT_LABEL, strategyLabel, TOKENS } from "../lib/strategy";
 import { Controls } from "./Controls";
 import { AlertsPanel, AskAgent } from "./Insights";
-import type { PerformanceSummary } from "../api/types";
+import { ApiError, type PerformanceSummary } from "../api/types";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 
 interface Props { status: StatusSnapshot | null; refresh: () => void; tick: number; alertsVersion: number; go: (tab: "manual" | "auto") => void }
@@ -36,7 +36,11 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
   const unreal = pf ? (pf.positions ?? []).reduce((a, p) => a + (p.unrealized_pnl ?? 0), 0) : null;
   const totalPnl = pf ? pf.equity - pf.starting_capital : null;
   const decisions = status?.recent_decisions ?? [];
-  const pending = decisions.filter((d) => d.execution?.status === "PENDING_CONFIRMATION");
+  // authoritative list from GET /api/confirmations (recent_decisions only holds the last 20); refreshed on every snapshot
+  const [pendingList, setPendingList] = useState<Decision[] | null>(null);
+  const [gone, setGone] = useState<Set<string>>(() => new Set());
+  useEffect(() => { api.getConfirmations().then(setPendingList).catch(() => setPendingList(null)); }, [status, tick]);
+  const pending = (pendingList ?? decisions.filter((d) => d.execution?.status === "PENDING_CONFIRMATION")).filter((d) => !gone.has(d.id!));
   const shown = filter === "ALL" ? decisions : decisions.filter((d) => d.action !== "STAY_OUT");
   const last = status?.last_decision;
   const lastPx = candles?.[candles.length - 1]?.close, firstPx = candles?.[0]?.close;
@@ -54,7 +58,14 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
       else toast(ok ? "Trade approved and executed" : "Trade rejected", ok ? "success" : "info");
       refresh();
     }
-    catch (e) { toast(e instanceof Error ? e.message : String(e), "error"); } finally { setBusy(null); }
+    catch (e) {
+      if (e instanceof ApiError && (e.status === 404 || e.status === 409)) {
+        // no longer pending: the agent was switched/deactivated, it expired, or it was handled elsewhere
+        setGone((g) => new Set(g).add(id));
+        toast(`This trade is no longer pending (${e.detail}). It was not executed.`, "warn");
+        refresh();
+      } else toast(e instanceof Error ? e.message : String(e), "error");
+    } finally { setBusy(null); }
   };
 
   return (

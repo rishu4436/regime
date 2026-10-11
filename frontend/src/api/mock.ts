@@ -31,7 +31,7 @@ export class MockApi implements ApiClient {
   private rand = rng("live");
   private listeners = new Set<(e: Event) => void>();
   private timer: number | undefined;
-  private loop: LoopState = { running: true, interval_seconds: 3, ticks: 0, agent_mode: null, active_symbol: null, active_strategy: null, replay_finished: false };
+  private loop: LoopState = { running: false, interval_seconds: 3, ticks: 0, agent_mode: null, active_symbol: null, active_strategy: null, replay_finished: false };
   private control: ControlState = { paused: false, emergency_stopped: false, confirmation_mode: true, trading_mode: "SIM", reason: null, updated_at: now() };
   private portfolio: Portfolio = { starting_capital: DEFAULT_INITIAL_CAPITAL, cash: DEFAULT_INITIAL_CAPITAL, positions: [], realized_pnl: 0, equity: DEFAULT_INITIAL_CAPITAL, bars_since_exit: {}, trades_today: 0, daily_pnl: 0, mode: "SIM", updated_at: now() };
   private agentMode: "MANUAL" | "AUTO" | null = null;
@@ -129,6 +129,7 @@ export class MockApi implements ApiClient {
     this.manual = fillStrategy(v); this.auto = null; this.agentMode = "MANUAL"; this.symbol = this.manual.symbol;
     this.activeStrategy = `MANUAL:${this.manual.name}`;
     this.setControl({ confirmation_mode: this.manual.activation === "CONFIRMATION" });
+    this.rejectAllPending("agent switched");
     this.syncLoop(); this.emitStatus();
     return ok(this.snapshot());
   }
@@ -140,11 +141,13 @@ export class MockApi implements ApiClient {
     this.regime = this.analyse(c.symbol);
     this.activeStrategy = this.select(this.regime, c.style ?? "BALANCED", c.enabled_presets ?? [...PresetNameValues]).preset ?? "NONE";
     this.setControl({ confirmation_mode: (c.activation ?? "CONFIRMATION") === "CONFIRMATION" });
+    this.rejectAllPending("agent switched");
     this.syncLoop(); this.emitStatus();
     return ok(this.snapshot());
   }
   deactivate() {
     this.agentMode = null; this.manual = null; this.auto = null; this.activeStrategy = null;
+    this.rejectAllPending("agent deactivated");
     this.syncLoop(); this.emitStatus();
     return ok(this.snapshot());
   }
@@ -170,30 +173,31 @@ export class MockApi implements ApiClient {
   getConfirmations() { return ok(this.pending()); }
   approve(id: string) {
     const d = this.decisions.find((x) => x.id === id);
-    if (!d) return fail(404, `decision ${id} not found`);
-    if (d.execution?.status !== "PENDING_CONFIRMATION") return fail(409, "decision is not pending confirmation");
+    // like the backend: anything no longer pending (approved, rejected, agent switched) is a 404
+    if (!d || d.execution?.status !== "PENDING_CONFIRMATION") return fail(404, `no pending confirmation ${id}`);
     if (this.control.emergency_stopped) return fail(409, "emergency stop active");
     const r = this.buy(d.symbol, d.risk_verdict?.adjusted_notional ?? d.signal?.proposed_notional ?? 0, d.strategy, d.id);
     d.execution = r;
-    d.reason += " (approved by user)";
+
     if (r.status !== "FILLED") this.alert("WARNING", "EXECUTION_FAILED", `Approve failed: ${r.error}`, d.symbol);
     this.emit("DECISION", d); this.emitStatus();
     return ok(d);
   }
-  reject(id: string, reason?: string) {
+  reject(id: string, reason?: string, byUser = true) {
     const d = this.decisions.find((x) => x.id === id);
-    if (!d) return fail(404, `decision ${id} not found`);
-    if (d.execution?.status !== "PENDING_CONFIRMATION") return fail(409, "decision is not pending confirmation");
-    d.action = "STAY_OUT";
-    d.execution = { ...d.execution, status: "REJECTED", error: reason || "rejected by user" };
-    d.reason += ` (rejected by user${reason ? `: ${reason}` : ""})`;
+    if (!d || d.execution?.status !== "PENDING_CONFIRMATION") return fail(404, `no pending confirmation ${id}`);
+    const who = byUser ? "Rejected by user" : "Not executed", text = reason ? `${who}: ${reason}` : who; // API.md v0.4 reason texts
+    d.action = "STAY_OUT"; d.reason = text; d.explanation = text;
+    d.execution = { ...d.execution!, status: "REJECTED", error: text };
     this.emit("DECISION", d); this.emitStatus();
     return ok(d);
   }
+  /** A previous agent's confirmations never execute under a new agent: "Not executed: agent switched". */
+  private rejectAllPending(why: string) { for (const d of this.pending()) this.reject(d.id!, why, false); }
   closePositionById(positionId: string) {
     const pos = (this.portfolio.positions ?? []).find((p) => p.id === positionId);
     if (!pos) return fail(404, `no open position with id ${positionId}`);
-    const d = this.exitDecision(pos, "MANUAL", this.last(pos.symbol), `Manual override: user closed ${pos.symbol} lot ${positionId.slice(0, 6)}`);
+    const d = this.exitDecision(pos, "MANUAL", this.last(pos.symbol), `close requested by user (lot ${positionId.slice(0, 6)})`);
     this.emitStatus();
     return ok(d);
   }
@@ -202,7 +206,7 @@ export class MockApi implements ApiClient {
     const lots = (this.portfolio.positions ?? []).filter((p) => p.symbol === symbol);
     if (!lots.length) return fail(409, `no open ${symbol} position`);
     let d: Decision | null = null;
-    for (const pos of lots) d = this.exitDecision(pos, "MANUAL", this.last(symbol), `Manual override: user closed ${symbol}`);
+    for (const pos of lots) d = this.exitDecision(pos, "MANUAL", this.last(symbol), `close requested by user (all ${symbol})`);
     this.emitStatus();
     return ok(d!);
   }
@@ -211,7 +215,7 @@ export class MockApi implements ApiClient {
   getControl() { return ok(this.control); }
   pause(reason?: string) {
     const c = this.setControl({ paused: true, reason: reason || "Paused by user" });
-    this.alert("WARNING", "PAUSED", c.reason ?? "Paused"); this.emitStatus(); return ok(c);
+    this.alert("WARNING", "PAUSED", onePrefix("Paused", c.reason)); this.emitStatus(); return ok(c);
   }
   resume() { const c = this.setControl({ paused: false, reason: this.control.emergency_stopped ? this.control.reason : null }); this.emitStatus(); return ok(c); }
   resetEmergencyStop() {
@@ -220,10 +224,10 @@ export class MockApi implements ApiClient {
     this.alert("INFO", "EMERGENCY_STOP", "Emergency stop reset by user"); this.emitStatus(); return ok(c);
   }
   emergencyStop(reason?: string, flatten = false) {
-    if (flatten) for (const p of [...(this.portfolio.positions ?? [])]) this.exitDecision(p, "EMERGENCY_STOP", this.last(p.symbol), "Emergency stop: position flattened");
+    if (flatten) for (const p of [...(this.portfolio.positions ?? [])]) this.exitDecision(p, "EMERGENCY_STOP", this.last(p.symbol), "position flattened at the last price");
     for (const d of this.pending()) { d.action = "STAY_OUT"; d.execution = { ...d.execution!, status: "REJECTED", error: "emergency stop" }; }
     const c = this.setControl({ emergency_stopped: true, reason: reason || "Emergency stop" });
-    this.alert("CRITICAL", "EMERGENCY_STOP", `${c.reason}${flatten ? " (all positions closed)" : ""}`);
+    this.alert("CRITICAL", "EMERGENCY_STOP", `${onePrefix("Emergency stop", c.reason)}${flatten ? " (all positions closed)" : ""}`);
     this.emitStatus();
     return ok(c);
   }
@@ -375,8 +379,9 @@ export class MockApi implements ApiClient {
 
   /** SELL decision for one lot, with Signal.exit_reason / position_id / price (intended fill) like the backend. */
   private exitDecision(pos: Position, why: ExitReason, fillPx: number, reason: string): Decision {
+    const detail = reason; reason = `${why}: ${detail}`; // API.md v0.4: Decision.reason "<EXIT_REASON>: <detail>", Signal.reason the detail
     const id = uid();
-    const signal: Signal = { id: uid(), symbol: pos.symbol, action: "SELL", source: this.agentMode ?? "MANUAL", strategy: pos.strategy, reason,
+    const signal: Signal = { id: uid(), symbol: pos.symbol, action: "SELL", source: this.agentMode ?? "MANUAL", strategy: pos.strategy, reason: detail,
       price: fillPx, exit_reason: why, position_id: pos.id ?? null, regime: this.regime?.regime ?? null, timestamp: this.simNow() };
     const r = this.sellLot(pos, fillPx, id);
     return this.log({ id, symbol: pos.symbol, action: "SELL", strategy: pos.strategy, reason, signal, execution: r });
@@ -421,15 +426,15 @@ export class MockApi implements ApiClient {
       else if (p.stop_loss_price && bar.low <= p.stop_loss_price) { why = "STOP_LOSS"; level = Math.min(bar.open, p.stop_loss_price); }
       else if (p.take_profit_price && bar.high >= p.take_profit_price) { why = "TAKE_PROFIT"; level = Math.max(bar.open, p.take_profit_price); }
       if (!why && p.trailing_stop_pct && trail != null && p.id) this.trails[p.id] = Math.max(trail, bar.high * (1 - p.trailing_stop_pct / 100));
-      if (why) out.push(this.exitDecision(p, why, level, `${why.replace(/_/g, " ").toLowerCase()} hit: lot ${p.id?.slice(0, 6)} filled at ${level.toFixed(2)}`));
+      if (why) out.push(this.exitDecision(p, why, level, `lot ${p.id?.slice(0, 6)} filled at ${level.toFixed(2)}`));
     }
     if (this.control.emergency_stopped) {
       // no flatten: the risk layer closes remaining lots on the next bar at that bar's close
       for (const p of [...(this.portfolio.positions ?? [])]) {
         const bar = this.candles[p.symbol][this.candles[p.symbol].length - 1];
-        out.push(this.exitDecision(p, "EMERGENCY_STOP", bar.close, `Emergency stop: lot ${p.id?.slice(0, 6)} closed at bar close ${bar.close.toFixed(2)}`));
+        out.push(this.exitDecision(p, "EMERGENCY_STOP", bar.close, `lot ${p.id?.slice(0, 6)} closed at bar close ${bar.close.toFixed(2)}`));
       }
-      out.push(this.log({ symbol: this.symbol, action: "STAY_OUT", strategy: this.activeStrategy ?? "-", reason: `Emergency stop active: no new entries (${this.control.reason ?? "stopped"})` }));
+      out.push(this.log({ symbol: this.symbol, action: "STAY_OUT", strategy: this.activeStrategy ?? "-", reason: `${onePrefix("Emergency stop", this.control.reason || "active")}; staying out` }));
       return finish();
     }
     if (this.control.paused) { out.push(this.log({ symbol: this.symbol, action: "STAY_OUT", strategy: this.activeStrategy ?? "-", reason: `Paused: ${this.control.reason ?? "by user"}` })); return finish(); }
@@ -485,4 +490,11 @@ export class MockApi implements ApiClient {
     out.push(this.log({ id, symbol: this.symbol, action: "BUY", strategy, reason, signal, risk_verdict: verdict, execution: r }));
     return finish();
   }
+}
+
+/** API.md v0.4 "exactly one prefix": "Paused: lunch", but "Paused by user" stays as is. */
+function onePrefix(prefix: string, text?: string | null) {
+  const t = (text ?? "").replace(new RegExp(`^(\\s*${prefix.replace(/ /g, "[ _]")}\\s*:\\s*)+`, "i"), "").trim();
+  if (!t) return prefix;
+  return t.toLowerCase().startsWith(prefix.toLowerCase()) ? t : `${prefix}: ${t}`;
 }
