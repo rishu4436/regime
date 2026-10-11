@@ -58,3 +58,26 @@ Listing entry conditions (e.g. "RSI below 30 and above the 200 SMA") enables onl
   keyword-only extras (protocol-compatible): `summarize_state(status, *, performance=None, alerts=None)`,
   `answer(question, status, *, performance=None, alerts=None)`. Templates show return / drawdown / win rate / loss streak
   and the 3 most recent alerts; Grok prompts get the same data as JSON (equity curve trimmed to 20 points, last 10 alerts).
+
+## LIVE mode (real funds, autonomous 24/7) - `backend/llm/live.py`
+
+When `Decision.mode == LIVE` (or the execution has `mode=LIVE` / `real_funds=True`) explanations switch to live wording:
+the agent acts on its own, with **no confirmation/approval wording** (Grok output containing it is rejected and the
+template is used instead).
+
+- Fills: "The agent bought NVDAB on its own with real funds on BNB Chain mainnet: 24.99 USDT via SWAP at a fill price of
+  182.4 (...). Price impact 0.31%. Tx hash 0x...: https://bscscan.com/tx/0x...". Fields are read defensively from the
+  execution (attribute, pydantic extra or dict): `tx_hash|txHash`, `explorer_url|explorerUrl` (must start with
+  `https://bscscan.com/tx/`, else rebuilt from a real 66-char tx hash), `route|path`, `real_funds|realFunds`,
+  `amount_usdt|notional_usdt|amount|notional`, `fill_price|avg_price`, `price_impact_pct|priceImpactPercent` (also on a
+  nested `quote`). If Grok omits the tx link, it is appended.
+- Risk blocks: Bot 3 `"Blocked (<check>): <detail>"` reasons become plain language naming the limit, keeping the
+  numbers, and saying whether the agent's risk limits or the Agentic Wallet set a cap. Size cuts on approved trades are
+  explained too ("size cut from 30.00 to 25.00 USDT by the per-order cap (set by the agent's risk limits)").
+- Engine STAY_OUT codes (Bot 2 `live_*`, `insufficient_data`) and Binance Web3 error codes in `ExecutionResult.error`
+  (40367/40369 market closed, 40374 liquidity, 40375 Ondo 20 USD minimum, 40401 quote expired, ...) are mapped.
+  Unknown reasons pass through cleaned; reserve/quota/allowance wording maps to the exit-quota reserve.
+- Execution status `PENDING_CONFIRMATION` = submitted on-chain, waiting to settle (no approval wording). Price impact
+  is a percent (`0.35` = 0.35%); `None` is shown as "Price impact unknown". Bot 3 warnings `exit_quota_shortfall`,
+  `wallet_limits_stale` and wallet session expiry ("paused until Rishu re-scans the QR code") are mapped.
+- `live.handled_codes()` lists every mapped code.
