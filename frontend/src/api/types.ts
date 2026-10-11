@@ -33,12 +33,14 @@ export interface LiveLimits {
   daily_remaining_usdt?: number | null;
   /** Which side set each effective cap (bot3/live 53907b5): "risk" (agent) or "wallet". */
   limit_source?: string | { per_order_cap_usdt?: "risk" | "wallet" | string; daily_limit_usdt?: "risk" | "wallet" | string } | null; // bot6/live may send one string ("app")
-  allowed_tokens?: string[] | null;
+  /** Array of symbols, or "ALL" / "LIMITED" from the baw wallet. */
+  allowed_tokens?: AllowedTokens;
   /** Risk warnings for the UI, e.g. the exit-reserve warning (remaining daily quota can't cover selling all positions). */
   warnings?: string[] | null;
   /** The wallet's own limits (Agentic Wallet / Binance App), if it exposes them: the stricter one applies. */
-  wallet?: { per_order_cap_usdt?: number | null; daily_limit_usdt?: number | null; allowed_tokens?: string[] | null } | null;
+  wallet?: { per_order_cap_usdt?: number | null; daily_limit_usdt?: number | null; allowed_tokens?: AllowedTokens } | null;
 }
+export type AllowedTokens = string[] | "ALL" | "LIMITED" | string | null | undefined;
 export interface WalletBalance { symbol?: string; asset?: string; amount?: number; quantity?: number; usd_value?: number | null; value_usdt?: number | null; contract_address?: string | null }
 /** GET /api/wallet: the connected wallet (Agentic Wallet `baw`) on BNB Smart Chain. */
 export interface WalletInfo {

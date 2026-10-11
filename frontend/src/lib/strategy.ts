@@ -231,7 +231,7 @@ export const CONDITION_LABEL: Record<string, string> = {
   live_quote: "Valid quote", live_quote_notional: "Quote amount matches", live_slippage: "Slippage within limit",
   live_wallet_quote: "Wallet can cover quote", live_daily_notional: "Daily traded cap", live_max_exposure: "Max open exposure",
   live_order_cap: "Per-order cap", live_wallet_balance: "Wallet balance",
-  live_below_min_order: "Below minimum order", live_illiquid_family: "xStock excluded (no liquidity on BNB Chain)", live_token_paused: "Token paused", live_price_impact: "Price impact above limit",
+  live_below_min_order: "Below minimum order", session_expired: "Agentic Wallet session expired, re-scan QR on host PC", wallet_not_ready: "Agentic Wallet session expired, re-scan QR on host PC", live_illiquid_family: "xStock excluded (no liquidity on BNB Chain)", live_token_paused: "Token paused", live_price_impact: "Price impact above limit",
   // Binance Web3 exchange quote errors (Bot 4) used as market-state signals: a stay-out, not a failed trade
   // Bot 4 exchange reasons and Bot 3 wallet / live checks
   market_closed: "Market closed", insufficient_liquidity: "Insufficient liquidity", below_minimum: "Below minimum order",

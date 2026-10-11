@@ -3,7 +3,7 @@
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { StatusSnapshot, SystemInfo } from "../contracts";
 import { api } from "../api";
-import type { LiveGate, LiveLimits, LoopHeartbeat, LoopState, WalletBalance, WalletInfo } from "../api/types";
+import type { AllowedTokens, LiveGate, LiveLimits, LoopHeartbeat, LoopState, WalletBalance, WalletInfo } from "../api/types";
 
 export interface Heartbeat { runningSince: number | null; lastTick: number | null; nextTick: number | null; stale: boolean; observed: boolean }
 export interface LiveState {
@@ -31,6 +31,9 @@ export const balValue = (b: WalletBalance) => b.usd_value ?? b.value_usdt ?? nul
 /** Stricter of our cap and the wallet's own (Agentic Wallet) limit, when it exposes one. */
 export const stricter = (ours?: number | null, wallet?: number | null) =>
   ours == null ? wallet ?? null : wallet == null ? ours : Math.min(ours, wallet);
+/** allowed_tokens may be an array, "ALL", "LIMITED" (baw wallet), null or undefined. */
+export const allowedTokensText = (a: AllowedTokens): string | null =>
+  Array.isArray(a) ? (a.length ? a.join(", ") : null) : typeof a === "string" ? (a.toUpperCase() === "ALL" ? "All tokens" : a.toUpperCase() === "LIMITED" ? "Limited by wallet" : a) : null;
 export const limitsOf = (w: WalletInfo | null): LiveLimits => w?.limits ?? {};
 
 /** Without a live-gate endpoint: LIVE only starts with LIVE_TRADING_ENABLED and BINANCE_LIVE_ENABLED (API.md v0.6), so

@@ -5,7 +5,7 @@ import type { Decision, ExecutionResult, StatusSnapshot } from "../contracts";
 import { api } from "../api";
 import type { LiveExecutionFields } from "../api/types";
 import { cls, time, usd } from "../lib/format";
-import { ago, balAmount, balAsset, balValue, bscAddr, bscTx, dur, limitsOf, shortHex, stricter, useLive } from "../lib/live";
+import { ago, allowedTokensText, balAmount, balAsset, balValue, bscAddr, bscTx, dur, limitsOf, shortHex, stricter, useLive } from "../lib/live";
 import { conditionLabel, controlReason, exchangeCodeLabels, strategyLabel } from "../lib/strategy";
 import { ActionBadge } from "./Badges";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -39,14 +39,15 @@ const AUTO_STOP = /daily loss|automatic|auto-stop|stopped automatically/i;
 
 /** Red, non-dismissible LIVE / MAINNET banner shown (sticky) on every tab whenever the backend runs LIVE. */
 const SESSION = /session|qr|re-?sign|sign ?in|re-?auth|expired/i;
+const SESSION_CODES = /\b(session_expired|wallet_not_ready)\b/i;
 /** Agentic Wallet session expired (wallet.session_expired or a session/QR blocked reason): re-sign-in needed. */
 export function SessionBanner() {
   const { wallet, gate } = useLive();
-  const why = gate?.blocked_reasons.find((r) => SESSION.test(r) && /wallet|session|qr|baw/i.test(r));
+  const why = gate?.blocked_reasons.find((r) => SESSION_CODES.test(r) || (SESSION.test(r) && /wallet|session|qr|baw/i.test(r)));
   if (!wallet?.session_expired && !why) return null;
   return (
     <div className="banner red" role="alert">
-      <span className="grow"><b>Agentic Wallet session expired.</b> The agent can't trade until the wallet is signed in again: run <code>baw auth signin</code> on the server and approve the QR in the Binance App.{why ? <><br /><span className="small">{why}</span></> : null}</span>
+      <span className="grow"><b>Agentic Wallet session expired, re-scan QR on host PC.</b> The agent can't trade until the wallet is signed in again (<code>baw auth signin</code>, then scan the QR in the Binance App).{why ? <><br /><span className="small">{why}</span></> : null}</span>
     </div>
   );
 }
@@ -215,7 +216,7 @@ export function CapsPanel({ status, decisions }: { status: StatusSnapshot | null
         <span className="k">Max slippage</span><span>{L.max_slippage_pct != null ? `${L.max_slippage_pct}%` : NA}</span>
         <span className="k">Stale data after</span><span>{L.stale_after_s != null ? `${L.stale_after_s}s` : NA}</span>
         <span className="k">BNB gas reserve</span><span>{L.bnb_gas_reserve ?? wallet?.bnb_gas_reserve ?? NA}{(L.bnb_gas_reserve ?? wallet?.bnb_gas_reserve) != null ? " BNB" : ""}</span>
-        <span className="k">Allowed tokens</span><span>{(W?.allowed_tokens ?? L.allowed_tokens)?.join(", ") || NA}</span>
+        <span className="k">Allowed tokens</span><span>{allowedTokensText(W?.allowed_tokens) ?? allowedTokensText(L.allowed_tokens) ?? NA}</span>
       </div>
     </Card>
   );
