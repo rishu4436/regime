@@ -6,6 +6,7 @@ import { LiveBanner, SessionBanner } from "./components/Live";
 import { LiveContext, useLiveState } from "./lib/live";
 import { WalletButton, WalletChangedBanner, WalletConnectProvider } from "./components/WalletConnect";
 import { ModeBadge, RegimeBadge } from "./components/Badges";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Toggle, ToastProvider } from "./components/ui";
 import { useStatus } from "./lib/useStatus";
 import { defaultStrategy, fillStrategy, type FullStrategy } from "./lib/strategy";
@@ -89,15 +90,19 @@ function Shell() {
         </div>
         {API_MODE === "mock" && <div className="banner amber" style={{ marginBottom: 12 }}><span className="grow small">
           <b>Mock data:</b> this dashboard isn't connected to the Regime backend, so nothing here is real. Start it with <code>VITE_API_MODE=http</code> to see the live agent.</span></div>}
-        <LiveBanner />
-        <SessionBanner />
-        <WalletChangedBanner />
+        <ErrorBoundary label="status banners">
+          <LiveBanner />
+          <SessionBanner />
+          <WalletChangedBanner />
+        </ErrorBoundary>
         {error && <div className="banner amber"><span className="grow">Backend unreachable: {error}</span><span className="small muted">Start the API or run with VITE_API_MODE=mock</span></div>}
+        <ErrorBoundary key={tab} label={meta.title}>
         {tab === "dashboard" && <Dashboard status={status} refresh={refresh} tick={tick} alertsVersion={alertsVersion} go={go} />}
         {tab === "manual" && <ManualBuilder strategy={strategy} setStrategy={setStrategy} capital={capital} setCapital={setCapital} run={run} setRun={setRun}
           onActivated={() => { refresh(); setTab("dashboard"); }} onAutoParsed={(c) => { setAutoCfg({ ...autoCfg, ...c, activation: autoCfg.activation }); setTab("auto"); }} />}
         {tab === "auto" && <AutoMode config={autoCfg} setConfig={setAutoCfg} status={status} tick={tick} onActivated={() => { refresh(); setTab("dashboard"); }} />}
         {tab === "backtest" && <BacktestView run={run} onOpenBuilder={() => setTab("manual")} />}
+        </ErrorBoundary>
       </main>
       <nav className="mobile-nav">{nav}</nav>
     </div>

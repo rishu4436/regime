@@ -44,7 +44,7 @@ export interface LiveLimits {
   /** Tokens the agent can be activated on (exchange list minus xStock in LIVE, or LIVE_ALLOWED_TOKENS). */
   tradable_tokens?: string[] | null;
   /** Risk warnings for the UI, e.g. the exit-reserve warning (remaining daily quota can't cover selling all positions). */
-  warnings?: string[] | null;
+  warnings?: (string | { code: string; message?: string })[] | null;
   /** The wallet's own limits (Agentic Wallet / Binance App), if it exposes them: the stricter one applies. */
   wallet?: { per_order_cap_usdt?: number | null; daily_limit_usdt?: number | null; allowed_tokens?: AllowedTokens } | null;
 }

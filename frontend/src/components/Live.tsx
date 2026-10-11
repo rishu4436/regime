@@ -210,7 +210,11 @@ export function CapsPanel({ status, decisions }: { status: StatusSnapshot | null
   return (
     <Card title="Hard caps" extra={<span className="pill">{L.per_order_cap_usdt != null ? "enforced by risk" : "not reported"}</span>}>
       {!wallet && walletEndpoint === false && <div className="small muted" style={{ marginBottom: 8 }}>Caps come from <code>GET /api/wallet</code> → <code>limits</code>, which this backend doesn't serve yet.</div>}
-      {(L.warnings ?? []).filter(Boolean).map((w) => <div key={w} className="banner amber" style={{ marginBottom: 10 }}><span className="grow small">⚠ {WARNING_TEXT[w] ?? w}</span></div>)}
+      {(L.warnings ?? []).filter(Boolean).map((w, i) => {
+        // risk sends [{code, message}]; older/mock backends send plain strings
+        const code = typeof w === "string" ? w : w.code, msg = typeof w === "string" ? w : w.message ?? w.code;
+        return <div key={`${code}-${i}`} className="banner amber" style={{ marginBottom: 10 }}><span className="grow small">⚠ {WARNING_TEXT[code] ?? msg}</span></div>;
+      })}
       <div className="meters">
         <Meter label={<>Per order{src("per_order_cap_usdt", L.per_order_cap_usdt, W?.per_order_cap_usdt)}</>} used={lastBuy?.execution?.notional ?? null} cap={orderCap} hint={<>last buy{lastBuy ? ` ${time(lastBuy.timestamp)}` : ": none yet"}{which(L.per_order_cap_usdt, W?.per_order_cap_usdt)}</>} />
         <Meter label="Daily loss → auto e-stop" used={loss} cap={L.daily_loss_cap_usdt} warnAt={0.6}
