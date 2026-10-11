@@ -5,8 +5,8 @@ from backend.llm import templates
 def test_explain_buy_mentions_everything(buy_decision):
     txt = templates.explain_decision(buy_decision)
     assert txt.startswith("Buy NVDAon (AUTO mode, SIM).")
-    for s in ["TREND_FOLLOWING", "strong uptrend", "price above ema", "macd bullish cross", "volume above avg",
-              "Risk check passed", "FILLED", "SWAP", "$997.50"]:
+    for s in ["Trend following", "strong uptrend", "price above its EMA", "MACD crossed above its signal line",
+              "volume above average", "Risk check passed", "filled", "SWAP", "$997.50"]:
         assert s in txt, s
 
 
@@ -31,7 +31,7 @@ def test_explain_is_deterministic(buy_decision):
 
 def test_summary(status, empty_status):
     s = templates.summarize_state(status)
-    for part in ["running in SIM mode", "strong uptrend", "TREND_FOLLOWING", "$10,052.50", "+0.53%", "NVDAon #pos0001a: 7 @ 142.5", "Last decision"]:
+    for part in ["running in SIM mode", "strong uptrend", "Trend following", "$10,052.50", "+0.53%", "NVDAon #pos0001a: 7 @ 142.5", "Last decision"]:
         assert part in s, part
     e = templates.summarize_state(empty_status)
     assert "paused" in e and "user pause" in e and "No open positions." in e and "No decisions yet." in e
@@ -49,7 +49,7 @@ def test_answer_routes_intents(status):
     assert "1 open position" in templates.answer("what positions do I hold", status)
     assert "realized PnL $120.00" in templates.answer("How is my PnL?", status)
     assert templates.answer("why did it do that?", status).startswith("Last decision:")
-    assert "Active strategy: TREND_FOLLOWING" in templates.answer("which strategy is active", status)
+    assert "Active strategy: Trend following" in templates.answer("which strategy is active", status)
     assert "running in SIM" in templates.answer("is it paused?", status)
     assert templates.answer("tell me a joke", status) == templates.summarize_state(status)
 

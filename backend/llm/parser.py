@@ -36,6 +36,15 @@ _ALIASES: list[tuple[str, str]] = [
     (r"meta|facebook", "METAx"),
 ]
 _FALLBACK_SYMBOL = "NVDAon"
+# Team default entry when the text gives no entry rule (Bot 1 / Bot 2): price above EMA(20). The contract default
+# (RSI < 35 AND close > SMA50) practically never triggers, so it is not used for parsed strategies.
+DEFAULT_ENTRY_EMA_PERIOD = 20
+DEFAULT_ENTRY_NOTE = ("No entry rule found in your text, so the entry is set to the team default: buy when price is "
+                      f"above EMA({DEFAULT_ENTRY_EMA_PERIOD}).")
+_ENTRY_NAMES = ("rsi_below", "price_above_sma", "price_above_ema", "macd_bullish_cross", "bollinger_lower",
+                "volume_above_avg", "breakout")
+_ABOVE = r"(?:>|above|over|greater than|rises above|crosses above|goes above|moves above|climbs above|gets above|goes over)"
+_BELOW = r"(?:<|below|under|less than|drops below|falls below|goes below|dips below|moves below|gets below|drops under)"
 
 
 class StrategyValidationError(ValueError):
@@ -150,6 +159,20 @@ def _capital(t: str) -> Optional[float]:
 
 
 def _parse_manual(text: str, default_symbol: Optional[str]) -> ManualStrategy:
+    return parse_manual_with_notes(text, default_symbol)[0]
+
+
+def default_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    """Entry dict with only the team default enabled: price above EMA(20)."""
+    for name in _ENTRY_NAMES:
+        entry[name]["enabled"] = False
+    entry["price_above_ema"].update(enabled=True, period=DEFAULT_ENTRY_EMA_PERIOD)
+    entry["logic"] = ConditionLogic.AND.value
+    return entry
+
+
+def parse_manual_with_notes(text: str, default_symbol: Optional[str]) -> tuple[ManualStrategy, list[str]]:
+    notes: list[str] = []
     t = text.lower()
     s = ManualStrategy(symbol=detect_symbol(text, default_symbol)).model_dump()
     e, x, r, f = s["entry"], s["exit"], s["risk"], s["filters"]
@@ -161,12 +184,12 @@ def _parse_manual(text: str, default_symbol: Optional[str]) -> ManualStrategy:
         entry_part = entry_part.replace(chunk, " ")
 
     mentioned: set[str] = set()
-    rsi_below = _num(r"rsi\s*(?:\(\s*\d+\s*\))?\s*(?:is\s*)?(?:<|below|under|less than|drops below|falls below)\s*" + _NUM, entry_part)
+    rsi_below = _num(r"rsi\s*(?:\(\s*\d+\s*\))?\s*(?:is\s*)?" + _BELOW + r"\s*" + _NUM, entry_part)
     if rsi_below is None and re.search(r"oversold", entry_part):
         rsi_below = 30.0
     if rsi_below is not None:
         e["rsi_below"].update(enabled=True, threshold=min(rsi_below, 100.0)); mentioned.add("rsi_below")
-    rp = _int(r"rsi\s*\(?\s*(\d+)\s*\)?\s*(?:period)?\s*(?:<|below|under|>|above|over)", t) or _int(r"rsi\s*period\s*(?:of\s*)?(\d+)", t)
+    rp = _int(r"rsi\s*\(?\s*(\d+)\s*\)?\s*(?:period)?\s*(?:" + _BELOW + "|" + _ABOVE + ")", t) or _int(r"rsi\s*period\s*(?:of\s*)?(\d+)", t)
     if rp and rp >= 2:
         e["rsi_below"]["period"] = rp; x["rsi_above"]["period"] = rp
 
@@ -197,26 +220,36 @@ def _parse_manual(text: str, default_symbol: Optional[str]) -> ManualStrategy:
         if lb and lb >= 2:
             e["breakout"]["lookback"] = lb
     if mentioned:  # user listed their own entry conditions -> only those are enabled
-        for name in ("rsi_below", "price_above_sma", "price_above_ema", "macd_bullish_cross", "bollinger_lower", "volume_above_avg", "breakout"):
+        for name in _ENTRY_NAMES:
             if name not in mentioned:
                 e[name]["enabled"] = False
+    else:  # no entry rule in the text -> team default (price above EMA 20), shown to the user via notes
+        default_entry(e)
+        notes.append(DEFAULT_ENTRY_NOTE)
+    # the entry conditions themselves (stop before exit / sizing phrases) decide a plain "or"
+    cond_part = re.split(r"take[\s-]?profit|stop|trailing|position size|\bsize\b|cool[\s-]?down|\bmax", entry_part)[0]
     if re.search(r"\b(any of|either|or logic|any one)\b|\bany\s+(?:condition|signal)", t):
         e["logic"] = ConditionLogic.OR.value
     elif re.search(r"\b(all of|and logic|all conditions|both)\b", t):
         e["logic"] = ConditionLogic.AND.value
+    elif len(mentioned) >= 2 and re.search(r"\bor\b", cond_part) and not re.search(r"\band\b", cond_part):
+        e["logic"] = ConditionLogic.OR.value
 
     tp = _num(r"(?:take[\s-]?profit|\btp\b|profit target|target)\s*(?:at|of|=|:)?\s*\+?" + _NUM, t) or _num(_NUM + r"\s*%\s*(?:take[\s-]?profit|profit|gain)", t)
     if tp and tp > 0:
         x["take_profit_pct"] = tp
-    sl = _num(r"(?:stop[\s-]?loss|\bsl\b|\bstop\b)\s*(?:at|of|=|:)?\s*-?" + _NUM, t) or _num(_NUM + r"\s*%\s*(?:stop[\s-]?loss|stop)", t)
-    if sl and sl > 0 and not re.search(r"trailing\s*stop\s*(?:at|of|=|:)?\s*-?" + re.escape(f"{sl:g}"), t):
+    # remove trailing-stop phrases first so "trailing stop 2.5%, stop loss 5%" keeps SL = 5 (P1)
+    t_sl = re.sub(r"trailing[\s-]*stop(?:[\s-]*loss)?\s*(?:at|of|=|:)?\s*-?" + _NUM + r"\s*%?|" + _NUM
+                  + r"\s*%\s*trailing[\s-]*(?:stop(?:[\s-]*loss)?)?|trailing[\s-]*stop(?:[\s-]*loss)?", " ", t)
+    sl = _num(r"(?:stop[\s-]?loss|\bsl\b|\bstop\b)\s*(?:at|of|=|:)?\s*-?" + _NUM, t_sl) or _num(_NUM + r"\s*%\s*(?:stop[\s-]?loss|stop)", t_sl)
+    if sl and sl > 0:
         x["stop_loss_pct"] = sl
     trail = _num(r"trailing\s*(?:stop)?\s*(?:loss)?\s*(?:at|of|=|:)?\s*" + _NUM, t) or _num(_NUM + r"\s*%\s*trailing", t)
     if trail and trail > 0:
         x["trailing_stop"].update(enabled=True, pct=trail)
     elif re.search(r"trailing", t):
         x["trailing_stop"]["enabled"] = True
-    rsi_exit = _num(r"rsi\s*(?:\(\s*\d+\s*\))?\s*(?:is\s*)?(?:>|above|over|greater than|rises above|crosses above)\s*" + _NUM, exit_part or t)
+    rsi_exit = _num(r"rsi\s*(?:\(\s*\d+\s*\))?\s*(?:is\s*)?" + _ABOVE + r"\s*" + _NUM, exit_part or t)
     if rsi_exit is not None and (exit_part or rsi_below is not None):
         x["rsi_above"].update(enabled=True, threshold=min(rsi_exit, 100.0))
     if re.search(r"no rsi exit|without (?:an )?rsi exit", t):
@@ -252,17 +285,29 @@ def _parse_manual(text: str, default_symbol: Optional[str]) -> ManualStrategy:
     name = re.search(r"(?:call(?:ed)? it|name(?:d)?(?: it)?)\s*[\"']?([\w\s-]{1,40}?)[\"']?(?:[.,;]|$)", text, re.I)
     s["name"] = name.group(1).strip() if name else f"{s['symbol']} rule set"
     try:
-        return ManualStrategy.model_validate(s)
+        return ManualStrategy.model_validate(s), notes
     except ValidationError:  # should be unreachable; never let the parser raise on odd input
-        return ManualStrategy(symbol=s["symbol"])
+        fb = ManualStrategy(symbol=s["symbol"]).model_dump()
+        default_entry(fb["entry"])
+        return ManualStrategy.model_validate(fb), [DEFAULT_ENTRY_NOTE]
 
 
 def keyword_parse(text: str, default_symbol: Optional[str] = None) -> ParsedStrategy:
     """Deterministic fallback: never raises, always returns a contract-valid model."""
+    return keyword_parse_with_notes(text, default_symbol)[0]
+
+
+def keyword_parse_with_notes(text: str, default_symbol: Optional[str] = None) -> tuple[ParsedStrategy, list[str]]:
+    """keyword_parse plus user-facing notes about defaults that were filled in (e.g. the default entry rule)."""
     text = text or ""
     if looks_like_auto(text):
-        return _parse_auto(text, default_symbol)
-    return _parse_manual(text, default_symbol)
+        return _parse_auto(text, default_symbol), []
+    return parse_manual_with_notes(text, default_symbol)
+
+
+def text_has_entry_rule(text: str) -> bool:
+    """True if the user's text names at least one entry condition (keyword parser's view)."""
+    return not parse_manual_with_notes(text or "", None)[1]
 
 
 # --------------------------------------------------------------------------- LLM output validation / repair
@@ -392,6 +437,10 @@ def validate_llm_strategy(raw: str, text: str, default_symbol: Optional[str] = N
             data["capital"] = _capital(text.lower()) or DEFAULT_INITIAL_CAPITAL
     data["activation"] = (ActivationMode.AUTO_EXECUTE if wants_auto_execute(text) else ActivationMode.CONFIRMATION).value
     result = _validate_with_repair(data, model)
+    if kind == "manual" and isinstance(result, ManualStrategy) and not text_has_entry_rule(text):
+        d = result.model_dump()
+        default_entry(d["entry"])
+        result = ManualStrategy.model_validate(d)
     if kind == "auto" and not isinstance(result, AutoConfig):  # pragma: no cover - defensive
         raise StrategyValidationError("wrong model")
     return result  # type: ignore[return-value]

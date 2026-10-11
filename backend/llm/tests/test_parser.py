@@ -48,12 +48,15 @@ def test_breakout_and_ema_and_macd_exit():
     assert s.exit.macd_bearish_cross.enabled and not s.entry.macd_bullish_cross.enabled
 
 
-def test_unspecified_text_gives_simulator_defaults():
+def test_unspecified_text_gives_defaults_with_team_default_entry():
+    # no entry rule in the text -> entry = price above EMA(20) only (team default); exits / risk = contract defaults
     for text in ["", "hello", "make me some money"]:
         s = keyword_parse(text, default_symbol="TSLAx")
         d = ManualStrategy(symbol="TSLAx")
         assert isinstance(s, ManualStrategy)
-        assert s.entry == d.entry and s.exit == d.exit and s.risk == d.risk and s.symbol == "TSLAx"
+        enabled = [k for k, v in s.entry.model_dump().items() if isinstance(v, dict) and v.get("enabled")]
+        assert enabled == ["price_above_ema"] and s.entry.price_above_ema.period == 20
+        assert s.exit == d.exit and s.risk == d.risk and s.symbol == "TSLAx"
 
 
 def test_auto_config():

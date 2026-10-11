@@ -51,9 +51,10 @@ def test_live_filled_buy_names_real_funds_amount_route_fill_tx_and_bscscan():
     assert not APPROVAL.search(txt)
 
 
-def test_live_never_uses_confirmation_wording_even_if_verdict_requires_it():
+def test_autonomous_live_never_uses_confirmation_wording():
+    # AUTO_EXECUTE (confirmation off): no approval wording. Confirmation mode (opt-in) is in test_explain_fixes.py.
     sig = _sig()
-    v = RiskVerdict(signal_id=sig.id, approved=True, adjusted_size_pct=2.5, adjusted_notional=25.0, requires_confirmation=True)
+    v = RiskVerdict(signal_id=sig.id, approved=True, adjusted_size_pct=2.5, adjusted_notional=25.0, requires_confirmation=False)
     for d in (_decision(sig, v, None), _decision(sig, v, _ex())):
         txt = templates.explain_decision(d)
         assert not APPROVAL.search(txt), txt
@@ -93,7 +94,7 @@ def test_failed_live_execution_maps_exchange_error_and_keeps_tx():
     ex = _ex(status=OrderStatus.REJECTED, filled_quantity=0, avg_price=None, notional=0,
              error="40375 ONDO_FROM_USD_AMOUNT_TOO_SMALL: Minimum order amount is 20 USD", tx_hash=None)
     txt = templates.explain_decision(_decision(ex=ex))
-    assert "was not filled (REJECTED)" in txt and "minimum order size (Ondo minimum is 20 USD)" in txt
+    assert "was not filled (rejected)" in txt and "minimum order size (Ondo minimum is 20 USD)" in txt
     assert "bought" not in txt and "No position change" in txt
 
 
@@ -139,7 +140,10 @@ def test_bot3_block_reasons_are_plain_and_keep_numbers(reason, phrase):
     assert "Risk blocked the trade, no real funds were spent:" in txt
     assert phrase in txt, txt
     detail = reason.split("): ", 1)[1].replace("approved size", "risk-allowed size")
-    assert detail.rstrip(".") in txt  # exact limit numbers kept
+    if live.has_env_names(detail):  # config / env-var names never reach user text
+        assert not live.has_env_names(txt), txt
+    else:
+        assert detail.rstrip(".") in txt  # exact limit numbers kept
     assert "Blocked (" not in txt and not APPROVAL.search(txt)
 
 
@@ -208,7 +212,7 @@ def test_unknown_reasons_pass_through_cleanly():
 
 # ------------------------------------------------------------------ status / Q&A
 def test_live_control_line_and_trade_request():
-    st = StatusSnapshot(control=ControlState(trading_mode=TradingMode.LIVE, confirmation_mode=True),
+    st = StatusSnapshot(control=ControlState(trading_mode=TradingMode.LIVE, confirmation_mode=False),
                         portfolio=Portfolio(starting_capital=100, cash=100, equity=100, mode=TradingMode.LIVE))
     line = templates.control_line(st)
     assert "autonomously 24/7 with real funds" in line and not APPROVAL.search(line)
@@ -252,7 +256,7 @@ def test_live_blocked_prompt_has_plain_block_reasons(make_client, reply):
 
 
 def test_live_summary_prompt_is_autonomous(make_client, reply):
-    st = StatusSnapshot(control=ControlState(trading_mode=TradingMode.LIVE),
+    st = StatusSnapshot(control=ControlState(trading_mode=TradingMode.LIVE, confirmation_mode=False),
                         portfolio=Portfolio(starting_capital=100, cash=100, equity=100, mode=TradingMode.LIVE))
     client, rec = make_client(reply("ok"))
     DefaultExplainer(client).summarize_state(st)
