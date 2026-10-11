@@ -254,6 +254,8 @@ export const exchangeCodeLabels = (text?: string | null) =>
 export const isExitQueued = (text?: string | null) => /still settling on-chain|settling on-chain|\b(pending_exit|exit_pending)\b|exit (held|queued)/i.test(text ?? "");
 /** In-flight LIVE buy flagged by Bot 6 (Position.pending + client_order_id); tolerate missing fields. */
 export const isPendingPos = (p: object) => (p as { pending?: boolean }).pending === true;
+/** API v0.7: a held exit on a position ({code: 'pending_exit', reason, source}) or null. */
+export const heldExit = (p: object) => (p as { held_exit?: { code?: string; reason?: string; source?: string } | null }).held_exit ?? null;
 /** xStock (…x) on BNB Chain has no liquidity: greyed out in pickers, selectable only in SIM. */
 export const isXStock = (sym: string) => /x$/.test(sym);
 /** Signal.strategy / active_strategy "NONE" means Auto Mode is staying out. */

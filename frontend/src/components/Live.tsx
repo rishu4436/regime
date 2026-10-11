@@ -216,7 +216,8 @@ export function CapsPanel({ status, decisions }: { status: StatusSnapshot | null
         <span className="k">Max slippage</span><span>{L.max_slippage_pct != null ? `${L.max_slippage_pct}%` : NA}</span>
         <span className="k">Stale data after</span><span>{L.stale_after_s != null ? `${L.stale_after_s}s` : NA}</span>
         <span className="k">BNB gas reserve</span><span>{L.bnb_gas_reserve ?? wallet?.bnb_gas_reserve ?? NA}{(L.bnb_gas_reserve ?? wallet?.bnb_gas_reserve) != null ? " BNB" : ""}</span>
-        <span className="k">Allowed tokens</span><span>{allowedTokensText(W?.allowed_tokens) ?? allowedTokensText(L.allowed_tokens) ?? NA}</span>
+        <span className="k">Tradable tokens</span><span>{allowedTokensText(L.tradable_tokens) ?? NA}</span>
+        <span className="k">Allowed by wallet</span><span>{allowedTokensText(W?.allowed_tokens) ?? allowedTokensText(L.allowed_tokens) ?? NA}</span>
       </div>
     </Card>
   );

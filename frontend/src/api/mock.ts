@@ -99,7 +99,7 @@ export class MockApi implements ApiClient {
       daily_limit_usdt: LIVE_DAILY_NOTIONAL, max_exposure_usdt: LIVE_EXPOSURE, max_slippage_pct: 1, stale_after_s: 900, bnb_gas_reserve: LIVE_GAS_RESERVE,
       fee_buffer_usdt: 1, market_hours_utc: null, daily_used_usdt: this.dailyNotional, daily_loss_usdt: loss, open_exposure_usdt: exposure,
       daily_remaining_usdt: Math.max(0, LIVE_DAILY_NOTIONAL - this.dailyNotional), warnings: exposure > Math.max(0, LIVE_DAILY_NOTIONAL - this.dailyNotional) ? [`Exit reserve: ${Math.max(0, LIVE_DAILY_NOTIONAL - this.dailyNotional).toFixed(2)} USDT of daily quota left can't cover selling all open positions (${exposure.toFixed(2)} USDT)`] : [], limit_source: { per_order_cap_usdt: "risk", daily_limit_usdt: "risk" },
-      allowed_tokens: TOKENS.map((t) => t.symbol), wallet: { daily_limit_usdt: 200, per_order_cap_usdt: 50, allowed_tokens: null } };
+      allowed_tokens: "ALL", tradable_tokens: TOKENS.filter((t) => !/x$/.test(t.symbol)).map((t) => t.symbol), wallet: { daily_limit_usdt: 200, per_order_cap_usdt: 50, allowed_tokens: null } };
   }
   private gate(): LiveGate {
     const reasons: string[] = [];
@@ -494,12 +494,13 @@ export class MockApi implements ApiClient {
 
     // 1. protective exits: no confirmation needed, run even while emergency stopped
     // LIVE demo: a fresh buy is "settling on-chain" for one tick; its exits wait until it fills
-    for (const p of this.portfolio.positions ?? []) if ((p as { pending?: boolean }).pending) {
+    for (const p of this.portfolio.positions ?? []) if ((p as { pending?: boolean }).pending === true) {
       const age = this.loop.ticks - ((p as { pendingTick?: number }).pendingTick ?? 0);
-      if (age >= 2) { delete (p as { pending?: boolean }).pending; delete (p as { pendingTick?: number }).pendingTick; }
+      if (age >= 2) Object.assign(p, { pending: false, client_order_id: null, held_exit: null, pendingTick: undefined });
     }
     for (const p of [...(this.portfolio.positions ?? [])]) {
       if ((p as { pending?: boolean }).pending) {
+        (p as { held_exit?: unknown }).held_exit = { code: "pending_exit", reason: "buy still settling on-chain", source: "mock" };
         out.push(this.log({ symbol: p.symbol, action: "STAY_OUT", strategy: p.strategy ?? "-", reason: `Exit check held for lot ${p.id?.slice(0, 6)}: buy still settling on-chain` }));
         continue;
       }

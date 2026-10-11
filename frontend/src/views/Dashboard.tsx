@@ -5,7 +5,7 @@ import { ActionBadge, RegimeBadge } from "../components/Badges";
 import { PriceChart, type TradeMarker } from "../components/Charts";
 import { Card, Segmented, Skeleton, StatCard, useToast } from "../components/ui";
 import { cls, humanize, num, time, usd } from "../lib/format";
-import { conditionLabel, controlReason, EXIT_LABEL, isExitQueued, isPendingPos, strategyLabel, TOKENS } from "../lib/strategy";
+import { conditionLabel, controlReason, EXIT_LABEL, heldExit, isExitQueued, isPendingPos, strategyLabel, TOKENS } from "../lib/strategy";
 import { Controls } from "./Controls";
 import { AlertsPanel, AskAgent } from "./Insights";
 import { ApiError, type PerformanceSummary } from "../api/types";
@@ -146,6 +146,7 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
                   {(pf?.positions ?? []).map((p, i) => (
                     <tr key={p.id ?? `${p.symbol}-${i}`} className={isPendingPos(p) ? "settling" : undefined}>
                       <td><b>{p.symbol}</b>{isPendingPos(p) && <span className="pill warn" style={{ marginLeft: 6 }} title={`In-flight buy${(p as { client_order_id?: string }).client_order_id ? ` · order ${(p as { client_order_id?: string }).client_order_id}` : ""}`}>⏳ Settling on-chain</span>}
+                        {heldExit(p) && <span className="pill warn" style={{ marginLeft: 6 }} title={[heldExit(p)?.code, heldExit(p)?.reason, heldExit(p)?.source].filter(Boolean).join(" · ")}>Exit queued until fill</span>}
                         {p.id && <div className="faint small" title={p.id}>lot {p.id.slice(0, 6)}</div>}</td><td className="r">{num(p.quantity)}</td><td className="r">{usd(p.avg_entry_price)}</td><td className="r">{usd(p.current_price)}</td>
                       <td className={`r ${isPendingPos(p) ? "" : cls(p.unrealized_pnl)}`}>{isPendingPos(p) ? "—" : usd(p.unrealized_pnl)}</td>
                       <td className="small">SL {usd(p.stop_loss_price)} · TP {usd(p.take_profit_price)}{p.trailing_stop_pct ? ` · trail ${p.trailing_stop_pct}%` : ""}</td>

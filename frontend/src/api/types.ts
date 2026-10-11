@@ -33,8 +33,10 @@ export interface LiveLimits {
   daily_remaining_usdt?: number | null;
   /** Which side set each effective cap (bot3/live 53907b5): "risk" (agent) or "wallet". */
   limit_source?: string | { per_order_cap_usdt?: "risk" | "wallet" | string; daily_limit_usdt?: "risk" | "wallet" | string } | null; // bot6/live may send one string ("app")
-  /** Array of symbols, or "ALL" / "LIMITED" from the baw wallet. */
+  /** Wallet/risk-side restriction only (API v0.7): array of symbols, "ALL" / "LIMITED" (baw wallet) or null. */
   allowed_tokens?: AllowedTokens;
+  /** Tokens the agent can be activated on (exchange list minus xStock in LIVE, or LIVE_ALLOWED_TOKENS). */
+  tradable_tokens?: string[] | null;
   /** Risk warnings for the UI, e.g. the exit-reserve warning (remaining daily quota can't cover selling all positions). */
   warnings?: string[] | null;
   /** The wallet's own limits (Agentic Wallet / Binance App), if it exposes them: the stricter one applies. */
