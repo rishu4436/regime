@@ -61,6 +61,8 @@ export interface WalletInfo {
   bnb_gas_reserve?: number | null;
   limits?: LiveLimits | null;
   updated_at?: string | null;
+  /** cached wallet read (Bot 6): when it was read, its age in seconds, and whether it's older than expected */
+  read_at?: string | null; age_s?: number | null; stale?: boolean | null;
   live_gate?: LiveGate | null;               // accepted here too
   session_expired?: boolean | null;          // Agentic Wallet session needs re-sign-in (QR in the Binance App)
 }
