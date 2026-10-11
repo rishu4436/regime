@@ -1,7 +1,7 @@
 // Real client for Bot 6's FastAPI (backend/app). Paths and payloads follow backend/app/API.md exactly.
 import type { Alert, AutoConfig, BacktestRequest, BacktestResult, Candle, ControlState, Decision, Event, LoopState, ManualStrategy,
   PerformanceSummary, Portfolio, RegimeAnalysis, StatusSnapshot, StrategySelection, SystemInfo, Timeframe, TokenInfo, TraderStyle } from "../contracts";
-import { ApiError, type ActivateManualBody, type ApiClient, type ParseResult } from "./types";
+import { ApiError, type ActivateManualBody, type ApiClient, type ParseResult, type PresetsTable } from "./types";
 
 const enc = encodeURIComponent;
 
@@ -42,6 +42,7 @@ export class HttpApi implements ApiClient {
   getSelection(symbol: string, style: TraderStyle = "BALANCED", timeframe: Timeframe = "1h") {
     return this.get<StrategySelection>(`/api/auto/selection?symbol=${enc(symbol)}&style=${style}&timeframe=${timeframe}`);
   }
+  getPresetsTable() { return this.get<PresetsTable>("/api/auto/presets-table"); }
   listStrategies() { return this.get<ManualStrategy[]>("/api/strategies"); }
   saveStrategy(s: ManualStrategy) { return this.post<ManualStrategy>("/api/strategies", s); }
   getStrategy(id: string) { return this.get<ManualStrategy>(`/api/strategies/${enc(id)}`); }
@@ -64,6 +65,7 @@ export class HttpApi implements ApiClient {
   getConfirmations() { return this.get<Decision[]>("/api/confirmations"); }
   approve(id: string) { return this.post<Decision>(`/api/confirmations/${enc(id)}/approve`); }
   reject(id: string, reason?: string) { return this.post<Decision>(`/api/confirmations/${enc(id)}/reject`, reason ? { reason } : {}); }
+  closePositionById(id: string) { return this.post<Decision>(`/api/positions/by-id/${enc(id)}/close`); }
   closePosition(symbol: string) { return this.post<Decision>(`/api/positions/${enc(symbol)}/close`); }
   getControl() { return this.get<ControlState>("/api/control"); }
   pause(reason?: string) { return this.post<ControlState>("/api/control/pause", reason ? { reason } : {}); }

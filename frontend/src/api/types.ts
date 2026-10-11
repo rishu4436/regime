@@ -2,7 +2,7 @@
 // Two implementations: ./http (FastAPI REST + WS) and ./mock (in-browser, same endpoints & payloads).
 import type {
   Alert, AutoConfig, BacktestRequest, BacktestResult, Candle, ControlState, Decision, Event, LoopState, ManualStrategy,
-  PerformanceSummary, Portfolio, PresetName, RegimeAnalysis, StatusSnapshot, StrategySelection, SystemInfo, Timeframe,
+  PerformanceSummary, Portfolio, PresetName, Regime, RegimeAnalysis, StatusSnapshot, StrategySelection, SystemInfo, Timeframe,
   TokenInfo, TraderStyle,
 } from "../contracts";
 
@@ -10,6 +10,9 @@ export type { Alert, AlertLevel, BacktestRequest, LoopState, PerformanceSummary,
 
 // Contract 0.2.0 models used by the API (Alert, PerformanceSummary, SystemInfo, LoopState, BacktestRequest) come from
 // contracts.ts; only the small app-only bodies/responses below live here.
+/** GET /api/auto/presets-table (app type). source = "engine:<Class>" or "fallback:<Class>"; preset null = stay out. */
+export interface PresetsTableEntry { regime: Regime; style: TraderStyle; preset: PresetName | null; size_multiplier: number; reason: string }
+export interface PresetsTable { source: string; entries: PresetsTableEntry[] }
 export type ParseResult = { kind: "MANUAL"; strategy: ManualStrategy } | { kind: "AUTO"; config: AutoConfig };
 export type ActivateManualBody = { strategy_id: string } | { strategy: ManualStrategy };
 
@@ -31,6 +34,8 @@ export interface ApiClient {
   getPrice(symbol: string): Promise<{ symbol: string; price: number }>;
   getRegime(symbol: string, timeframe?: Timeframe): Promise<RegimeAnalysis>;
   getSelection(symbol: string, style?: TraderStyle, timeframe?: Timeframe): Promise<StrategySelection>;
+  /** Full (regime x style) -> preset table from the wired engine's select_strategy. */
+  getPresetsTable(): Promise<PresetsTable>;
   // manual strategies
   listStrategies(): Promise<ManualStrategy[]>;
   saveStrategy(s: ManualStrategy): Promise<ManualStrategy>;
@@ -57,7 +62,9 @@ export interface ApiClient {
   getConfirmations(): Promise<Decision[]>;
   approve(decisionId: string): Promise<Decision>;
   reject(decisionId: string, reason?: string): Promise<Decision>;
-  /** Manual override: close the open position(s) of a symbol at market (ExitReason.MANUAL). API closes by symbol. */
+  /** Manual override: close ONE lot by Position.id at the last price (signal.exit_reason MANUAL). 404 if not open. */
+  closePositionById(positionId: string): Promise<Decision>;
+  /** Manual override: close every open lot of a symbol (ExitReason.MANUAL). */
   closePosition(symbol: string): Promise<Decision>;
   // control
   getControl(): Promise<ControlState>;

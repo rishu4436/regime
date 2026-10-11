@@ -25,7 +25,7 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
   const [busy, setBusy] = useState<string | null>(null);
   const [filter, setFilter] = useState<"ALL" | "TRADES">("ALL");
   const [perf, setPerf] = useState<PerformanceSummary | null>(null);
-  const [closeSym, setCloseSym] = useState<string | null>(null);
+  const [closeTarget, setCloseTarget] = useState<{ kind: "lot"; id: string; symbol: string } | { kind: "all"; symbol: string } | null>(null);
   const [askReset, setAskReset] = useState(false);
   useEffect(() => { api.getPerformance().then(setPerf).catch(() => setPerf(null)); }, [tick]);
   const symbol = status?.active_symbol ?? "NVDAon";
@@ -64,7 +64,8 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
           <span style={{ fontSize: "1.4rem" }}>■</span>
           <span className="grow">
             <b>Emergency stop active</b>{status.control.reason ? `: ${status.control.reason}` : ""}<br />
-            <span className="small">Every cycle is <b>STAY OUT</b> (no new entries). Protective stop-loss / take-profit exits still run. Pending confirmations are rejected.</span>
+            <span className="small">Every cycle is <b>STAY OUT</b> (no new buys) and pending confirmations are rejected.{" "}
+              {pf?.positions?.length ? <>The {pf.positions.length} open position{pf.positions.length > 1 ? "s close" : " closes"} on the next bar at that bar's close (exit reason EMERGENCY_STOP).</> : "Any positions left were closed with exit reason EMERGENCY_STOP."}</span>
           </span>
           <button className="btn ghost" onClick={() => setAskReset(true)}>↺ Reset emergency stop</button>
         </div>
@@ -116,7 +117,8 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
           <Card title="Last decision" extra={last && <ActionBadge action={last.action} />}>
             {!status ? <><Skeleton h={14} /><Skeleton h={14} w="70%" style={{ marginTop: 8 }} /></> : last ? <DecisionDetail d={last} /> : <div className="empty">No decisions yet — the agent logs one every bar once a strategy is active.</div>}
           </Card>
-          <Card title="Open positions" pad={false}>
+          <Card title="Open positions" pad={false} extra={<>{[...new Set((pf?.positions ?? []).map((p) => p.symbol))].filter((sym) => lotCount(sym) > 1).map((sym) => (
+            <button key={sym} className="btn ghost" style={{ padding: "4px 10px" }} onClick={() => setCloseTarget({ kind: "all", symbol: sym })}>Close all {sym}</button>))}</>}>
             <div className="table-wrap" style={{ padding: "4px 8px 8px" }}>
               <table>
                 <thead><tr><th>Token</th><th className="r">Qty</th><th className="r">Entry</th><th className="r">Price</th><th className="r">uPnL</th><th>Stops</th><th>Strategy</th><th></th></tr></thead>
@@ -127,7 +129,8 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
                       <td className={`r ${cls(p.unrealized_pnl)}`}>{usd(p.unrealized_pnl)}</td>
                       <td className="small">SL {usd(p.stop_loss_price)} · TP {usd(p.take_profit_price)}{p.trailing_stop_pct ? ` · trail ${p.trailing_stop_pct}%` : ""}</td>
                       <td className="small trunc" title={p.strategy}>{p.strategy}</td>
-                      <td><button className="btn ghost" style={{ padding: "4px 10px" }} title="Close at market (API closes all lots of this symbol)" onClick={() => setCloseSym(p.symbol)}>Close{lotCount(p.symbol) > 1 ? ` all ${p.symbol}` : ""}</button></td>
+                      <td><button className="btn ghost" style={{ padding: "4px 10px" }} title="Close this lot at the last price"
+                        onClick={() => setCloseTarget(p.id ? { kind: "lot", id: p.id, symbol: p.symbol } : { kind: "all", symbol: p.symbol })}>Close</button></td>
                     </tr>
                   ))}
                 </tbody>
@@ -177,15 +180,19 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
           {!shown.length && <div className="empty">Nothing logged yet</div>}
         </div>
       </Card>
-      {closeSym && (
-        <ConfirmDialog title={`Close ${closeSym}?`} confirmLabel="Close position" danger busy={busy === closeSym} onCancel={() => setCloseSym(null)}
+      {closeTarget && (
+        <ConfirmDialog title={closeTarget.kind === "lot" ? `Close ${closeTarget.symbol} lot ${closeTarget.id.slice(0, 6)}?` : `Close all ${closeTarget.symbol}?`}
+          confirmLabel={closeTarget.kind === "lot" ? "Close lot" : `Close all ${closeTarget.symbol}`} danger busy={busy === "close"} onCancel={() => setCloseTarget(null)}
           onConfirm={async () => {
-            setBusy(closeSym);
-            try { const d = await api.closePosition(closeSym); toast(`${closeSym} closed${d.execution?.avg_price ? ` @ ${usd(d.execution.avg_price)}` : ""}`, "success"); refresh(); }
-            catch (e) { toast(e instanceof Error ? e.message : String(e), "error"); }
-            finally { setBusy(null); setCloseSym(null); }
+            setBusy("close");
+            try {
+              const d = closeTarget.kind === "lot" ? await api.closePositionById(closeTarget.id) : await api.closePosition(closeTarget.symbol);
+              toast(`${closeTarget.symbol} ${closeTarget.kind === "lot" ? "lot" : "positions"} closed${d.execution?.avg_price ? ` @ ${usd(d.execution.avg_price)}` : ""}`, "success"); refresh();
+            } catch (e) { toast(e instanceof Error ? e.message : String(e), "error"); }
+            finally { setBusy(null); setCloseTarget(null); }
           }}>
-          Manual override: sell {lotCount(closeSym) > 1 ? `all ${lotCount(closeSym)} open ${closeSym} lots` : `the ${closeSym} position`} at market ({status?.control.trading_mode ?? "SIM"} mode), regardless of the strategy.
+          Manual override: sell {closeTarget.kind === "lot" ? "this lot" : `all ${lotCount(closeTarget.symbol)} open ${closeTarget.symbol} lots`} at the last price
+          ({status?.control.trading_mode ?? "SIM"} mode), regardless of the strategy. Exit reason: MANUAL.
         </ConfirmDialog>
       )}
       {askReset && (
