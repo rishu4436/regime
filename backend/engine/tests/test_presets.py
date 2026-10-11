@@ -65,6 +65,62 @@ def test_none_enabled_suitable_means_stay_out():
     assert sel.preset is None and sel.size_multiplier == 0.0
 
 
+@pytest.mark.parametrize("regime", list(Regime))
+@pytest.mark.parametrize("style", list(TraderStyle))
+def test_dca_last_fallback(regime, style):
+    prefs, mult = PRESET_MAP[regime][style]
+    sel = ENG.select_strategy(regime, style, [PresetName.DCA])
+    if not prefs:  # pause regimes still pause
+        assert sel.preset is None and sel.size_multiplier == 0.0 and "pause" in sel.reason
+    elif PresetName.DCA in prefs:  # normal table fallback, unchanged
+        assert sel.preset == PresetName.DCA and "last fallback" not in sel.reason
+    else:
+        assert sel.preset == PresetName.DCA and sel.size_multiplier == mult and "last fallback" in sel.reason
+    # without DCA enabled nothing changes: still "none of the suitable presets"
+    others = [p for p in PresetName if p != PresetName.DCA and p not in prefs]
+    if prefs and others:
+        assert ENG.select_strategy(regime, style, others).preset is None
+
+
+def test_table_choice_unchanged_when_a_preferred_preset_is_enabled():
+    for regime in Regime:
+        for style in TraderStyle:
+            prefs, _ = PRESET_MAP[regime][style]
+            for p in prefs:
+                enabled = [p, PresetName.DCA]
+                expected = next(x for x in prefs if x in enabled)  # first enabled preset in table order
+                assert ENG.select_strategy(regime, style, enabled).preset == expected
+
+
+@pytest.mark.parametrize("live", [False, True])
+def test_dca_only_active_buys(live):
+    from datetime import timedelta
+
+    hits = []
+    for regime in (Regime.STRONG_UPTREND, Regime.MILD_UPTREND, Regime.SIDEWAYS, Regime.OVERSOLD_PULLBACK):
+        cs = generate_candles(regime, n=200, seed=42)
+        cfg = AutoConfig(symbol="NVDAB", capital=1000, style=TraderStyle.ACTIVE, enabled_presets=[PresetName.DCA])
+        for k in range(61, len(cs) + 1):
+            now = cs[k - 1].timestamp + timedelta(minutes=30)
+            eng = DefaultStrategyEngine(live_safe=live, clock=lambda now=now: now)
+            sig = eng.evaluate_auto(cfg, cs[:k], Portfolio(starting_capital=1000, cash=1000, equity=1000))
+            if sig.action == Action.BUY:
+                assert sig.strategy == "DCA" and "last fallback" in sig.reason
+                if live:
+                    assert sig.proposed_size_pct <= 2.0 and sig.proposed_notional <= 20.0
+                else:
+                    assert sig.proposed_size_pct == pytest.approx(BASE_SIZE_PCT[TraderStyle.ACTIVE])
+                hits.append(regime)
+    assert hits, "DCA-only + ACTIVE never bought"
+    # pause regimes stay out
+    cs = generate_candles(Regime.DOWNTREND, n=200, seed=42)
+    cfg = AutoConfig(symbol="NVDAB", capital=1000, style=TraderStyle.ACTIVE, enabled_presets=[PresetName.DCA])
+    assert (
+        DefaultStrategyEngine().evaluate_auto(cfg, cs, Portfolio(starting_capital=1000, cash=1000, equity=1000)).action
+        == Action.STAY_OUT
+    )
+
+
 def test_evaluate_auto_runs_only_selected_preset():
     ex = MockExchangeClient()
     for sym in ["NVDAon", "TSLAx", "AAPLB", "SPYon", "METAx"]:
