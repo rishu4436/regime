@@ -61,7 +61,7 @@ if [[ $BACKEND_ONLY -eq 0 ]]; then
   echo "==> Regime dashboard: http://localhost:5173  (VITE_API_MODE=$VITE_API_MODE)"
 fi
 
-echo "==> Regime backend: TRADING_MODE=$TRADING_MODE  logs: $LOG_DIR  api: http://localhost:$PORT/docs  supervised: $SUPERVISED"
+echo "==> Regime backend: TRADING_MODE=$TRADING_MODE  data (saved strategies, agent state, logs): $LOG_DIR  api: http://localhost:$PORT/docs  supervised: $SUPERVISED"
 if [[ $SUPERVISED -eq 0 ]]; then
   uvicorn backend.app.main:app --host 0.0.0.0 --port "$PORT" &
   API_PID=$!

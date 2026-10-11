@@ -49,6 +49,9 @@ class AppState:
         self.bus = EventBus(EventLog(path))
         self.loop = TradingLoop(settings, comps, self.bus)
         self.store = StrategyStore(settings.log_dir)
+        if not settings.log_dir:
+            log.warning("LOG_DIR is not set: saved strategies and agent state are kept in memory only and are lost on "
+                        "restart (run.sh / run.ps1 set LOG_DIR=<repo>/logs)")
         self.interval = settings.loop_interval_seconds
         self.task: Optional[asyncio.Task] = None
         self.want_running = False  # watchdog restarts the loop task while this is True

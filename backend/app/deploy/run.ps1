@@ -81,7 +81,7 @@ if (-not $BackendOnly) {
 }
 
 $uvArgs = @("-m", "uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "$Port")
-Write-Host "==> Regime backend: TRADING_MODE=$($env:TRADING_MODE)  logs: $($env:LOG_DIR)  api: http://localhost:$Port/docs  supervised: $Supervised"
+Write-Host "==> Regime backend: TRADING_MODE=$($env:TRADING_MODE)  data (saved strategies, agent state, logs): $($env:LOG_DIR)  api: http://localhost:$Port/docs  supervised: $Supervised"
 $supLog = Join-Path $env:LOG_DIR "supervisor.log"
 function Log($m) { $line = "$(Get-Date -Format o) supervisor: $m"; Write-Host $line; Add-Content -Path $supLog -Value $line }
 
