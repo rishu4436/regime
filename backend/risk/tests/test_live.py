@@ -155,7 +155,8 @@ def test_open_exposure_cap(clock):
     assert v.approved and v.adjusted_notional == pytest.approx(10) and "reduced" in names(v)["live_max_exposure"].detail
     p = lpf(cash=155, positions=[pos("TSLAx", qty=0.225, entry=200)])  # 45 open -> 5 left < 10 minimum
     v = rm.check(lbuy(), p, lctl(), context=ctx(quote=quote(notional=5)))
-    assert not v.approved and not names(v)["min_order_notional"].passed
+    assert not v.approved and not names(v)["live_max_exposure"].passed and names(v)["min_order_notional"].passed
+    assert "LIVE exposure limit reached: 45.00 of 50.00 USDT used" in v.reasons[0]
 
 
 def test_daily_notional_from_context(clock):
@@ -229,7 +230,8 @@ def test_daily_loss_below_cap_and_sim_never_triggers(clock):
     rm = live_rm(clock)
     v = rm.check(lbuy(), lpf(daily_pnl=-24.9), lctl(), context=ctx())
     assert names(v)["live_daily_loss_cap"].passed and not rm.get_control_state().emergency_stopped
-    assert not names(v)["daily_loss_limit"].passed  # the % limit (5% of 200 = 10) still blocks new entries
+    # the % limit (5% of 200 = 10) is skipped in LIVE: the 25 USDT cap governs
+    assert names(v)["daily_loss_limit"].passed and "LIVE uses the daily loss cap of 25.00 USDT" in names(v)["daily_loss_limit"].detail
     sim = DefaultRiskManager(clock=clock)
     sim.check(lbuy(), make_portfolio(daily_pnl=-5000), ControlState())
     assert not sim.get_control_state().emergency_stopped
