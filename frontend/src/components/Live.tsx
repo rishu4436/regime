@@ -208,7 +208,7 @@ export function CapsPanel({ status, decisions }: { status: StatusSnapshot | null
   };
   const toStop = L.daily_loss_cap_usdt != null && loss != null ? Math.max(0, L.daily_loss_cap_usdt - loss) : null;
   return (
-    <Card title="Hard caps" extra={<span className="pill">{L.per_order_cap_usdt != null ? "enforced by risk (Bot 3)" : "not reported"}</span>}>
+    <Card title="Hard caps" extra={<span className="pill">{L.per_order_cap_usdt != null ? "enforced by risk" : "not reported"}</span>}>
       {!wallet && walletEndpoint === false && <div className="small muted" style={{ marginBottom: 8 }}>Caps come from <code>GET /api/wallet</code> → <code>limits</code>, which this backend doesn't serve yet.</div>}
       {(L.warnings ?? []).filter(Boolean).map((w) => <div key={w} className="banner amber" style={{ marginBottom: 10 }}><span className="grow small">⚠ {WARNING_TEXT[w] ?? w}</span></div>)}
       <div className="meters">
@@ -302,9 +302,9 @@ export function LiveGateCard() {
       {!gate ? <div className="small muted">{NA}</div> : (
         <>
           <div className="chips">
-            <Flag v={gate.live_trading_enabled} label="LIVE_TRADING_ENABLED" hint="Backend env (Bot 6)" />
-            <Flag v={gate.binance_live_enabled} label="BINANCE_LIVE_ENABLED" hint="Exchange env (Bot 4)" />
-            <Flag v={gate.risk_allow_live} label="risk allow_live" hint="RiskConfig.allow_live (Bot 3)" />
+            <Flag v={gate.live_trading_enabled} label="LIVE_TRADING_ENABLED" hint="Backend setting" />
+            <Flag v={gate.binance_live_enabled} label="BINANCE_LIVE_ENABLED" hint="Exchange setting" />
+            <Flag v={gate.risk_allow_live} label="risk allow_live" hint="Risk setting" />
             <Flag v={gate.wallet_connected} label="wallet connected" hint="baw wallet status" />
           </div>
           {gate.blocked_reasons.length > 0 && <ul className="reasons">{gate.blocked_reasons.map((r) => <li key={r}>{r}</li>)}</ul>}
