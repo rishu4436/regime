@@ -61,6 +61,8 @@ export interface WalletInfo {
   bnb_gas_reserve?: number | null;
   limits?: LiveLimits | null;
   updated_at?: string | null;
+  /** cached wallet read (Bot 6): when it was read, its age in seconds, and whether it's older than expected */
+  read_at?: string | null; age_s?: number | null; stale?: boolean | null;
   live_gate?: LiveGate | null;               // accepted here too
   session_expired?: boolean | null;          // Agentic Wallet session needs re-sign-in (QR in the Binance App)
 }
@@ -115,6 +117,45 @@ export interface X402Job { job_id: string; paid_usdt?: number | null; tx_hash?: 
 export interface X402JobStatus { status: "pending" | "done" | "failed"; report?: string | null; error?: string | null }
 export type ActivateManualBody = { strategy_id: string } | { strategy: ManualStrategy };
 
+// ---------------------------------------------------------------- Trading limits (Bot 6: GET/PUT /api/settings/limits, localhost only)
+/** "strategy" = the strategy sizes each buy (DCA/Grid etc.), only the caps trim it; "fixed" = order_usdt; "pct" = order_pct % of wallet. */
+export type OrderMode = "strategy" | "fixed" | "pct";
+/** User-editable trading limits. A fixed or % size REPLACES the strategy's own size (risk still applies every cap). */
+export interface TradingLimits {
+  order_mode: OrderMode;
+  order_usdt: number;
+  order_pct: number;
+  max_order_usdt: number;
+  max_total_usdt: number;
+  max_per_token_usdt: number;
+  daily_loss_usdt: number;
+  /** optional: most Regime may buy in one day (backend sends it when set) */
+  daily_buy_usdt?: number | null;
+}
+/** GET /api/settings/limits: current limits + the wallet's own daily limit (final cap) + the safe defaults. */
+export interface TradingLimitsResponse extends TradingLimits {
+  wallet_daily_limit_usdt?: number | null;
+  defaults?: TradingLimits | null;
+  updated_at?: string | null;
+}
+// ---------------------------------------------------------------- Watchlist + Auto-pick (proposed contract)
+export type Narrative = "AI_CHIPS" | "EV_ENERGY" | "BIG_TECH" | "CRYPTO" | "ANY";
+export interface AutoPickConfig { enabled: boolean; max_tokens: number; narrative: Narrative }
+/** Extra fields sent with ManualStrategy / AutoConfig. `symbol` stays = watchlist[0] for older backends. */
+export interface WatchlistFields { watchlist?: string[]; auto_pick?: AutoPickConfig }
+export interface AutoPick { symbol: string; narrative?: string | null; score?: number | null; reason?: string | null }
+export interface AutoPickSkip { symbol: string; reason?: string | null }
+/** GET /api/autopick?narrative=&max_tokens= */
+export interface AutoPickResult { picks: AutoPick[]; skipped?: AutoPickSkip[]; example?: boolean }
+
+/** One watched token as GET /api/watchlist (or status.watchlist) may report it; a plain symbol string is also accepted. */
+export interface WatchlistEntry {
+  symbol: string; narrative?: string | null; regime?: string | null; action?: string | null; signal?: string | null;
+  reason?: string | null; score?: number | null; position_usdt?: number | null; held?: boolean | null;
+}
+/** GET /api/watchlist (Bot 6): the current watchlist plus the latest Auto-pick picks/skipped. */
+export interface WatchlistInfo { watchlist?: (string | WatchlistEntry)[] | null; picks?: AutoPick[] | null; skipped?: AutoPickSkip[] | null; auto_pick?: AutoPickConfig | null; updated_at?: string | null }
+
 /** Error from the API: 404 unknown id/symbol, 409 invalid state, 422 validation. */
 export class ApiError extends Error {
   constructor(public status: number, public detail: string) {
@@ -129,6 +170,10 @@ export interface ApiClient {
   system(): Promise<SystemInfo>;
   // market data
   getTokens(q?: string): Promise<TokenInfo[]>;
+  /** GET /api/autopick?narrative=&max_tokens= (null = not available on this backend). */
+  getAutoPick(narrative: Narrative, max_tokens: number): Promise<AutoPickResult | null>;
+  /** GET /api/watchlist (null = not available: single-token backend). */
+  getWatchlist(): Promise<WatchlistInfo | null>;
   /** Default: SIM candles pinned to the loop's current bar. `history: true` = the full seeded series /api/backtest runs on. */
   getCandles(symbol: string, timeframe?: Timeframe, limit?: number, opts?: { history?: boolean }): Promise<Candle[]>;
   getPrice(symbol: string): Promise<{ symbol: string; price: number }>;
@@ -167,6 +212,11 @@ export interface ApiClient {
   startWalletConnect(): Promise<WalletConnectStart>;
   getWalletConnect(session_id: string): Promise<WalletConnectStatus>;
   reconcileWallet(): Promise<WalletReconcileResult>;
+  /** GET /api/settings/limits (null = not available on this backend: the panel hides). */
+  getLimits(): Promise<TradingLimitsResponse | null>;
+  /** PUT /api/settings/limits (localhost only: 403 elsewhere; 422 on invalid values). */
+  /** Partial: only the fields the user changed (risk keeps the rest as they are). */
+  putLimits(body: Partial<TradingLimits>): Promise<TradingLimitsResponse>;
   /** null = this backend has no Agent Studio flow yet */
   getAgentStudio(): Promise<AgentStudioStatus | null>;
   createAgentStudioKey(): Promise<{ identity_address: string }>;

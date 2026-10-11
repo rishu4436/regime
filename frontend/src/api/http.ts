@@ -1,7 +1,7 @@
 // Real client for Bot 6's FastAPI (backend/app). Paths and payloads follow backend/app/API.md exactly.
 import type { Alert, AutoConfig, BacktestRequest, BacktestResult, Candle, ControlState, Decision, Event, LoopState, ManualStrategy,
   PerformanceSummary, Portfolio, RegimeAnalysis, StatusSnapshot, StrategySelection, SystemInfo, Timeframe, TokenInfo, TraderStyle } from "../contracts";
-import { ApiError, type ActivateManualBody, type ApiClient, type LiveGate, type ParseResult, type PresetsTable, type WalletInfo, type WalletConnectStart, type WalletConnectStatus, type WalletReconcileResult, type AgentStudioStatus, type AgentStudioRegisterResult, type X402Price, type X402Job, type X402JobStatus } from "./types";
+import { ApiError, type ActivateManualBody, type ApiClient, type LiveGate, type ParseResult, type PresetsTable, type WalletInfo, type WalletConnectStart, type WalletConnectStatus, type WalletReconcileResult, type TradingLimits, type TradingLimitsResponse, type Narrative, type AutoPickResult, type WatchlistInfo, type AgentStudioStatus, type AgentStudioRegisterResult, type X402Price, type X402Job, type X402JobStatus } from "./types";
 
 const enc = encodeURIComponent;
 
@@ -40,7 +40,7 @@ export class HttpApi implements ApiClient {
 
   health() { return this.get<{ status: string; contracts_version?: string; trading_mode?: string }>("/health"); }
   system() { return this.get<SystemInfo>("/api/system"); }
-  getTokens(q = "") { return this.get<TokenInfo[]>(`/api/tokens?q=${enc(q)}`); }
+  getTokens(q = "") { return this.get<TokenInfo[]>(`/api/tokens?all=1&q=${enc(q)}`); }
   getCandles(symbol: string, timeframe: Timeframe = "1h", limit = 200, opts?: { history?: boolean }) {
     return this.get<Candle[]>(`/api/candles/${enc(symbol)}?timeframe=${timeframe}&limit=${limit}${opts?.history ? "&history=true" : ""}`);
   }
@@ -87,6 +87,10 @@ export class HttpApi implements ApiClient {
   startWalletConnect() { return this.post<WalletConnectStart>("/api/wallet/connect"); }
   getWalletConnect(session_id: string) { return this.get<WalletConnectStatus>(`/api/wallet/connect?session_id=${enc(session_id)}`); }
   reconcileWallet() { return this.post<WalletReconcileResult>("/api/wallet/reconcile"); }
+  getAutoPick(narrative: Narrative, max_tokens: number) { return this.optional<AutoPickResult>(`/api/autopick?narrative=${enc(narrative)}&max_tokens=${max_tokens}`); }
+  getWatchlist() { return this.optional<WatchlistInfo>("/api/watchlist"); }
+  getLimits() { return this.optional<TradingLimitsResponse>("/api/settings/limits"); }
+  putLimits(body: Partial<TradingLimits>) { return this.req<TradingLimitsResponse>("PUT", "/api/settings/limits", body); }
   getAgentStudio() { return this.optional<AgentStudioStatus>("/api/agent-studio/status"); }
   createAgentStudioKey() { return this.post<{ identity_address: string }>("/api/agent-studio/create-key"); }
   registerAgentStudio(network: string) { return this.post<AgentStudioRegisterResult>("/api/agent-studio/register", { network, confirm_mainnet: true }); }

@@ -4,6 +4,7 @@ import {
   DEFAULT_INITIAL_CAPITAL, SIM_WARMUP_BARS,
   type BacktestResult, type BacktestTrade, type Candle, type EquityPoint, type ExitReason, type ManualStrategy,
 } from "../contracts";
+import type { WatchlistFields } from "../api/types";
 import { bollinger, ema, macd, rsi, sma, volumeAvg } from "./indicators";
 
 export const TOKENS = [
@@ -15,7 +16,7 @@ export const TOKENS = [
 
 type DeepRequired<T> = { [K in keyof T]-?: T[K] extends object | undefined ? DeepRequired<NonNullable<T[K]>> : T[K] };
 /** ManualStrategy with every nested field present (what the builder edits). */
-export type FullStrategy = DeepRequired<Omit<ManualStrategy, "id" | "created_at">> & { id?: string; created_at?: string };
+export type FullStrategy = DeepRequired<Omit<ManualStrategy, "id" | "created_at">> & { id?: string; created_at?: string } & WatchlistFields;
 
 export function defaultStrategy(): FullStrategy {
   return {
@@ -232,7 +233,7 @@ export const CONDITION_LABEL: Record<string, string> = {
   live_quote: "Valid quote", live_quote_notional: "Quote amount matches", live_slippage: "Slippage within limit",
   live_wallet_quote: "Wallet can cover quote", live_daily_notional: "Daily traded cap", live_max_exposure: "Max open exposure",
   live_order_cap: "Per-order cap", live_wallet_balance: "Wallet balance",
-  live_below_min_order: "Below minimum order", order_in_flight: "Earlier swap still settling, waiting", pending_exit: "Exit queued until fill", exit_pending: "Exit queued until fill", session_expired: "Agentic Wallet session expired, re-scan QR on host PC", wallet_not_ready: "Agentic Wallet session expired, re-scan QR on host PC", live_illiquid_family: "xStock excluded (no liquidity on BNB Chain)", live_token_paused: "Token paused", live_price_impact: "Quote too far from market price",
+  live_below_min_order: "Below minimum order", order_in_flight: "Earlier swap still settling, waiting", pending_exit: "Exit queued until fill", exit_pending: "Exit queued until fill", session_expired: "Agentic Wallet session expired, re-scan QR on host PC", wallet_not_ready: "Agentic Wallet session expired, re-scan QR on host PC", live_illiquid_family: "xStock excluded (no liquidity on BNB Chain)", live_token_paused: "Token paused", live_price_impact: "Quote too far from market price", live_token_exposure: "Max holding in this token reached", reserved_orders: "Room under the caps already used by other buys this check", live_total_exposure: "Max total invested reached",
   // Binance Web3 exchange quote errors (Bot 4) used as market-state signals: a stay-out, not a failed trade
   // Bot 4 exchange reasons and Bot 3 wallet / live checks
   market_closed: "Market closed", insufficient_liquidity: "Insufficient liquidity", below_minimum: "Below minimum order", insufficient_gas: "Not enough BNB for gas, top up ~0.005 BNB",

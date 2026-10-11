@@ -13,6 +13,8 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { StockAgentCard } from "../components/StockAgent";
 import { ActivityFeed, AgentIdentityCard, AutonomyMonitor, CapsPanel, LiveGateCard, TxLink, WalletPanel } from "../components/Live";
 import { useLive } from "../lib/live";
+import { TradingLimitsCard } from "../components/TradingLimits";
+import { WatchlistCard } from "../components/Watchlist";
 
 interface Props { status: StatusSnapshot | null; refresh: () => void; tick: number; alertsVersion: number; go: (tab: "manual" | "auto") => void }
 
@@ -143,6 +145,7 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
               <b style={{ fontSize: "1.1rem" }}>{usd(lastPx)}</b></>}>
             {candles ? <PriceChart candles={candles} markers={markers} height={320} /> : <Skeleton h={320} />}
           </Card>
+          <WatchlistCard status={status} tick={tick} />
           <Card title="Last decision" extra={last && <ActionBadge action={last.action} />}>
             {!status ? <><Skeleton h={14} /><Skeleton h={14} w="70%" style={{ marginTop: 8 }} /></> : last ? <DecisionDetail d={last} /> : <div className="empty">No decisions yet — the agent logs one every bar once a strategy is active.</div>}
           </Card>
@@ -186,6 +189,7 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
             )}
           </Card>
           {isLive && <><CapsPanel status={status} decisions={feed} /><WalletPanel /><LiveGateCard /></>}
+          <TradingLimitsCard refresh={refresh} />
           <AgentIdentityCard />
           <StockAgentCard symbol={symbol} tick={tick} />
           <Controls status={status} onChange={refresh} tick={tick} />
