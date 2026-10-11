@@ -180,6 +180,8 @@ REASON_TEXT: dict[str, str] = {
     "live_not_enabled": "live trading is not enabled",
     "slippage": "the quote's slippage / price impact is over the cap",
     "price_impact": "the quote's price impact is over the cap",
+    "pending_exit": "the exit is held because the buy is still settling on-chain; it runs as soon as the fill is confirmed",
+    "exit_pending": "the exit is held because the buy is still settling on-chain; it runs as soon as the fill is confirmed",
     "order_in_flight": "an earlier swap is still settling on-chain, so the agent waits for it before placing another",
     "session_expired": "the Agentic Wallet session expired, so trading is paused until Rishu re-scans the QR code",
     "wallet_not_ready": "the Agentic Wallet isn't connected yet, so trading is paused until Rishu scans the QR code",

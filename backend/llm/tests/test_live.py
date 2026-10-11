@@ -318,3 +318,9 @@ def test_baw_session_codes():
 def test_order_in_flight_code():
     from backend.llm.live import plain_reason
     assert "settling" in plain_reason("order_in_flight")
+
+
+def test_pending_exit_codes():
+    from backend.llm.live import plain_reason
+    assert "still settling" in plain_reason("pending_exit")
+    assert "still settling" in plain_reason("exit_pending")
