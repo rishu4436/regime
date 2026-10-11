@@ -1,3 +1,4 @@
-# Only needed on the machine that runs the one-off registration (Rishu's PC).
-# The API's read-only get_agent_identity() does NOT need it.
+# Needed on the PC that registers Regime's identity (dashboard Register button or register.py).
+# The read-only get_agent_identity() and /api/agent-studio/status do NOT need it.
+# bnbagent pulls in eth-account (used by the dashboard's "Create identity wallet").
 bnbagent==0.5.0

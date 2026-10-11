@@ -30,7 +30,7 @@ TRADING_WALLET_ENV = "AGENT_TRADING_WALLET_ADDRESS"
 #: Override for where the identity JSON lives.
 IDENTITY_FILE_ENV = "AGENT_STUDIO_IDENTITY_FILE"
 
-REPO_URL = "https://github.com/rishu4436/teamwork"
+REPO_URL = "https://github.com/rishu4436/regime"
 #: Placeholder until Rishu exposes the API publicly; .invalid never resolves.
 STATUS_URL_PLACEHOLDER = "https://regime-agent.invalid/api/system"
 STATUS_PATH = "/api/system"
