@@ -74,9 +74,13 @@ Every rule above is deterministic, with no randomness, and covered by tests.
 
 ## Every trade comes with a reason
 
-Regime explains each decision in plain English on the dashboard. Here is the explanation for its first autonomous mainnet trade, on 11 Oct 2026 at 09:25 IST:
+Regime explains each decision in plain English on the dashboard. Here is the explanation it logged for its first autonomous mainnet trade. It decided at 09:25:39 IST on 11 Oct 2026, and the trade filled at 09:25:53:
 
-> LIVE, real funds, autonomous: Buy NVDAB (AUTO mode). Strategy: Grid, market regime: sideways. Live risk checks passed ($10.00). Regime bought NVDAB on its own with real funds on BNB Chain mainnet: 10.00 USDT via a swap at a fill price of 230.47 (0.0434 NVDAB). [View the transaction on BscScan](https://bscscan.com/tx/0x228c02688cd2a8170b38dba6abfdb4f95fca9e9e22ae6bed6a191d0b88a19f22).
+> LIVE, real funds, autonomous: Buy NVDAB (AUTO mode). Strategy: Grid, market regime: sideways. Reason: Market regime sideways (Flat SMA50 (slope -0.12%) and low volatility (0.60%)); sideways market with the Balanced style selects Grid (preferred preset). Grid: price in the bottom grid cell 1 of 5 (1 = bottom, 5 = top) of range 229.2-235.5; size raised to the token minimum (10.00 USDT). Conditions met: price in the bottom grid cell. Live risk checks passed ($10.00). The agent bought NVDAB on its own with real funds on BNB Chain mainnet: 10.00 USDT via SWAP at a fill price of 230.4707 (0.0433895 NVDAB, fee $0.05). Price impact unknown. Tx hash 0x228c02688cd2a8170b38dba6abfdb4f95fca9e9e22ae6bed6a191d0b88a19f22: https://bscscan.com/tx/0x228c02688cd2a8170b38dba6abfdb4f95fca9e9e22ae6bed6a191d0b88a19f22.
+
+[View the transaction on BscScan](https://bscscan.com/tx/0x228c02688cd2a8170b38dba6abfdb4f95fca9e9e22ae6bed6a191d0b88a19f22).
+
+This was logged by the version running at the time. The current version says "Regime" instead of "the agent" and "via a swap" instead of "via SWAP".
 
 Stay-outs and blocks get the same treatment. For example, if a quote would move the price more than 1% against you, Regime says it stayed out and why, instead of showing an error code.
 
