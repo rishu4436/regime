@@ -28,7 +28,8 @@ def test_candles_up_to_index_inclusive_with_limit():
     assert c.get_candles("NVDAon", limit=500) == series[:101]
     got = c.get_candles("NVDAon", limit=20)
     assert got == series[81:101] and got[-1] == series[100]
-    assert c.get_candles("NVDAon", Timeframe.D1, limit=5)[-1].timestamp > series[100].timestamp  # per-timeframe series
+    for tf in Timeframe:  # the pin is a time: no timeframe shows a bar after it
+        assert c.get_candles("NVDAon", tf, limit=5)[-1].timestamp <= series[100].timestamp
 
 
 def test_price_quote_and_fill_use_bar_close():

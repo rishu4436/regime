@@ -11,8 +11,11 @@ the execution rules follow the real API (https://web3.binance.com/en/dev-docs/pr
 - Ondo minimum order 20 USD (40375 ONDO_FROM_USD_AMOUNT_TOO_SMALL) -> REJECTED.
 - Optional US-market-hours gate for tokenized stocks (Ondo 40367, BStock 40369, xStock RFQ 40374 - the code a
   weekend xStock quote returned) and simulated latency, both off by default.
-- Replay: `set_replay_index(i)` pins the "current" bar to index i of the fixed n_candles-bar series, so
-  candles/prices/quotes/fills behave as if time stood at bar i (for bar-by-bar SIM loops).
+- Replay is time-based: `set_replay_time(t)` (or `set_replay_index(i, timeframe)`, which pins the time of bar i)
+  makes candles on every timeframe stop at t and price/quotes/fills use the price at t, so switching timeframe never
+  moves the clock. Every timeframe shares one price path per symbol (see sim_series.py).
+- Executions follow the token's trading status: Ondo off-hours or closed, or a closed / no-liquidity token, is
+  REJECTED with the real error code (quotes still work, as on the real API).
 Never touches the network and refuses LIVE.
 """
 from __future__ import annotations
@@ -36,7 +39,7 @@ from backend.contracts import (
     TradingMode,
     utc_now,
 )
-from backend.mocks import MockExchangeClient, generate_candles
+from backend.mocks import MockExchangeClient
 from backend.mocks.exchange import FEE_RATE, RFQ_FEE_RATE
 
 from .errors import (
@@ -56,6 +59,7 @@ from .status import (
     is_xstock,
     xstock_enabled,
 )
+from .sim_series import SymbolSeries, index_at, timeline
 from .tokens import DEFAULT_TOKENS
 from .wallet import SimWalletMixin
 
@@ -126,6 +130,7 @@ class SimulatedBinanceClient(SimWalletMixin, TokenStatusMixin, MockExchangeClien
         self._latency = latency_s
         self._sleep = sleep
         self._replay_index: Optional[int] = None
+        self._replay_time: Optional[datetime] = None
         self._series_cache: dict[tuple, list[Candle]] = {}
         self.enable_xstock = xstock_enabled() if enable_xstock is None else enable_xstock
         self._quote_meta = {}
@@ -164,49 +169,77 @@ class SimulatedBinanceClient(SimWalletMixin, TokenStatusMixin, MockExchangeClien
                          source="sim", checked_at=now)
         return finalize_status(st, self.enable_xstock)
 
-    # ------------------------------------------------------------------ replay
+    # ------------------------------------------------------------------ replay (time-based)
     @property
     def replay_index(self) -> Optional[int]:
-        """Requested replay bar index (None = live/full-series behaviour). Clamped per symbol when used."""
+        """Last index given to set_replay_index (None = not pinned by index). Kept for callers that read it back."""
         return self._replay_index
 
-    def set_replay_index(self, i: Optional[int]) -> None:
-        """Pin the current bar to index `i` (0 = oldest) of each symbol's `n_bars(symbol)`-bar series.
+    @property
+    def replay_time(self) -> Optional[datetime]:
+        """The pinned SIM time (None = unpinned: full series, latest price)."""
+        return self._replay_time
 
-        - get_candles(symbol, tf, limit) -> bars[0..i] (inclusive), then the last `limit` of that slice.
-        - get_price(symbol) -> bars[i].close (a set_price() override still wins), so get_quote and fills use it.
-        - Out-of-range i is clamped to [0, n_bars-1]; None restores the default full-series behaviour.
+    def set_replay_time(self, t: Optional[datetime]) -> None:
+        """Pin the SIM clock to `t`. Every timeframe then returns bars labelled <= t, and price / quotes / fills
+        use the price at t (the same on every timeframe). None unpins."""
+        self._replay_time = t
+        if t is None:
+            self._replay_index = None
+
+    def set_replay_index(self, i: Optional[int], timeframe: Timeframe = Timeframe.H1) -> None:
+        """Pin the clock to bar `i` (0 = oldest) of `timeframe`'s series, i.e. set_replay_time(that bar's time).
+
+        Out-of-range i is clamped to [0, n_bars(tf)-1]; None unpins. The pin is a time, so switching timeframe
+        keeps the clock where it is: candles on any timeframe stop at that time and the price does not jump.
         """
-        self._replay_index = None if i is None else int(i)
+        if i is None:
+            self.set_replay_time(None)
+            return
+        t0, step, count = timeline(timeframe, self._n)
+        self._replay_index = int(i)
+        self._replay_time = t0 + max(0, min(int(i), count - 1)) * step
 
-    def n_bars(self, symbol: str) -> int:
-        """Length of the replayable series for `symbol` (the client's n_candles; same for every symbol)."""
+    def n_bars(self, symbol: str, timeframe: Timeframe = Timeframe.H1) -> int:
+        """Length of `timeframe`'s replayable series (H1 = the client's n_candles; finer timeframes have more bars
+        over the same span, 4h / 1d have n_candles bars reaching further back)."""
         self._token(symbol)
-        return self._n
+        return timeline(timeframe, self._n)[2]
 
-    def _series(self, symbol: str, timeframe: Timeframe) -> list[Candle]:
+    def index_at(self, symbol: str, timeframe: Timeframe, t: datetime) -> int:
+        """Index of the last `timeframe` bar labelled <= t (-1 if none). Use it to resume a replay on another
+        timeframe at the same time."""
+        self._token(symbol)
+        return index_at(timeframe, self._n, t)
+
+    def _sym_series(self, symbol: str) -> SymbolSeries:
         tok = self._token(symbol)
         regime = self._regimes.get(symbol, Regime.SIDEWAYS)
-        key = (symbol, timeframe, regime, tok.price)
+        key = (symbol, regime, tok.price)
         if key not in self._series_cache:
-            self._series_cache[key] = generate_candles(regime, n=self._n, seed=self._seed,
-                                                       start_price=tok.price or 100.0, timeframe=timeframe)
+            self._series_cache[key] = SymbolSeries(symbol, regime, tok.price or 100.0, self._seed, self._n)
         return self._series_cache[key]
 
-    def _clamped_index(self, symbol: str) -> int:
-        assert self._replay_index is not None
-        return max(0, min(self._replay_index, self.n_bars(symbol) - 1))
+    def _series(self, symbol: str, timeframe: Timeframe) -> list[Candle]:
+        return self._sym_series(symbol).candles(timeframe)
+
+    def get_full_candles(self, symbol: str, timeframe: Timeframe = Timeframe.H1) -> list[Candle]:
+        """The whole series for `timeframe`, ignoring the pin (history / backtests; safe while a loop is pinned)."""
+        return list(self._series(symbol, timeframe))
 
     def get_candles(self, symbol: str, timeframe: Timeframe = Timeframe.H1, limit: int = 200) -> list[Candle]:
-        if self._replay_index is None:
-            return super().get_candles(symbol, timeframe, limit)
-        upto = self._series(symbol, timeframe)[: self._clamped_index(symbol) + 1]
-        return upto[-limit:] if limit > 0 else []
+        series = self._series(symbol, timeframe)
+        if self._replay_time is not None:
+            series = series[: index_at(timeframe, self._n, self._replay_time) + 1] or series[:1]
+        return list(series[-limit:]) if limit > 0 else []
 
     def get_price(self, symbol: str) -> float:
-        if self._replay_index is None or symbol in self._price_override:
-            return super().get_price(symbol)
-        return self._series(symbol, Timeframe.H1)[self._clamped_index(symbol)].close
+        if symbol in self._price_override:
+            return self._price_override[symbol]
+        ss = self._sym_series(symbol)
+        if self._replay_time is None:
+            return ss.h1[-1].close
+        return ss.price_at(max(self._replay_time, ss.start))
 
     def _maybe_sleep(self) -> None:
         if self._latency > 0:
@@ -259,6 +292,13 @@ class SimulatedBinanceClient(SimWalletMixin, TokenStatusMixin, MockExchangeClien
         if self.enforce_market_hours and tok.token_type in MARKET_HOURS_TYPES and not is_us_market_open(now):
             code = MARKET_CLOSED_CODE[tok.token_type]
             return reject(f"{code} market closed for {order.symbol}")
+        status = self.get_token_status(order.symbol).trading_status
+        if status in (TradingStatus.CLOSED, TradingStatus.OFFHOURS) and tok.token_type in MARKET_CLOSED_CODE:
+            # Real venue: Ondo off-hours (weekend reference-price session) / closed -> 40367, bStock -> 40369.
+            code = MARKET_CLOSED_CODE[tok.token_type]
+            return reject(f"{code} {order.symbol} is {status.value}: not tradable now (quote only)")
+        if status == TradingStatus.NO_LIQUIDITY:
+            return reject(f"{RWA_INSUFFICIENT_LIQUIDITY} {order.symbol}: no liquidity")
         return None
 
     def execute_swap(self, order: OrderRequest, quote: Quote, max_slippage_pct: Optional[float] = None) -> ExecutionResult:

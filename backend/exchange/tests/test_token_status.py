@@ -120,7 +120,8 @@ def test_sim_quote_or_reason():
     r = c.quote_or_reason("NVDAon", OrderSide.BUY, 25)
     assert r.ok and r.trading_status == TradingStatus.OFFHOURS and r.price_impact_pct == 0.0
     assert c.quote_meta(r.quote.quote_id) is r
-    assert c.execute_rfq(OrderRequest(symbol="NVDAon", side=OrderSide.BUY, notional=25), r.quote).status == OrderStatus.FILLED
+    res = c.execute_rfq(OrderRequest(symbol="NVDAon", side=OrderSide.BUY, notional=25), r.quote)
+    assert res.status == OrderStatus.REJECTED and "40367" in res.error  # off-hours: quotable, not fillable
 
 
 # ---------------------------------------------------------------- PAPER (mocked HTTP, real public payloads)
