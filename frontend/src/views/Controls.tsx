@@ -5,6 +5,7 @@ import type { LoopState } from "../api/types";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ModeBadge } from "../components/Badges";
 import { Card, NumberInput, Toggle, useToast } from "../components/ui";
+import { controlReason } from "../lib/strategy";
 
 interface Props { status: StatusSnapshot | null; onChange: () => void; tick: number }
 
@@ -35,7 +36,7 @@ export function Controls({ status, onChange, tick }: Props) {
     <Card title="Controls" extra={<ModeBadge mode={c?.trading_mode} />}>
       <div className="kv" style={{ marginBottom: 14 }}>
         <span className="k">Risk layer</span><span>{state}</span>
-        {c?.reason && <><span className="k">Note</span><span className="small">{c.reason}</span></>}
+        {controlReason(c?.reason) && <><span className="k">Note</span><span className="small">{controlReason(c?.reason)}</span></>}
       </div>
       <div className="field-grid">
         {c?.paused
@@ -61,7 +62,7 @@ export function Controls({ status, onChange, tick }: Props) {
         <div className="btn-row">
           {loop?.running
             ? <button className="btn ghost" style={{ flex: 1 }} disabled={busy} onClick={async () => { const l = await run(() => api.stopLoop(), "Loop stopped"); if (l) setLoop(l); }}>■ Stop loop</button>
-            : <button className="btn ghost" style={{ flex: 1 }} disabled={busy} onClick={async () => { const l = await run(() => api.startLoop(interval ?? undefined), "Loop started"); if (l) setLoop(l); }}>▶ Start loop</button>}
+            : <button className="btn ghost" style={{ flex: 1 }} disabled={busy || !status?.agent_mode} title={status?.agent_mode ? "Run a cycle every interval" : "Activate a manual strategy or auto config first"} onClick={async () => { const l = await run(() => api.startLoop(interval ?? undefined), "Loop started"); if (l) setLoop(l); }}>▶ Start loop</button>}
           <NumberInput value={interval ?? loop?.interval_seconds ?? 5} min={1} suffix="s" width={84} onChange={(v) => setIntervalS(v)} />
           <button className="btn ghost" disabled={busy || !status?.agent_mode} title={status?.agent_mode ? "Run one cycle now" : "Activate an agent first"}
             onClick={async () => { const d = await run(() => api.tick()); if (d) toast(`Tick: ${d.length ? d.map((x) => x.action.replace("_", " ")).join(", ") : "no decision"}`, "info"); }}>Tick once</button>
