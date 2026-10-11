@@ -43,6 +43,7 @@ class ParseResponse(_M):
     kind: Literal["MANUAL", "AUTO"]
     strategy: Optional[ManualStrategy] = None
     config: Optional[AutoConfig] = None
+    notes: list[str] = Field(default_factory=list)  # Bot 5 parser notes (e.g. the default entry rule it filled in)
 
 
 class AskRequest(_M):

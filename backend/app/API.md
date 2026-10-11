@@ -103,7 +103,7 @@ Alert codes: `EMERGENCY_STOP`, `PAUSED`, `CONSECUTIVE_LOSSES` (≥3), `DAILY_LOS
 ## LLM (Bot 5, never trades)
 | Method | Path | Body | Response |
 |---|---|---|---|
-| POST | `/api/llm/parse` | `{text, default_symbol?}` | `{kind: "MANUAL", strategy: ManualStrategy}` or `{kind: "AUTO", config: AutoConfig}` |
+| POST | `/api/llm/parse` | `{text, default_symbol?}` | `{kind: "MANUAL", strategy: ManualStrategy}` or `{kind: "AUTO", config: AutoConfig}`, plus `notes: string[]` (Bot 5 parser notes, e.g. the default entry rule it filled in; `[]` if none) |
 | POST | `/api/llm/ask` | `{question}` | `{answer}` |
 | GET | `/api/llm/summary` | – | `{summary}` |
 
@@ -158,10 +158,16 @@ are unchanged except where noted (positions always carry `pending`).
 | GET | `/api/loop` | `LoopState` + `heartbeat: {last_tick_at, seconds_since_tick, restarts, last_error}` |
 
 `limits` = Bot 3's `risk.live_limits(portfolio, LiveContext)` keys as-is (`limit_source`, `wallet_limits`,
-`risk_limits`, `exit_quota_shortfall_usdt`, ...) plus always: `daily_limit_usdt`, `daily_used_usdt` (settled fills +
+`risk_limits`, `exit_quota_shortfall_usdt`, `min_wallet_usdt`, ...; every key passes through, new ones included) plus always: `daily_limit_usdt`, `daily_used_usdt` (settled fills +
 in-flight buys), `daily_remaining_usdt`, `per_order_cap_usdt`, `allowed_tokens`, `tradable_tokens`, `warnings` (list,
 default `[]`, passed through unchanged; a new code raises alert `LIVE_LIMIT_<CODE>`, e.g. `exit_quota_shortfall`,
 `wallet_limits_stale`).
+- Token-aware: `live_limits()` gets a `LiveContext` with the **active (or `DEFAULT_AGENT_SYMBOL`) token's status**, so
+`min_order_usdt` / `min_wallet_usdt` / `min_wallet_usdt_note` follow that token (NVDAon: 20 USDT minimum). `limits_symbol`
+names it. `per_token: {SYMBOL: {min_order_usdt, min_wallet_usdt, min_wallet_usdt_note}}` covers every tradable token
+(only `min_order_usdt` when risk has no `min_wallet_info`).
+- Each tick (and each `/api/wallet` read) passes the same limits to the explainer's `set_live_limits(limits)` (Bot 5) for
+small-wallet / gas hints.
 - `allowed_tokens` is the **wallet/risk-side** restriction only, passed through as-is: a list of symbols, the string
   `'ALL'` (no restriction) or `'LIMITED'` (the wallet restricts tokens but did not list them), or `null` (unknown).
   It is never filled from the exchange token list.
@@ -206,7 +212,9 @@ explainer receives, so LIVE explanations carry the BscScan link.
   alert `WALLET_SESSION_EXPIRED` is raised (re-scan the QR with `baw`, then resume).
 - Bot 2 live engine `STAY_OUT` codes (`live_below_min_order`, `live_illiquid_family`, `live_token_paused`,
   `live_price_impact`, `insufficient_data`, stale data) are logged no-trade decisions. Before each evaluation the app calls
-  `engine.set_market_context(symbol, {status, reference_price_only, priceImpactPercent, equity})` and sets
+  `engine.set_market_context(symbol, {status, reference_price_only, min_order_usdt, priceImpactPercent, equity})`
+  (`status` as a plain string such as `OFFHOURS`; `min_order_usdt` = `get_token_status(symbol).min_order_usdt`, the same
+  floor risk applies, `null` if unavailable; `priceImpactPercent` / `equity` omitted when unknown) and sets
   `live_config.max_order_usdt` from `risk.live_limits()['per_order_cap_usdt']`. Engine and risk agree on price impact:
   > 1.0 % blocks, exactly 1.0 % is allowed.
 

@@ -305,10 +305,11 @@ def create_app(settings: Optional[Settings] = None, components: Optional[Compone
     # ---------------------------------------------------------------- LLM (never trades)
     @app.post("/api/llm/parse", response_model=ParseResponse)
     def llm_parse(req: ParseRequest) -> ParseResponse:
-        r = comps.explainer.parse_strategy_from_text(req.text, req.default_symbol)
+        fn = getattr(comps.explainer, "parse_strategy_with_notes", None)
+        r, notes = fn(req.text, req.default_symbol) if callable(fn) else (comps.explainer.parse_strategy_from_text(req.text, req.default_symbol), [])
         if isinstance(r, AutoConfig):
-            return ParseResponse(kind="AUTO", config=r)
-        return ParseResponse(kind="MANUAL", strategy=ManualStrategy.model_validate(r.model_dump()))
+            return ParseResponse(kind="AUTO", config=r, notes=notes)
+        return ParseResponse(kind="MANUAL", strategy=ManualStrategy.model_validate(r.model_dump()), notes=notes)
 
     @app.post("/api/llm/ask")
     def llm_ask(req: AskRequest) -> dict:
