@@ -335,3 +335,101 @@ is counted as adverse against `max_slippage_pct`, and the favorable allowance ap
 price-impact attribute on `Quote` if the contract ever adds one — replaces the quote-vs-reference comparison in
 `live_slippage` ("Exchange-reported price impact ..."). Without it the old reference-price fallback runs. The quote's
 `slippage_bps` tolerance is checked either way.
+
+## Runtime trading limits (dashboard "Trading limits" panel) — Bot 3
+
+Live limits can be changed while Regime runs, with no restart. The defaults are unchanged (25 USDT per order,
+50 USDT total, 25 USDT daily loss, 100 USDT daily buys), so nothing changes for existing users.
+
+```python
+rm.live_limits_settings(wallet_limits: WalletLimits | None = None) -> dict          # GET
+rm.set_live_limits(settings: Mapping, wallet_limits: WalletLimits | None = None) -> dict   # PUT, raises ValueError
+rm.reset_live_limits(wallet_limits: WalletLimits | None = None) -> dict             # "Reset to safe defaults"
+```
+
+All three return the same shape:
+
+```json
+{"order_mode": "fixed"|"pct", "order_usdt": null|float, "order_pct": null|float,
+ "max_order_usdt": 25, "max_total_usdt": 50, "max_per_token_usdt": 50, "daily_loss_usdt": 25, "daily_buy_usdt": 100,
+ "defaults": {same 8 keys, the values this manager started with (env RISK_LIVE_* included)},
+ "wallet_daily_limit_usdt": null|float,   // wallet_limits.daily_limit_usdt when passed
+ "notes": ["..."]}                        // e.g. "Daily buy limit raised from 100.00 to 800.00 USDT ..."
+```
+
+| Panel key | LiveRiskProfile field | Notes |
+|---|---|---|
+| `order_mode` | `order_mode` | `fixed` (default) or `pct` |
+| `order_usdt` | `order_usdt` | fixed USDT per LIVE BUY; `null` = use the strategy's size (today's behaviour) |
+| `order_pct` | `order_pct` | % of the wallet stablecoin per LIVE BUY, (0, 100]; required in `pct` mode |
+| `max_order_usdt` | `max_order_notional_usdt` | per-order cap |
+| `max_total_usdt` | `max_open_exposure_usdt` | total open positions incl. the new order |
+| `max_per_token_usdt` | `max_token_exposure_usdt` (new, LIVE only) | stored `null` = same as `max_total_usdt` |
+| `daily_loss_usdt` | `max_daily_loss_usdt` | hitting it triggers the automatic emergency stop |
+| `daily_buy_usdt` (optional) | `max_daily_notional_usdt` | if omitted and `max_order_usdt` rises above it, raised to 4 × `max_order_usdt` (reported in `notes`) |
+
+**Validation** (all or nothing: on any error nothing changes; `ValueError` with every problem in plain English,
+`'; '`-joined → map to HTTP 400): amounts finite and > 0; `order_pct` in (0, 100]; `max_order_usdt <= max_total_usdt`;
+`max_per_token_usdt <= max_total_usdt`; in fixed mode `order_usdt <= max_order_usdt`; `daily_buy_usdt >= max_order_usdt`;
+when `wallet_limits.daily_limit_usdt` is known, `max_order_usdt` may not exceed it. Unknown keys are rejected;
+missing keys keep their value (partial PUT works); `defaults`, `wallet_daily_limit_usdt` and `notes` echoed back from
+GET are ignored. `live_limits()` (the /api/wallet info) reflects changes at once and now also has
+`max_token_exposure_usdt`, `order_mode`, `order_usdt`, `order_pct`. `set_config()` replaces the whole config including
+these runtime values.
+
+**Order sizing (LIVE BUYs only; SIM/PAPER unchanged).** `pct`: target = wallet stablecoin balance
+(`LiveContext.balances[quote_asset]`, or `portfolio.cash` if balances are missing) × `order_pct` / 100. `fixed` with
+`order_usdt`: target = `order_usdt`. The target replaces the strategy / %-of-equity size, then every existing cap still
+clamps it: cash, per-token % and total % of equity, per-order cap, LIVE total and per-token exposure, LIVE daily buys,
+wallet per-tx, wallet daily quota and exit reserve, wallet balance − fee buffer; `bump_to_min_order` still applies.
+Example: 10,000 USDT wallet at 2% = 200 USDT, but with the default caps it's clamped to 25.
+
+### How Bot 6 wires `GET/PUT /api/settings/limits`
+```python
+wl = wallet_settings.get()                         # WalletLimits or None
+GET:  return rm.live_limits_settings(wl)
+PUT:  try: out = rm.set_live_limits(body, wl)
+      except ValueError as e: raise HTTPException(400, str(e))
+      engine.set_live_limits(max_order_usdt=out["max_order_usdt"],                 # Bot 2, same values
+                             max_size_pct=out["order_pct"] if out["order_mode"] == "pct" else None)
+      exchange per-order cap: raise BINANCE_LIVE_MAX_NOTIONAL (Bot 4) to >= out["max_order_usdt"], or the exchange
+      still rejects orders above 25 USDT. Settings.live_max_order_usdt (app fallback) should follow too.
+      persist out (minus defaults/notes) to logs/ and call rm.set_live_limits(saved, wl) again at startup.
+RESET: out = rm.reset_live_limits(wl); same engine / exchange calls.
+```
+
+## Watchlist: caps across symbols and same-tick reservations — Bot 3
+
+Every cap already counts all symbols together: `max_open_positions` = `len(portfolio.positions)` (all symbols),
+total exposure (% of equity and LIVE USDT) sums all positions, per-token caps sum that symbol's positions, and the
+LIVE daily buy cap counts every LIVE BUY (in-flight `PENDING_CONFIRMATION` ones via `record_execution`). In-flight chain
+buys count because the app passes them as synthetic positions.
+
+**The gap:** when several symbols are checked in one tick against the same `portfolio`, each check sees the full room,
+so two BUYs could together exceed a cap. **Fix: reservations.**
+
+```python
+rm.check(signal, pf, control, context=ctx, reserve_as=key)  # approved BUY -> holds adjusted_notional under key
+rm.release_reservation(key) -> bool
+rm.reserve_buy(key, symbol, notional, ttl_seconds=None)      # manual
+rm.clear_reservations() -> int
+rm.reservations() -> [{"key", "symbol", "notional_usdt", "expires_at"}]
+```
+Each later check counts every other unexpired reservation toward open positions (+1 each), cash, per-token and total
+exposure, LIVE daily buys, wallet quota/exit reserve and wallet balance (check `reserved_orders` explains it). A re-check
+with the same key (LIVE pass 2 with the quote, approval re-check) excludes and replaces its own reservation; a blocked
+re-check drops it. `record_execution(result)` also releases the reservation whose key == `result.client_order_id`.
+Expiry after `RESERVATION_TTL_S` (900 s) is only a safety net.
+
+Loop pattern for Bot 6 (key = the decision id):
+```python
+for sig in signals:                                   # one per watchlist token, sells first
+    did = new decision id
+    v = rm.check(sig, self._pf(), control, context=ctx, reserve_as=did)
+    if v.approved and v.requires_confirmation:  keep the reservation; release on approve/reject/expire
+    elif v.approved:  self._buy(...) with the same did (pass 2: reserve_as=did); then rm.release_reservation(did)
+# approve(did): v = rm.check(..., reserve_as=did) -> _buy -> rm.release_reservation(did)
+# reject/expire(did), agent switch: rm.release_reservation(did) / rm.clear_reservations()
+```
+Release only once the order is in the portfolio you pass next (filled lot or in-flight synthetic position), or will
+not happen; rebuild the portfolio (`self._pf()`) for each symbol so it's never counted twice.

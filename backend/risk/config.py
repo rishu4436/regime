@@ -62,7 +62,7 @@ class RiskConfig(BaseModel):
         """Defaults + env. ``allow_live`` is True only if RISK_ALLOW_LIVE, LIVE_TRADING_ENABLED and BINANCE_LIVE_ENABLED
         are all exactly "true". Optional numeric overrides of the LIVE profile:
         RISK_LIVE_MAX_ORDER_USDT, RISK_LIVE_MAX_DAILY_LOSS_USDT, RISK_LIVE_MAX_DAILY_NOTIONAL_USDT,
-        RISK_LIVE_MAX_EXPOSURE_USDT, RISK_LIVE_MAX_DATA_AGE_S, RISK_LIVE_MAX_SLIPPAGE_PCT, RISK_LIVE_MAX_FAVORABLE_IMPACT_PCT,
+        RISK_LIVE_MAX_EXPOSURE_USDT, RISK_LIVE_MAX_TOKEN_EXPOSURE_USDT, RISK_LIVE_MAX_DATA_AGE_S, RISK_LIVE_MAX_SLIPPAGE_PCT, RISK_LIVE_MAX_FAVORABLE_IMPACT_PCT,
         RISK_LIVE_FEE_BUFFER_USDT, RISK_LIVE_MIN_BNB; RISK_LIVE_MARKET_HOURS=false disables the market-hours guard. No secrets are read."""
         allow = all(env_true(k) for k in ("RISK_ALLOW_LIVE", "LIVE_TRADING_ENABLED", "BINANCE_LIVE_ENABLED"))
         live: dict = {}
@@ -70,6 +70,7 @@ class RiskConfig(BaseModel):
                            ("RISK_LIVE_MAX_DAILY_LOSS_USDT", "max_daily_loss_usdt"),
                            ("RISK_LIVE_MAX_DAILY_NOTIONAL_USDT", "max_daily_notional_usdt"),
                            ("RISK_LIVE_MAX_EXPOSURE_USDT", "max_open_exposure_usdt"),
+                           ("RISK_LIVE_MAX_TOKEN_EXPOSURE_USDT", "max_token_exposure_usdt"),
                            ("RISK_LIVE_MAX_DATA_AGE_S", "max_data_age_seconds"),
                            ("RISK_LIVE_MAX_SLIPPAGE_PCT", "max_slippage_pct"),
                            ("RISK_LIVE_MAX_FAVORABLE_IMPACT_PCT", "max_favorable_impact_pct"),
