@@ -86,6 +86,7 @@ export function WalletConnectProvider({ children }: { children: ReactNode }) {
             {phase === "pending" && start && <>
               <div className="small muted" style={{ marginBottom: 12 }}>Open the <b>Binance App</b>, tap the scan icon and scan this code to let Regime trade from your Agentic Wallet. Funds stay in your wallet, inside the limits you set there.</div>
               <div style={{ display: "flex", justifyContent: "center", marginBottom: 10 }}><Qr text={start.qr_url} /></div>
+              {start.pairing_code && <div className="small" style={{ textAlign: "center", marginBottom: 8 }}>Pairing code <b className="mono" style={{ fontSize: "1.05rem", letterSpacing: ".08em" }}>{start.pairing_code}</b><br /><span className="faint">Check it matches the code the Binance App shows.</span></div>}
               <div className="small faint" style={{ textAlign: "center" }}><span className="spin" /> Waiting for you to scan{left != null ? ` · expires in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}` : ""}</div>
               {!/^data:/.test(start.qr_url) && <div className="small" style={{ textAlign: "center", marginTop: 6 }}><a href={start.qr_url} target="_blank" rel="noreferrer">Open sign-in link</a></div>}
             </>}

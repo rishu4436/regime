@@ -91,7 +91,7 @@ export interface LoopHeartbeat {
 /** notes: parser remarks to show the user, e.g. the default entry rule it filled in (POST /api/llm/parse). */
 export type ParseResult = ({ kind: "MANUAL"; strategy: ManualStrategy } | { kind: "AUTO"; config: AutoConfig }) & { notes?: string[] };
 /** POST /api/wallet/connect (localhost only, else 403): starts the Agentic Wallet QR sign-in. */
-export interface WalletConnectStart { qr_url: string; session_id: string; expires_at?: string | null }
+export interface WalletConnectStart { qr_url: string; session_id: string; expires_at?: string | null; /** code to compare/enter in the Binance App, when baw gives one */ pairing_code?: string | null }
 /** GET /api/wallet/connect?session_id=: on "connected" the backend has already re-read the wallet limits. */
 export interface WalletConnectStatus {
   status: "pending" | "connected" | "expired" | "failed";
