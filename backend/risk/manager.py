@@ -254,7 +254,7 @@ class DefaultRiskManager:
                     return
                 self._live_filled_ids.add(coid)
                 day = prev[0] if prev else as_utc(result.timestamp).date()
-                self._live_bought[day] = self._live_bought.get(day, 0.0) + result.notional
+                self._live_bought[day] = self._live_bought.get(day, 0.0) + result.notional + (result.fee or 0.0)  # fee counts as spent
             today = max([as_utc(result.timestamp).date(), *self._live_bought.keys()])
             for d in [d for d in self._live_bought if d < today]:
                 del self._live_bought[d]
