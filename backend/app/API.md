@@ -23,6 +23,7 @@ app-only and defined in `backend/app/schemas.py`.
 | GET | `/api/price/{symbol}` | – | `{symbol, price}` |
 | GET | `/api/regime/{symbol}?timeframe=1h` | – | `RegimeAnalysis` |
 | GET | `/api/auto/selection?symbol=&style=BALANCED&timeframe=1h` | – | `StrategySelection` (preview of map(regime, style)) |
+| GET | `/api/auto/presets-table` | – | `PresetsTable` *(app)*: `{source, entries: [{regime, style, preset \| null, size_multiplier, reason}]}` — all 6 × 3 combinations with every preset enabled, from the wired engine's `select_strategy`. `source` = `"engine:<Class>"` (Bot 2's engine) or `"fallback:<Class>"` (app stand-in until the engine lands). `preset: null` = stay out / pause |
 
 ## Manual strategies (Manual Builder)
 | Method | Path | Body | Response |
@@ -59,7 +60,8 @@ Only one agent (one manual strategy **or** one auto config) is active at a time.
 | GET | `/api/confirmations` | – | `Decision[]` waiting for the user (`execution.status == PENDING_CONFIRMATION`) |
 | POST | `/api/confirmations/{decision_id}/approve` | – | `Decision` (fresh ~30 s quote, then executed; `EXPIRED` if the pending decision is older than `PENDING_TTL_SECONDS`, default 300) |
 | POST | `/api/confirmations/{decision_id}/reject` | `{reason?}` | `Decision` (action `STAY_OUT`, execution `REJECTED`) |
-| POST | `/api/positions/{symbol}/close` | – | `Decision` (manual override, `ExitReason.MANUAL`) |
+| POST | `/api/positions/by-id/{position_id}/close` | – | `Decision` — closes ONE lot (`Position.id`) at the last price; `signal.exit_reason = MANUAL`, `signal.position_id` = that id. 404 if no open position has that id |
+| POST | `/api/positions/{symbol}/close` | – | `Decision` — closes ALL lots of `symbol` (manual override, `ExitReason.MANUAL`) |
 
 ## Control (risk layer)
 | Method | Path | Body | Response |
@@ -67,7 +69,7 @@ Only one agent (one manual strategy **or** one auto config) is active at a time.
 | GET | `/api/control` | – | `ControlState` |
 | POST | `/api/control/pause` | `{reason?}` | `ControlState` |
 | POST | `/api/control/resume` | – | `ControlState` (clears `paused` only; does **not** clear an emergency stop) |
-| POST | `/api/control/emergency-stop` | `{reason?, flatten?: false}` | `ControlState` (sets `emergency_stopped`; rejects pending confirmations; `flatten=true` also closes all positions) |
+| POST | `/api/control/emergency-stop` | `{reason?, flatten?: false}` | `ControlState` (sets `emergency_stopped`; rejects pending confirmations; blocks every BUY. `flatten=true` closes all positions immediately at the last price; otherwise the risk layer closes them on the next bar at the bar close with `exit_reason = EMERGENCY_STOP`) |
 | POST | `/api/control/reset-emergency-stop` | – | `ControlState` (clears `emergency_stopped`; leaves `paused` unchanged) |
 | POST | `/api/control/confirmation-mode` | `{enabled: bool}` | `ControlState` |
 
@@ -94,6 +96,9 @@ Alert codes: `EMERGENCY_STOP`, `PAUSED`, `CONSECUTIVE_LOSSES` (≥3), `DAILY_LOS
 | POST | `/api/llm/ask` | `{question}` | `{answer}` |
 | GET | `/api/llm/summary` | – | `{summary}` |
 
+`summary` / `ask` give the explainer the current `StatusSnapshot` plus `PerformanceSummary` and the latest 20 `Alert`s
+(passed as `performance=` / `alerts=` when the installed explainer accepts them; older signatures still work).
+
 ## WebSocket `/ws`
 Server → client: one contract `Event` per message: `{type: EventType, payload, timestamp}`.
 
@@ -114,6 +119,12 @@ Client → server (optional): `{"type": "ping"}` → server replies with a `STAT
 `BINANCE_API_KEY` / `BINANCE_API_SECRET` are set). The mode is fixed per process and reported in
 `/api/system`, `ControlState.trading_mode` and every `Decision.mode`.
 
+## Execution path
+The loop executes on the path the exchange quoted: `Quote.path == RFQ` → `execute_rfq`, otherwise `execute_swap`
+(the exchange rejects an order sent to the wrong path). `ExecutionResult.path` shows which one was used.
+
 ## Changelog
+- v0.3: `GET /api/auto/presets-table`, `POST /api/positions/by-id/{position_id}/close`; emergency-stop exits at bar
+  close; RFQ/SWAP dispatch on `Quote.path`; LLM summary/ask get performance + alerts; protective-exit edge rules (any stop beats TP, highest stop wins, strict trailing).
 - v0.2 (contracts 0.2.0): app types moved into the contracts; `POST /api/control/reset-emergency-stop` added and
   `resume` no longer clears an emergency stop; exits expose `Signal.exit_reason` / `Signal.position_id`; `Position.id`.

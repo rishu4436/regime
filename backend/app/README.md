@@ -19,10 +19,10 @@ fall back to `backend.mocks` until a bot's module is ready). Decision loop per b
 `RiskManager.check_exits` → `StrategyEngine.evaluate_*` → `RiskManager.check` → (confirm?) → `ExchangeClient.get_quote/execute_*`
 → `Decision` (+ `Explainer.explain_decision`) → log + WebSocket `Event`.
 
-Suggested API (all bodies/responses are contract models): `GET /health`, `GET /api/status` (StatusSnapshot),
-`GET /api/tokens?q=`, `GET /api/candles/{symbol}`, `POST /api/strategy/manual` (ManualStrategy),
-`POST /api/strategy/auto` (AutoConfig), `POST /api/backtest` (→ BacktestResult), `POST /api/control/{pause|resume|emergency-stop|confirmation}`,
-`POST /api/decisions/{id}/confirm`, `POST /api/llm/parse`, `POST /api/llm/ask`, `WS /ws` (Event stream).
+**API: see [`API.md`](API.md)** — the implemented REST endpoints and WebSocket events (the scaffold's earlier
+"suggested" endpoint names such as `/api/strategy/manual`, `/api/strategy/auto`, `/api/decisions/{id}/confirm` and
+`/api/control/confirmation` were never implemented; use `/api/strategies`, `/api/manual/activate`, `/api/auto/activate`,
+`/api/confirmations/{id}/approve|reject` and `/api/control/confirmation-mode`).
 
 ## Definition of done
 - Implements the interface above exactly (signatures from `backend/contracts/interfaces.py`, data shapes from `backend/contracts/models.py`). `isinstance(obj, <Protocol>)` is True.
@@ -35,7 +35,7 @@ Suggested API (all bodies/responses are contract models): `GET /health`, `GET /a
 - `main.py` - `create_app(settings, components)` + module-level `app`. `loop.py` - the trading loop.
 - `wiring.py` - builds engine / risk / exchange / explainer against the Protocols. Until a bot's module is
   implemented, `fallbacks.py` stands in (engine/explainer per method, risk as a whole); `/api/system` shows which.
-- `exits.py` - executable statement of the agreed protective-exit rule (parity-tested in `tests/e2e/test_exit_parity.py`).
+- `exits.py` - executable statement of the agreed protective-exit rule incl. Bot 3's edge rules (parity-tested in `tests/e2e/test_exit_parity.py`).
 - `portfolio.py` (cash / lots / PnL, maintains `Position.highest_price` after `check_exits`), `feed.py` (SIM bar replay,
   PAPER/LIVE polling), `events.py` (log + WS fan-out), `store.py` (saved strategies), `settings.py` (env).
 - Monitoring in `backend/monitoring` (JSONL event log, alerts, mark-to-market performance).
