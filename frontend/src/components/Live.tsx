@@ -47,7 +47,7 @@ export function SessionBanner() {
   if (!wallet?.session_expired && !why) return null;
   return (
     <div className="banner red" role="alert">
-      <span className="grow"><b>Agentic Wallet session expired, re-scan QR on host PC.</b> The agent can't trade until the wallet is signed in again (<code>baw auth signin</code>, then scan the QR in the Binance App).{why ? <><br /><span className="small">{why}</span></> : null}</span>
+      <span className="grow"><b>Agentic Wallet session expired.</b> The agent can't trade until the wallet is signed in again Click <b>Reconnect wallet</b> at the top and scan the QR in the Binance App (or run <code>baw auth signin</code> on the host PC).{why ? <><br /><span className="small">{why}</span></> : null}</span>
     </div>
   );
 }
@@ -63,7 +63,7 @@ export function AgentIdentityCard() {
       <div className="kv">
         <span className="k">ERC-8004 id</span><span className="mono">{id?.erc8004_id != null
           ? (id.explorer_url ? <a href={id.explorer_url} target="_blank" rel="noreferrer" title="View on 8004scan">{String(id.erc8004_id)} ↗</a> : String(id.erc8004_id))
-          : (id ? <span className="faint">placeholder</span> : NA)}</span>
+          : (id ? <span className="faint">not registered yet</span> : NA)}</span>
         <span className="k">Network</span><span className="small">{id?.network ?? NA}</span>
         <span className="k">Registry</span><span className="small">{id?.registry ?? NA}</span>
         <span className="k">Studio</span><span className="small">{id?.studio_version ?? NA}</span>
@@ -220,7 +220,8 @@ export function CapsPanel({ status, decisions }: { status: StatusSnapshot | null
         <Meter label="Open at once" used={exposure} cap={L.max_exposure_usdt} />
       </div>
       <div className="kv" style={{ marginTop: 12 }}>
-        <span className="k">Max slippage</span><span>{L.max_slippage_pct != null ? `${L.max_slippage_pct}%` : NA}</span>
+        <span className="k">Max slippage (worse price)</span><span>{L.max_slippage_pct != null ? `${L.max_slippage_pct}%` : NA}</span>
+        <span className="k">Max better price</span><span title="A quote this much better than the market is skipped as a likely bad quote">{L.max_favorable_impact_pct != null ? `${L.max_favorable_impact_pct}%` : NA}</span>
         <span className="k">Stale data after</span><span>{L.stale_after_s != null ? `${L.stale_after_s}s` : NA}</span>
         <span className="k">BNB gas reserve</span><span>{L.bnb_gas_reserve ?? wallet?.bnb_gas_reserve ?? NA}{(L.bnb_gas_reserve ?? wallet?.bnb_gas_reserve) != null ? " BNB" : ""}</span>
         <span className="k">Tradable tokens</span><span>{allowedTokensText(L.tradable_tokens) ?? NA}</span>

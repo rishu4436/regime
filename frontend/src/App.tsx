@@ -4,6 +4,7 @@ import { API_MODE } from "./api";
 import { MOCK_SCENARIO, setMockScenario } from "./api/mock";
 import { LiveBanner, SessionBanner } from "./components/Live";
 import { LiveContext, useLiveState } from "./lib/live";
+import { WalletButton, WalletChangedBanner, WalletConnectProvider } from "./components/WalletConnect";
 import { ModeBadge, RegimeBadge } from "./components/Badges";
 import { Toggle, ToastProvider } from "./components/ui";
 import { useStatus } from "./lib/useStatus";
@@ -56,9 +57,10 @@ function Shell() {
 
   return (
     <LiveContext.Provider value={live}>
+    <WalletConnectProvider>
     <div className={`app${live.isLive ? " is-live" : ""}`}>
       <aside className="sidebar">
-        <div className="brand"><div className="brand-logo">◆</div><div><b>Teamwork Agent</b><small>On-chain stocks</small></div></div>
+        <div className="brand"><div className="brand-logo">◆</div><div><b>Regime</b><small>Autonomous tokenized-stock agent</small></div></div>
         {nav}
         <div className="sidebar-foot">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>Mode <ModeBadge mode={mode} /></div>
@@ -83,18 +85,23 @@ function Shell() {
             : <span className="pill ok"><span className="live-dot" />Live loop</span>)}
           {live.isLive && <span className="live-tag" title="Real funds on BNB Smart Chain mainnet"><span className="live-dot" />LIVE · MAINNET</span>}
           <ModeBadge mode={mode} />
+          <WalletButton />
         </div>
+        {API_MODE === "mock" && <div className="banner amber" style={{ marginBottom: 12 }}><span className="grow small">
+          <b>Mock data:</b> this dashboard isn't connected to the Regime backend, so nothing here is real. Start it with <code>VITE_API_MODE=http</code> to see the live agent.</span></div>}
         <LiveBanner />
         <SessionBanner />
+        <WalletChangedBanner />
         {error && <div className="banner amber"><span className="grow">Backend unreachable: {error}</span><span className="small muted">Start the API or run with VITE_API_MODE=mock</span></div>}
         {tab === "dashboard" && <Dashboard status={status} refresh={refresh} tick={tick} alertsVersion={alertsVersion} go={go} />}
         {tab === "manual" && <ManualBuilder strategy={strategy} setStrategy={setStrategy} capital={capital} setCapital={setCapital} run={run} setRun={setRun}
-          onActivated={() => { refresh(); setTab("dashboard"); }} onAutoParsed={(c) => { setAutoCfg({ ...autoCfg, ...c }); setTab("auto"); }} />}
+          onActivated={() => { refresh(); setTab("dashboard"); }} onAutoParsed={(c) => { setAutoCfg({ ...autoCfg, ...c, activation: autoCfg.activation }); setTab("auto"); }} />}
         {tab === "auto" && <AutoMode config={autoCfg} setConfig={setAutoCfg} status={status} tick={tick} onActivated={() => { refresh(); setTab("dashboard"); }} />}
         {tab === "backtest" && <BacktestView run={run} onOpenBuilder={() => setTab("manual")} />}
       </main>
       <nav className="mobile-nav">{nav}</nav>
     </div>
+    </WalletConnectProvider>
     </LiveContext.Provider>
   );
 }

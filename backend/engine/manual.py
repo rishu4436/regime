@@ -123,7 +123,7 @@ def evaluate_entry(
             results["bollinger_lower"] = c.close < lim
             detail.append(
                 f"close {c.close:.4g} {'<' if c.close < lim else '>='} "
-                f"lower BB*(1+{e.bollinger_lower.proximity_pct:g}%) {lim:.4g}"
+                f"{e.bollinger_lower.proximity_pct:g}% above the lower Bollinger band ({lim:.4g})"
             )
     if e.volume_above_avg.enabled and not volume_applicable:
         detail.append("volume condition n/a (token family has no on-chain bar volume)")

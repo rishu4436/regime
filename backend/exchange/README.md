@@ -129,3 +129,15 @@ slippage_pct, gas_fee_bnb, gas_fee_usd, fill_source}`. Reasons: `session_expired
 `abnormal_txn_rejected`, `quota_exceeded`, `policy_rejected`, `insufficient_balance`, `insufficient_gas`,
 `slippage_exceeded`, `no_route`, `market_closed`, `amount_out_of_range`, `quote_expired`, `service_unavailable`,
 `baw_timeout`, `baw_not_found`, `outcome_unknown`, `pending_confirmation`, `order_failed`, `order_rejected`, `baw_error`.
+
+## Dashboard sign-in (`wallet_connect.py`)
+
+`WalletConnect` backs the dashboard's "Connect wallet" button. `start()` runs `baw auth signin --json` (returns at once
+with `urlForWeb` = QR link, `qrCodeId`, `pairingCode`) and launches `baw auth verify --qrCodeId <id> --json` in the
+background (baw polls for up to ~5 min). `poll(session_id)` returns `{status: pending|connected|expired|failed, address,
+wallet_changed, error}`. On `connected` it has checked `baw wallet status` = CONNECTED and read the BSC address.
+`wallet_changed` is true when that address differs from `BINANCE_WALLET_ADDRESS` (or the `expected_address` the app passes,
+i.e. the wallet the saved LIVE state belongs to), so the app keeps LIVE blocked until positions are reconciled. One sign-in
+at a time; a new `start()` cancels the old one. The HTTP endpoints must be localhost-only: anyone who can call them can
+start a sign-in for this machine's wallet.
+

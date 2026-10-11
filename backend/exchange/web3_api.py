@@ -22,7 +22,7 @@ from .errors import RATE_LIMITED, Web3ApiError
 from .signing import encode_query, iso_timestamp, signed_headers
 
 DEFAULT_BASE_URL = "https://web3.binance.com/build"
-USER_AGENT = "teamwork-trading-agent/0.1 (+backend/exchange)"
+USER_AGENT = "regime-trading-agent/0.1 (+backend/exchange)"
 
 
 class Web3ApiClient:

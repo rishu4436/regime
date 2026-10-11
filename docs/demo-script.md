@@ -1,13 +1,21 @@
 # Demo video script (≤ 4:00)
 
-*Team `teamwork`, BNB Hack: Tokenized Stocks Edition. Target length 3:45, leaving 15 s of slack.
+*Regime, by team `teamwork`, BNB Hack: Tokenized Stocks Edition. Target length 3:45, leaving 15 s of slack.
 Record at 1080p, browser zoom 110 %, dark theme. Timestamps are cumulative.*
+
+**First real autonomous mainnet trade (done, 11 Oct 2026)**
+At 09:25 IST on 2026-10-11 the agent, in Auto mode running the Grid preset with no human approval, bought
+**0.0434 NVDAB for 10 USDT** at about **230.47 USDT** from the Agentic Wallet on BNB Smart Chain mainnet.
+Tx: [0x228c0268…a19f22](https://bscscan.com/tx/0x228c02688cd2a8170b38dba6abfdb4f95fca9e9e22ae6bed6a191d0b88a19f22)
+(verified on-chain: status success, block 126950367, from `0xc44eddcffa4227d38bc92a7ca5990953aa7ff0cf`).
+Use this tx for the 1:40–1:50 "real fill → BscScan" shot if no newer fill is in the feed.
 
 **Before recording (checklist)**
 - Backend running LIVE on Rishu's PC with `baw` signed in (`baw wallet status --json` → `CONNECTED`), and
   `GET /api/live/status` returns `can_trade: true`. See `backend/app/GO_LIVE.md`.
 - At least one real NVDAB fill with a tx hash in the activity feed (a few USDT is enough; the track rules say
-  "a few dollars is enough").
+  "a few dollars is enough"). The first one is above (tx 0x228c0268…a19f22).
+- If the wallet session expired, sign in again from the dashboard's **Connect wallet** button (localhost only).
 - BscScan tab for that tx open in the background. 8004scan page for the agent open, if registered.
 - `abnormalTxnHandling = AutoReject` set in the Binance app (otherwise the wallet can lock mid-demo).
 - If any of this isn't ready, use the **fallback path** at the bottom.
@@ -73,7 +81,7 @@ Record at 1080p, browser zoom 110 %, dark theme. Timestamps are cumulative.*
 Use this if the real trade, the `baw` session or the region-gated Web3 API isn't available at recording time.
 
 ```bash
-cd frontend && npm install && npm run dev      # http://localhost:5173, in-browser mock API (default VITE_API_MODE=mock)
+backend/app/deploy/run.sh --mock              # or: cd frontend && npm install && npm run dev (mock is the npm default)
 ```
 
 1. Turn on the **Demo LIVE scenario** toggle (shown only with the mock API; the page reloads).
@@ -93,7 +101,8 @@ cd frontend && npm install && npm run dev      # http://localhost:5173, in-brows
 
 ## Facts to re-check right before recording
 
-- `run.ps1`, `GO_LIVE.md`, `/api/tokens.token_status` and `cooldowns` come with Bot 6's live PR; confirm it is merged.
+- `run.ps1`, `GO_LIVE.md`, `/api/tokens.token_status` and `cooldowns` are merged; the dashboard **Connect wallet** flow
+  (API v0.8) comes with bot6/polish, so confirm it is merged before showing it.
 - Emergency stop from the UI sends `flatten: false`: positions close **on the next bar** at that bar's close, not instantly.
   With 1 h bars, say "closes open positions" without "immediately", or demo with no open position.
 - Whether the ERC-8004 mainnet registration has been run (`ai-stack.md` §4 says it still has to be run from Rishu's PC).

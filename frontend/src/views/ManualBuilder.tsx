@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
+import { TokenPicker } from "../components/TokenPicker";
 import { DEFAULT_INITIAL_CAPITAL, TimeframeValues, type AutoConfig, type ManualStrategy, type Timeframe } from "../contracts";
 import { api } from "../api";
+import { ApiError } from "../api/types";
 import { Card, NumberInput, RuleRow, Segmented, Toggle, useToast } from "../components/ui";
-import { defaultStrategy, fillStrategy, TOKENS, type FullStrategy, isXStock } from "../lib/strategy";
+import { defaultStrategy, fillStrategy, type FullStrategy } from "../lib/strategy";
 import { BacktestResults, type BacktestRun } from "./BacktestResults";
 import { ensureLoop } from "./Dashboard";
 import { useLive } from "../lib/live";
@@ -31,14 +33,22 @@ export function ManualBuilder({ strategy: s, setStrategy, capital, setCapital, r
   const toast = useToast();
   const [busy, setBusy] = useState<"bt" | "act" | "nl" | "save" | null>(null);
   const [saved, setSaved] = useState<ManualStrategy[]>([]);
-  const loadSaved = () => api.listStrategies().then(setSaved).catch(() => setSaved([]));
+  // keep what we have if the list call fails (and say so) instead of silently emptying the dropdown
+  const loadSaved = (justSaved?: ManualStrategy) => api.listStrategies()
+    .then((list) => setSaved(justSaved && !list.some((x) => x.id === justSaved.id) ? [...list, justSaved] : list))
+    .catch((err) => { if (justSaved) setSaved((cur) => [...cur.filter((x) => x.id !== justSaved.id), justSaved]); toast(`Couldn't load saved strategies: ${err instanceof Error ? err.message : err}`, "error"); });
   useEffect(() => { loadSaved(); }, []);
   const save = async () => {
     setBusy("save");
     try {
-      const out = s.id ? await api.updateStrategy(s.id, toContract(s, true)) : await api.saveStrategy(toContract(s));
+      // a stale id (saved on another backend, or before a restart) gets a 404 on PUT: save it as a new strategy instead
+      const out = s.id
+        ? await api.updateStrategy(s.id, toContract(s, true)).catch((e) => { if (e instanceof ApiError && e.status === 404) return api.saveStrategy(toContract(s)); throw e; })
+        : await api.saveStrategy(toContract(s));
       setStrategy({ ...fillStrategy(out), id: out.id, created_at: out.created_at });
-      toast(`Saved "${out.name}"${out.version && out.version > 1 ? ` (v${out.version})` : ""}`, "success"); loadSaved();
+      // show it in the dropdown right away, then re-sync with the backend
+      setSaved((cur) => [...cur.filter((x) => x.id !== out.id), out]);
+      toast(`Saved "${out.name}"${out.version && out.version > 1 ? ` (v${out.version})` : ""}. Pick it any time under Saved strategies`, "success"); loadSaved(out);
     } catch (err) { toast(err instanceof Error ? err.message : String(err), "error"); } finally { setBusy(null); }
   };
   const remove = async () => {
@@ -47,12 +57,15 @@ export function ManualBuilder({ strategy: s, setStrategy, capital, setCapital, r
     catch (err) { toast(err instanceof Error ? err.message : String(err), "error"); }
   };
   const [text, setText] = useState("");
+  const [parseNotes, setParseNotes] = useState<string[]>([]);
   const describe = async () => {
     if (!text.trim()) return;
-    setBusy("nl");
+    setBusy("nl"); setParseNotes([]);
     try {
       const out = await api.llmParse(text, s.symbol);
-      if (out.kind === "MANUAL") { setStrategy({ ...fillStrategy(out.strategy), id: undefined }); toast("Form filled from your description. Review it, then run a backtest", "success"); }
+      setParseNotes(out.kind === "MANUAL" ? (out.notes ?? []).filter(Boolean) : []);
+      if (out.kind === "MANUAL") { // the parser always returns the contract default (CONFIRMATION); keep the form's Autonomous / Ask me first choice
+        setStrategy({ ...fillStrategy(out.strategy), activation: s.activation, id: undefined }); toast("Form filled from your description. Review it, then run a backtest", "success"); }
       else { onAutoParsed(out.config); toast("That sounds like Auto Mode, so I opened it with your settings", "info"); }
     } catch (err) { toast(`Couldn't parse that: ${err instanceof Error ? err.message : err}`, "error"); }
     finally { setBusy(null); }
@@ -111,6 +124,9 @@ export function ManualBuilder({ strategy: s, setStrategy, capital, setCapital, r
                 <span className="faint small" style={{ flex: 1 }}>{api.kind === "mock" ? "Mock keyword parser (Grok via backend in http mode)" : "Parsed by Grok on the backend"} · Ctrl+Enter</span>
                 <button className="btn" style={{ padding: "6px 12px" }} disabled={busy != null || !text.trim()} onClick={describe}>{busy === "nl" ? <span className="spin" /> : null}Fill form</button>
               </div>
+              {parseNotes.length > 0 && <div className="banner amber" style={{ marginTop: 8 }}><span className="grow small">
+                <b>Note from the parser:</b> {parseNotes.join(" ")}</span>
+                <button className="btn ghost" style={{ padding: "2px 8px" }} onClick={() => setParseNotes([])}>Dismiss</button></div>}
             </div>
           </div>
           <div className="group">
@@ -124,16 +140,17 @@ export function ManualBuilder({ strategy: s, setStrategy, capital, setCapital, r
                     catch (err) { toast(err instanceof Error ? err.message : String(err), "error"); }
                   }}>
                     <option value="">+ New (unsaved)</option>
+                    {s.id && !saved.some((x) => x.id === s.id) && <option value={s.id}>{s.name} · not on this backend, save again</option>}
                     {saved.map((x) => <option key={x.id} value={x.id}>{x.name} · {x.symbol}{x.version && x.version > 1 ? ` · v${x.version}` : ""}</option>)}
                   </select>
-                  <button className="btn ghost" disabled={busy != null} onClick={save}>{busy === "save" ? <span className="spin" /> : s.id ? "Update" : "Save"}</button>
+                  <button className="btn ghost" disabled={busy != null} onClick={save}>{busy === "save" ? <span className="spin" /> : s.id && saved.some((x) => x.id === s.id) ? "Update" : "Save"}</button>
                   {s.id && <button className="btn ghost" title="Delete saved strategy" onClick={remove}>🗑</button>}
                 </div>
               </div>
               <div style={{ gridColumn: "1 / -1" }}><span className="lbl">Strategy name</span>
                 <input type="text" value={s.name} onChange={(ev) => up((d) => { d.name = ev.target.value; })} /></div>
               <div><span className="lbl">Tokenized stock<TokenStatusBadge symbol={s.symbol} /></span>
-                <select value={s.symbol} onChange={(ev) => up((d) => { d.symbol = ev.target.value; })}>{TOKENS.map((t) => <option key={t.symbol} value={t.symbol} disabled={isXStock(t.symbol) && !simOnly} title={isXStock(t.symbol) ? "No liquidity on BSC" : undefined}>{t.label}{isXStock(t.symbol) ? " · No liquidity on BSC" : ""}</option>)}</select></div>
+                <TokenPicker value={s.symbol} onChange={(v) => up((d) => { d.symbol = v; })} simOnly={simOnly} /></div>
               <div><span className="lbl">Timeframe</span>
                 <select value={s.timeframe} onChange={(ev) => up((d) => { d.timeframe = ev.target.value as Timeframe; })}>{TimeframeValues.map((t) => <option key={t}>{t}</option>)}</select></div>
             </div>

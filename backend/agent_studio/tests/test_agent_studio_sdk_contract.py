@@ -51,7 +51,7 @@ def test_real_uri_generator_offline():
     )
     data = AgentURIGenerator.decode_registration_file_from_base64(uri)
     assert (
-        data["name"] == "teamwork-stock-agent" and data["services"][0]["name"] == "web"
+        data["name"] == "Regime" and data["services"][0]["name"] == "web"
     )
 
 

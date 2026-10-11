@@ -1,4 +1,4 @@
-"""One-off ERC-8004 agent-identity registration for the teamwork agent.
+"""One-off ERC-8004 agent-identity registration for Regime, the trading agent.
 
 Run on Rishu's PC (not in the trading loop):
 
@@ -441,7 +441,7 @@ def register(args: argparse.Namespace, net: NetworkInfo, out=print) -> int:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="python -m backend.agent_studio.register",
-        description=f"Register the teamwork agent's ERC-8004 identity (bnbagent {SDK_VERSION}). Key is read only from ${PRIVATE_KEY_ENV}.",
+        description=f"Register Regime's ERC-8004 identity (bnbagent {SDK_VERSION}). Key is read only from ${PRIVATE_KEY_ENV}.",
     )
     p.add_argument(
         "--network",

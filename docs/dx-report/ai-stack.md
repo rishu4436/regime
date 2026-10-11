@@ -1,11 +1,11 @@
 # AI stack
 
-*Part of the Developer Experience Report for team `teamwork` (BNB Hack: Tokenized Stocks). Written 11 Oct 2026.
+*Part of the Developer Experience Report for Regime (BNB Hack: Tokenized Stocks). Written 11 Oct 2026.
 Every claim below points at code in this repo or at our research notes. Anything we did not verify ourselves says so.*
 
 ## 1. What the AI does, and what it is not allowed to do
 
-The agent trades tokenized stocks (bStocks such as NVDAB, Ondo `…on` tokens) on BNB Smart Chain mainnet. Each loop tick
+Regime trades tokenized stocks (bStocks such as NVDAB, Ondo `…on` tokens) on BNB Smart Chain mainnet. Each loop tick
 runs: **control check → regime → strategy → risk → execute → explain → log** (`backend/app`).
 
 | Layer | What it is | Decides trades? |
@@ -17,7 +17,7 @@ runs: **control check → regime → strategy → risk → execute → explain �
 | Identity (`backend/agent_studio`) | BNB Agent Studio SDK `bnbagent` 0.5.0, ERC-8004 identity | No |
 
 We chose this split on purpose. Trading decisions must be reproducible, testable and auditable, so no LLM output sits
-on the money path. The LLM makes the agent *understandable*. It explains every buy, sell and stay-out, summarises the
+on the money path. The LLM makes Regime *understandable*. It explains every buy, sell and stay-out, summarises the
 regime and the active strategy, answers status questions, and turns plain English into a strategy config.
 
 ## 2. The LLM layer: Grok with a template fallback
@@ -40,7 +40,7 @@ regime and the active strategy, answers status questions, and turns plain Englis
 
 ### LIVE-mode guardrails (`backend/llm/live.py`)
 
-In LIVE the agent trades on its own with real funds, so the explanation has to say exactly that:
+In LIVE Regime trades on its own with real funds, so the explanation has to say exactly that:
 
 1. **No approval wording.** If Grok's text matches the approval pattern ("confirm…", "await…", "your approval",
    "pending approval", …), it is rejected and the template text is used instead. Approval phrases that come in from
@@ -55,11 +55,21 @@ In LIVE the agent trades on its own with real funds, so the explanation has to s
 
 Three teams emit reasons in three formats: engine codes (`live_*`, `insufficient_data`), risk strings
 (`"Blocked (<check>): <detail>"`), and Binance Web3 / `baw` error codes. `live.py` maps all of them to plain English.
-It keeps the numbers and says whether **the agent's risk limits** or **the Agentic Wallet** set the cap. Examples:
+It keeps the numbers and says whether **Regime's risk limits** or **the Agentic Wallet** set the cap. Examples:
 40367/40369 (market closed), 40374 (no liquidity), 40375 (Ondo 20 USD minimum), 40401 (quote expired),
 `session_expired`, `order_in_flight` and `pending_exit` ("the exit is held because the buy is still settling on-chain;
 it runs as soon as the fill is confirmed"). Unknown reasons pass through cleaned up, and `live.handled_codes()` lists
 every mapped code so the integration tests can check coverage.
+
+**Price impact** gets its own wording, because risk now treats it by direction (`15beac5`, `c89f7e0`). A quote that is
+**worse** than the market price by more than 1 % reads as slippage ("the quote's price was 1.5% worse than the market
+price, more than the 1% slippage limit"). A quote that is a little **better** is not a problem and is not mentioned. A
+quote that is **more than 3 % better** reads "the quote was suspiciously better than the market price (5% better, more
+than 3%), so Regime skipped it as a likely bad quote". Binance's own `priceImpactPercent` has no documented sign, so
+risk and the engine count its size as a cost: "Binance didn't say which way the price impact goes, so Regime treated it
+as a cost to be safe, and at 1.5% it is over the 1% limit". The engine's stay-out and risk's block produce the same
+sentence for the same situation, and an explanation says it only once. Grok gets the same rule in its system prompt
+and the de-duplicated reasons in its facts.
 
 ## 3. Binance Agentic Wallet as the executor
 
@@ -106,14 +116,14 @@ there. The numbers stay fixed because other sections cite them.
 | 1 | Region block: Web3 API calls from the US build box return **40304** with HTTP 200. | See [exchange.md](exchange.md) #1. | |
 | 2 | `baw` QR-only sign-in, and the session can end silently (up to 48 h). | See [exchange.md](exchange.md) #9. The explainer turns `session_expired` / `wallet_not_ready` into "paused until Rishu re-scans the QR code". | |
 | 3 | `abnormalTxnHandling` must be set to `AutoReject` by hand, or a flagged trade tx-locks the wallet. | See [exchange.md](exchange.md) #11. | |
-| 4 | No per-transaction limit; the allowed-token list can't be read back. | See [exchange.md](exchange.md) #10. The explainer still says whether a cap was set by the agent or by the wallet. | |
+| 4 | No per-transaction limit; the allowed-token list can't be read back. | See [exchange.md](exchange.md) #10. The explainer still says whether a cap was set by Regime or by the wallet. | |
 | 5 | The `baw` quote JSON has no price impact or quoteId, and the order list has no fill amount. | See [exchange.md](exchange.md) #8 and #13. The explainer says "Price impact unknown" rather than guessing. | |
 | 6 | Unclear whether sells count against `dailyLimit`. | See [exchange.md](exchange.md) #10 and [risk.md](risk.md) #2. | |
 | 7 | CLI ergonomics: no HTTP timeout, errors on stdout, no idempotency key, `baw.cmd` on Windows. | See [exchange.md](exchange.md) #14. | |
 | 8 | **Agent Studio's managed runtime is testnet-only** (48 h trial). It has **no Agentic Wallet wallet kind**, and the `bag` scaffold is a TypeScript *seller* agent. | Our mainnet trading loop can't run in Studio's cloud, so we use the Python SDK only for the identity. | A `baw` wallet kind and a mainnet runtime; a Python trading-agent template. |
 | 9 | **The `bnbagent` SDK's default testnet RPC** (`data-seed-prebsc-2-s2.binance.org:8545`) timed out from our box. | We had to override the RPC (`bsc-testnet-rpc.publicnode.com` worked). `register.py` reads `RPC_URL_BSC_TESTNET` / `RPC_URL_BSC_MAINNET`. | Default to a more reliable RPC, or try several. |
 | 10 | **`stock-agent.bnbchain.org` (x402 Stock Analyze Agent) is slow.** Our check of `GET /x402/price` at 07:44 IST took 15.4 s (HTTP 200), and the docs say a report takes 2–5 min. | Too slow for a live loop. It is only usable as an async "second opinion", so we left it as notes (`X402_NOTES.md`). | Publish latency expectations and a cached price endpoint. |
-| 11 | xStock shows "TRADING" but isn't liquid (TSLAx quote → 40374). | See [exchange.md](exchange.md) #4. Mapped to "the agent skips this token for a short cooldown". | |
+| 11 | xStock shows "TRADING" but isn't liquid (TSLAx quote → 40374). | See [exchange.md](exchange.md) #4. Mapped to "Regime skips this token for a short cooldown". | |
 | 12 | **No shared reason vocabulary.** The engine emits codes (`live_*`), risk emits `"Blocked (<check>): <detail>"` strings, and the exchange emits Binance numeric codes (40367, 40374, …) with no message. | Plain-language explanations need a hand-maintained table in `live.py` (74 reason codes plus 17 Binance error codes), kept in sync with three other modules. `handled_codes()` lets tests check coverage. | For Binance: a human `message` and `retryable` flag on every code. For starter kits: a shared reason-code enum in the contracts from day one. |
 
 What worked well: the Skills Hub's wallet skill gave us clear, safe execution rules. The keyless RWA market-status
@@ -126,3 +136,5 @@ MegaFuel paymaster usually makes testnet registration gas-free.
 - `backend/agent_studio` (`e190f24`): **28 passed, 1 skipped**. The skipped test checks against the real `bnbagent` SDK
   and needs the package installed.
 - Full integration build `integ-v8` @ `8a268d9`: **887 passed, 1 skipped**.
+- Price-impact wording and Regime naming (`bot5/polish`, on risk `15beac5` + engine `c89f7e0`, 11 Oct ~09:45 IST):
+  `backend/llm` + `backend/agent_studio` **279 passed, 1 skipped**; full suite **1118 passed, 1 skipped**.

@@ -22,6 +22,7 @@ export interface LiveLimits {
   daily_notional_cap_usdt?: number | null;   // 100 traded per UTC day
   max_exposure_usdt?: number | null;         // 50 open at once
   max_slippage_pct?: number | null;          // 1
+  max_favorable_impact_pct?: number | null;  // 3: a quote better than the market by more than this is skipped as a likely bad quote
   stale_after_s?: number | null;             // 900
   bnb_gas_reserve?: number | null;           // 0.002 BNB
   fee_buffer_usdt?: number | null;
@@ -87,7 +88,20 @@ export interface LoopHeartbeat {
   heartbeat?: { started_at: string; uptime_s: number; last_tick_at?: string | null; seconds_since_tick?: number | null; restarts?: number; last_error?: string | null; autostart?: boolean } | null;
 }
 
-export type ParseResult = { kind: "MANUAL"; strategy: ManualStrategy } | { kind: "AUTO"; config: AutoConfig };
+/** notes: parser remarks to show the user, e.g. the default entry rule it filled in (POST /api/llm/parse). */
+export type ParseResult = ({ kind: "MANUAL"; strategy: ManualStrategy } | { kind: "AUTO"; config: AutoConfig }) & { notes?: string[] };
+/** POST /api/wallet/connect (localhost only, else 403): starts the Agentic Wallet QR sign-in. */
+export interface WalletConnectStart { qr_url: string; session_id: string; expires_at?: string | null; /** code to compare/enter in the Binance App, when baw gives one */ pairing_code?: string | null }
+/** GET /api/wallet/connect?session_id=: on "connected" the backend has already re-read the wallet limits. */
+export interface WalletConnectStatus {
+  status: "pending" | "connected" | "expired" | "failed";
+  address?: string | null;
+  /** true when the signed-in address differs from the one the agent saved: LIVE stays blocked ("different wallet connected"). */
+  wallet_changed?: boolean | null;
+  error?: string | null;
+}
+/** POST /api/wallet/reconcile (localhost only; 409 while orders settle or balances are unavailable). */
+export interface WalletReconcileResult { address?: string | null; was_blocked?: boolean; kept?: unknown[]; dropped?: unknown[]; wallet_blocked?: boolean }
 export type ActivateManualBody = { strategy_id: string } | { strategy: ManualStrategy };
 
 /** Error from the API: 404 unknown id/symbol, 409 invalid state, 422 validation. */
@@ -139,6 +153,9 @@ export interface ApiClient {
   // live / wallet (null = endpoint not available on this backend yet)
   getLiveGate(): Promise<LiveGate | null>;
   getWallet(): Promise<WalletInfo | null>;
+  startWalletConnect(): Promise<WalletConnectStart>;
+  getWalletConnect(session_id: string): Promise<WalletConnectStatus>;
+  reconcileWallet(): Promise<WalletReconcileResult>;
   approve(decisionId: string): Promise<Decision>;
   reject(decisionId: string, reason?: string): Promise<Decision>;
   /** Manual override: close ONE lot by Position.id at the last price (signal.exit_reason MANUAL). 404 if not open. */

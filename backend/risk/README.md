@@ -192,7 +192,8 @@ blocked by a LIVE guard and never wait.
 | `max_data_age_seconds` | 900 | `RISK_LIVE_MAX_DATA_AGE_S` | `live_stale_data` |
 | `max_future_skew_seconds` | 60 | — | `live_stale_data` |
 | `max_quote_age_seconds` | 30 (quote TTL) | — | `live_quote` |
-| `max_slippage_pct` | 1.0 | `RISK_LIVE_MAX_SLIPPAGE_PCT` | `live_slippage` |
+| `max_slippage_pct` | 1.0 | `RISK_LIVE_MAX_SLIPPAGE_PCT` | `live_slippage` (max **adverse** impact + max quote slippage tolerance) |
+| `max_favorable_impact_pct` | 3.0 | `RISK_LIVE_MAX_FAVORABLE_IMPACT_PCT` | `live_slippage` (sanity cap on a quote **better** than the reference) |
 | `require_quote` | False | — | `live_quote` |
 | `market_hours_enabled` / `market_open_utc` / `market_close_utc` / `market_weekdays_only` | False (24/7) / 13:30 / 20:00 / True | `RISK_LIVE_MARKET_HOURS=true` to enable | `live_market_hours` |
 | `market_hours_exempt_symbols` | [] | — | `live_market_hours` |
@@ -231,8 +232,11 @@ Semantics:
   bar OPEN time, so a 1h bar's open is always more than 900 s old: pass `data_timestamp` = when the price was fetched (or the bar
   close). Missing → blocked. Naive datetimes are treated as UTC.
 - **Quote** (if supplied): symbol/side must match; it must not be expired or older than `max_quote_age_seconds`.
-  `|quote.price - ref| / ref` and `quote.slippage_bps/100` must both be `<= max_slippage_pct` (ref =
-  `context.reference_price` → `signal.price` → `context.bar.close`; none → blocked). `quote.notional` must be `<=` the approved
+  Price impact is directional (ref = `context.reference_price` → `signal.price` → `context.bar.close`; none → blocked):
+  for a BUY, adverse = `(quote.price - ref) / ref` when positive; for a SELL, adverse = `(ref - quote.price) / ref` when
+  positive (`quote_impact_pct`). Adverse impact must be `<= max_slippage_pct`. A favorable quote (cheaper BUY / richer
+  SELL) is allowed up to `max_favorable_impact_pct` (3 %); beyond that it is blocked as "likely a bad quote".
+  `quote.slippage_bps/100` must be `<= max_slippage_pct` either way. `quote.notional` must be `<=` the approved
   size. With balances, `quote.notional + quote.fee <= stable balance - fee buffer`.
 - **Market hours**: 13:30–20:00 UTC Mon–Fri matches the US session during EDT. During EST the session is 14:30–21:00 UTC, so
   adjust `market_open_utc`/`market_close_utc`. Exchange holidays are not modelled. Uses `context.now` or the clock.
@@ -324,7 +328,10 @@ this one ("keeping X USDT of it to sell open positions ..."). Then `min_order_no
 unknown) and `warnings: [{code, message}]` (always present, `[]` = none): `exit_quota_shortfall`, and
 `wallet_limits_stale` when `wallet_limits.fetched_at` is older than 15 min (vs `context.now` or the clock).
 
-**Exchange price impact.** `LiveContext.price_impact_pct` (Web3 quote `priceImpactPercent`, in %, sign ignored) — or a
+**Exchange price impact.** `LiveContext.price_impact_pct` (Web3 quote `priceImpactPercent`, in %, sign ignored: Binance
+does not document the sign, only positive samples were seen, and Bot 4's `exchange/status.py` passes the route value
+through unchanged but computes its own fallback as positive = worse for us, so the two can't be told apart; the magnitude
+is counted as adverse against `max_slippage_pct`, and the favorable allowance applies only to the quote-vs-reference path) — or a
 price-impact attribute on `Quote` if the contract ever adds one — replaces the quote-vs-reference comparison in
 `live_slippage` ("Exchange-reported price impact ..."). Without it the old reference-price fallback runs. The quote's
 `slippage_bps` tolerance is checked either way.

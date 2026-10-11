@@ -1,6 +1,6 @@
 # Strategy engine
 
-*Part of the Developer Experience Report for team `teamwork` (BNB Hack: Tokenized Stocks). Written 11 Oct 2026.
+*Part of the Developer Experience Report for **Regime**, our autonomous tokenized-stock agent (BNB Hack: Tokenized Stocks). Written 11 Oct 2026.
 Every claim below points at code in `backend/engine` (branch `bot2/live` @ `4b2749b`) or at our research notes. Anything
 we did not verify ourselves says so.*
 

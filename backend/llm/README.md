@@ -3,7 +3,7 @@
 **Owner:** Bot 5 — LLM & Explanation Layer. This bot edits only this directory.
 
 ## Scope (verbatim from the spec PDF)
-**Goal:** Make the agent understandable via Grok.
+**Goal:** Make the agent (product name **Regime**) understandable via Grok.
 
 - Natural language → structured strategy / agent config
 - Explain every buy / stay-out decision in plain language
@@ -62,18 +62,18 @@ Listing entry conditions (e.g. "RSI below 30 and above the 200 SMA") enables onl
 ## LIVE mode (real funds, autonomous 24/7) - `backend/llm/live.py`
 
 When `Decision.mode == LIVE` (or the execution has `mode=LIVE` / `real_funds=True`) explanations switch to live wording:
-the agent acts on its own, with **no confirmation/approval wording** (Grok output containing it is rejected and the
+Regime acts on its own, with **no confirmation/approval wording** (Grok output containing it is rejected and the
 template is used instead).
 
-- Fills: "The agent bought NVDAB on its own with real funds on BNB Chain mainnet: 24.99 USDT via SWAP at a fill price of
+- Fills: "Regime bought NVDAB on its own with real funds on BNB Chain mainnet: 24.99 USDT via SWAP at a fill price of
   182.4 (...). Price impact 0.31%. Tx hash 0x...: https://bscscan.com/tx/0x...". Fields are read defensively from the
   execution (attribute, pydantic extra or dict): `tx_hash|txHash`, `explorer_url|explorerUrl` (must start with
   `https://bscscan.com/tx/`, else rebuilt from a real 66-char tx hash), `route|path`, `real_funds|realFunds`,
   `amount_usdt|notional_usdt|amount|notional`, `fill_price|avg_price`, `price_impact_pct|priceImpactPercent` (also on a
   nested `quote`). If Grok omits the tx link, it is appended.
 - Risk blocks: Bot 3 `"Blocked (<check>): <detail>"` reasons become plain language naming the limit, keeping the
-  numbers, and saying whether the agent's risk limits or the Agentic Wallet set a cap. Size cuts on approved trades are
-  explained too ("size cut from 30.00 to 25.00 USDT by the per-order cap (set by the agent's risk limits)").
+  numbers, and saying whether Regime's risk limits or the Agentic Wallet set a cap. Size cuts on approved trades are
+  explained too ("size cut from 30.00 to 25.00 USDT by the per-order cap (set by Regime's risk limits)").
 - Engine STAY_OUT codes (Bot 2 `live_*`, `insufficient_data`) and Binance Web3 error codes in `ExecutionResult.error`
   (40367/40369 market closed, 40374 liquidity, 40375 Ondo 20 USD minimum, 40401 quote expired, ...) are mapped.
   Unknown reasons pass through cleaned; reserve/quota/allowance wording maps to the exit-quota reserve.
@@ -81,3 +81,22 @@ template is used instead).
   is a percent (`0.35` = 0.35%); `None` is shown as "Price impact unknown". Bot 3 warnings `exit_quota_shortfall`,
   `wallet_limits_stale` and wallet session expiry ("paused until Rishu re-scans the QR code") are mapped.
 - `live.handled_codes()` lists every mapped code.
+- Status line: "Regime is trading autonomously 24/7 with real funds on BNB Chain mainnet (LIVE mode)." when confirmation
+  mode is off; otherwise "Regime is <running|paused|EMERGENCY STOPPED> in <mode> mode ...".
+
+### Price impact (risk `15beac5`, engine `c89f7e0`)
+
+`live.price_impact_text(code, detail)` reads risk's directional `live_slippage` detail and the engine's
+`live_price_impact` detail (regexes, never raises; unknown/older formats fall back to the generic slippage wording):
+
+| Situation | Explanation |
+|---|---|
+| Quote worse than the market price by more than 1 % (buy pays more / sell gets less) | "the quote's price was 1.5% worse than the market price, more than the 1% slippage limit" |
+| Quote better than the market price, within the 3 % sanity cap | nothing (it is not a problem; the trade is not blocked for it) |
+| Quote better by more than the sanity cap | "the quote was suspiciously better than the market price (5% better, more than 3%), so Regime skipped it as a likely bad quote" |
+| Binance's unsigned `priceImpactPercent` over 1 % ("direction not reported, counted as adverse") | "Binance didn't say which way the price impact goes, so Regime treated it as a cost to be safe, and at 1.5% it is over the 1% limit" |
+| Slippage tolerance above the cap | "the allowed slippage on the swap (1.5%) is above the 1% limit" |
+
+The engine stay-out and the risk block give the identical sentence for the same situation (numbers rendered by
+`live.pct_text`), and `templates.dedupe_block_reasons` drops the repeat ("Risk blocked the trade too, for the same
+reason"). The Grok facts carry the de-duplicated `block_reasons`, and the system prompt has the same price-impact rules.

@@ -1,0 +1,177 @@
+{
+ "_note": "Exact POST /api/strategies bodies the dashboard sends (frontend/src/lib/strategy.ts defaultStrategy() and a parser-filled form via fillStrategy(), through ManualBuilder.toContract). Regenerate if the form changes.",
+ "dashboard_default": {
+  "name": "My strategy",
+  "symbol": "NVDAB",
+  "timeframe": "1h",
+  "entry": {
+   "logic": "AND",
+   "rsi_below": {
+    "enabled": false,
+    "period": 14,
+    "threshold": 35
+   },
+   "price_above_sma": {
+    "enabled": false,
+    "period": 50
+   },
+   "price_above_ema": {
+    "enabled": true,
+    "period": 20
+   },
+   "macd_bullish_cross": {
+    "enabled": false,
+    "params": {
+     "fast": 12,
+     "slow": 26,
+     "signal": 9
+    }
+   },
+   "bollinger_lower": {
+    "enabled": false,
+    "period": 20,
+    "std_dev": 2,
+    "proximity_pct": 2
+   },
+   "volume_above_avg": {
+    "enabled": false,
+    "period": null,
+    "multiplier": 1.1
+   },
+   "breakout": {
+    "enabled": false,
+    "lookback": 20,
+    "direction": "HIGH"
+   }
+  },
+  "exit": {
+   "take_profit_pct": 12,
+   "stop_loss_pct": 6,
+   "trailing_stop": {
+    "enabled": false,
+    "pct": 4
+   },
+   "rsi_above": {
+    "enabled": true,
+    "period": 14,
+    "threshold": 70
+   },
+   "macd_bearish_cross": {
+    "enabled": false,
+    "params": {
+     "fast": 12,
+     "slow": 26,
+     "signal": 9
+    }
+   }
+  },
+  "risk": {
+   "position_size_pct": 15,
+   "max_open_positions": 1,
+   "cooldown_bars": 5,
+   "max_loss_per_trade_pct": null
+  },
+  "filters": {
+   "market_hours": {
+    "enabled": false,
+    "start_hour_utc": 13,
+    "end_hour_utc": 20,
+    "weekdays_only": true
+   },
+   "min_volume": {
+    "enabled": false,
+    "multiplier": 1.1,
+    "min_volume": null
+   }
+  },
+  "activation": "AUTO_EXECUTE",
+  "version": 1
+ },
+ "parser_filled": {
+  "name": "NVDAB rule set",
+  "symbol": "NVDAB",
+  "timeframe": "1h",
+  "entry": {
+   "logic": "AND",
+   "rsi_below": {
+    "enabled": false,
+    "period": 14,
+    "threshold": 35
+   },
+   "price_above_sma": {
+    "enabled": false,
+    "period": 50
+   },
+   "price_above_ema": {
+    "enabled": true,
+    "period": 20
+   },
+   "macd_bullish_cross": {
+    "enabled": false,
+    "params": {
+     "fast": 12,
+     "slow": 26,
+     "signal": 9
+    }
+   },
+   "bollinger_lower": {
+    "enabled": false,
+    "period": 20,
+    "std_dev": 2,
+    "proximity_pct": 2
+   },
+   "volume_above_avg": {
+    "enabled": true,
+    "period": null,
+    "multiplier": 1.1
+   },
+   "breakout": {
+    "enabled": false,
+    "lookback": 20,
+    "direction": "HIGH"
+   }
+  },
+  "exit": {
+   "take_profit_pct": 12,
+   "stop_loss_pct": 3,
+   "trailing_stop": {
+    "enabled": false,
+    "pct": 4
+   },
+   "rsi_above": {
+    "enabled": true,
+    "period": 14,
+    "threshold": 70
+   },
+   "macd_bearish_cross": {
+    "enabled": false,
+    "params": {
+     "fast": 12,
+     "slow": 26,
+     "signal": 9
+    }
+   }
+  },
+  "risk": {
+   "position_size_pct": 15,
+   "max_open_positions": 1,
+   "cooldown_bars": 5,
+   "max_loss_per_trade_pct": null
+  },
+  "filters": {
+   "market_hours": {
+    "enabled": false,
+    "start_hour_utc": 13,
+    "end_hour_utc": 20,
+    "weekdays_only": true
+   },
+   "min_volume": {
+    "enabled": false,
+    "multiplier": 1.1,
+    "min_volume": null
+   }
+  },
+  "activation": "AUTO_EXECUTE",
+  "version": 1
+ }
+}

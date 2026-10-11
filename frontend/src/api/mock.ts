@@ -10,7 +10,7 @@ import { detectRegime, presetWantsBuy, STYLE_MAP } from "../lib/auto";
 import { appendCandle, generateMixedCandles, rng } from "../lib/candles";
 import { parseStrategyText } from "../lib/parseText";
 import { backtest, conditionLabel, evaluateLast, fillStrategy, type FullStrategy } from "../lib/strategy";
-import { ApiError, type ActivateManualBody, type ApiClient, type LiveCooldown, type LiveGate, type LiveLimits, type ParseResult, type PresetsTable, type WalletInfo } from "./types";
+import { ApiError, type ActivateManualBody, type ApiClient, type LiveCooldown, type LiveGate, type LiveLimits, type ParseResult, type PresetsTable, type WalletInfo, type WalletConnectStatus } from "./types";
 
 /** Mock-only demo scenario: "LIVE" pretends to be a LIVE (mainnet) backend with an Agentic Wallet so the LIVE UI can be
  * shown without funds. Nothing leaves the browser; tx hashes are random and labelled as demo. Persisted; switching reloads. */
@@ -96,7 +96,7 @@ export class MockApi implements ApiClient {
     const exposure = (this.portfolio.positions ?? []).reduce((a, p) => a + p.quantity * (p.current_price ?? p.avg_entry_price), 0);
     const loss = Math.max(0, -(this.portfolio.daily_pnl ?? 0) - (this.portfolio.positions ?? []).reduce((a, p) => a + (p.unrealized_pnl ?? 0), 0));
     return { live_allowed: true, per_order_cap_usdt: LIVE_CAP, daily_loss_cap_usdt: LIVE_DAILY_LOSS, daily_notional_cap_usdt: LIVE_DAILY_NOTIONAL,
-      daily_limit_usdt: LIVE_DAILY_NOTIONAL, max_exposure_usdt: LIVE_EXPOSURE, max_slippage_pct: 1, stale_after_s: 900, bnb_gas_reserve: LIVE_GAS_RESERVE,
+      daily_limit_usdt: LIVE_DAILY_NOTIONAL, max_exposure_usdt: LIVE_EXPOSURE, max_slippage_pct: 1, max_favorable_impact_pct: 3, stale_after_s: 900, bnb_gas_reserve: LIVE_GAS_RESERVE,
       fee_buffer_usdt: 1, min_wallet_usdt: 70, min_order_usdt: 10, market_hours_utc: null, daily_used_usdt: this.dailyNotional, daily_loss_usdt: loss, open_exposure_usdt: exposure,
       daily_remaining_usdt: Math.max(0, LIVE_DAILY_NOTIONAL - this.dailyNotional), warnings: exposure > Math.max(0, LIVE_DAILY_NOTIONAL - this.dailyNotional) ? [`Exit reserve: ${Math.max(0, LIVE_DAILY_NOTIONAL - this.dailyNotional).toFixed(2)} USDT of daily quota left can't cover selling all open positions (${exposure.toFixed(2)} USDT)`] : [], limit_source: { per_order_cap_usdt: "risk", daily_limit_usdt: "risk" },
       allowed_tokens: "ALL", tradable_tokens: TOKENS.filter((t) => !/x$/.test(t.symbol)).map((t) => t.symbol), wallet: { daily_limit_usdt: 200, per_order_cap_usdt: 50, allowed_tokens: null } };
@@ -131,6 +131,19 @@ export class MockApi implements ApiClient {
       ],
       bnb_gas_reserve: LIVE_GAS_RESERVE, limits: this.liveLimits(), updated_at: now(), live_gate: this.gate() });
   }
+  // mock QR sign-in: "scanned" ~6 s after the QR is shown
+  private connectSessions = new Map<string, number>();
+  startWalletConnect() {
+    const id = `mock-${Date.now().toString(36)}`; this.connectSessions.set(id, Date.now());
+    return ok({ qr_url: `https://example.invalid/mock-agentic-wallet-login?session=${id}`, session_id: id, expires_at: new Date(Date.now() + 120_000).toISOString() }, 300);
+  }
+  getWalletConnect(session_id: string) {
+    const t0 = this.connectSessions.get(session_id);
+    if (t0 == null) return fail(404, `unknown session ${session_id}`);
+    const age = Date.now() - t0;
+    return ok<WalletConnectStatus>(age > 120_000 ? { status: "expired" } : age > 6000 ? { status: "connected", address: DEMO_WALLET, wallet_changed: false } : { status: "pending" }, 150);
+  }
+  reconcileWallet() { return ok({ address: DEMO_WALLET, was_blocked: false, kept: [], dropped: [], wallet_blocked: false }, 300); }
   getTokens(q = "") {
     const ql = q.toLowerCase();
     return ok(TOKENS.filter((t) => !ql || t.symbol.toLowerCase().includes(ql) || t.name.toLowerCase().includes(ql))
@@ -323,7 +336,14 @@ export class MockApi implements ApiClient {
   llmParse(text: string, default_symbol?: string) {
     if (!text.trim()) return fail(422, "text: must not be empty");
     const out = parseStrategyText(text, default_symbol);
-    return ok<ParseResult>("entry" in out || "exit" in out ? { kind: "MANUAL", strategy: out as ManualStrategy } : { kind: "AUTO", config: out as AutoConfig }, 450);
+    if (!("entry" in out || "exit" in out)) return ok<ParseResult>({ kind: "AUTO", config: out as AutoConfig, notes: [] }, 450);
+    const m = out as ManualStrategy, e = m.entry, notes: string[] = [];
+    // mirror Bot 5: no entry rule in the text -> team default "price above EMA(20)", with a note saying so
+    if (e && ![e.rsi_below, e.price_above_sma, e.price_above_ema, e.macd_bullish_cross, e.bollinger_lower, e.volume_above_avg, e.breakout].some((c) => c?.enabled)) {
+      e.price_above_ema = { ...e.price_above_ema, enabled: true, period: 20 };
+      notes.push("No entry rule found in your text, so the entry is set to the team default: buy when price is above EMA(20).");
+    }
+    return ok<ParseResult>({ kind: "MANUAL", strategy: m, notes }, 450);
   }
   llmAsk(question: string) {
     if (!question.trim()) return fail(422, "question: must not be empty");

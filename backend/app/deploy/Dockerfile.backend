@@ -1,4 +1,4 @@
-# Build context: repo root  (docker compose -f backend/app/deploy/docker-compose.yml up --build)
+# Regime backend. Build context: repo root  (docker compose -f backend/app/deploy/docker-compose.yml up --build)
 FROM python:3.11-slim
 WORKDIR /app
 COPY pyproject.toml README.md ./

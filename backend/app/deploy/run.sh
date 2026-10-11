@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# One-command local run: backend (FastAPI :8000) + frontend (Vite :5173, proxies /api /ws /health).
-#   backend/app/deploy/run.sh                     # SIM mode, both services
+# Regime - one-command local run: backend (FastAPI :8000) + dashboard (Vite :5173, proxies /api /ws /health).
+#   backend/app/deploy/run.sh                     # SIM mode, both services; the dashboard talks to the real backend
+#   backend/app/deploy/run.sh --mock              # dashboard on built-in mock data instead (no backend calls)
 #   backend/app/deploy/run.sh --backend-only      # API only (http://localhost:8000/docs)
 #   backend/app/deploy/run.sh --supervised        # 24/7: restart the backend whenever it exits (backoff 2..60 s)
 #   backend/app/deploy/run.sh --supervised --backend-only
@@ -9,14 +10,17 @@
 # BINANCE_API_KEY/BINANCE_API_SECRET (refused at startup otherwise, naming what is missing). See backend/app/GO_LIVE.md.
 # --supervised also sets LOOP_AUTOSTART=true (resume the saved agent, or Auto on DEFAULT_AGENT_SYMBOL / NVDAB in
 # PAPER/LIVE). A config error (LIVE refused) is checked before the first start and exits 3 instead of looping.
+# The dashboard listens on 127.0.0.1 only (UI_HOST=0.0.0.0 to share it on your LAN; wallet sign-in stays localhost-only).
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$ROOT"
 BACKEND_ONLY=0
 SUPERVISED=0
+UI_MOCK=0
 for a in "$@"; do
   case "$a" in
     --backend-only) BACKEND_ONLY=1 ;;
+    --mock) UI_MOCK=1 ;;
     --supervised) SUPERVISED=1 ;;
     *) echo "unknown option: $a" >&2; exit 2 ;;
   esac
@@ -48,12 +52,16 @@ cleanup() { STOP=1; kill $API_PID $UI_PID 2>/dev/null || true; }
 trap cleanup EXIT INT TERM
 
 if [[ $BACKEND_ONLY -eq 0 ]]; then
-  ( cd frontend && { [[ -d node_modules ]] || npm install --no-audit --no-fund; } && npm run dev -- --host 0.0.0.0 ) &
+  # real backend unless asked for mock (env beats frontend/.env*, so a copied .env.example can't switch it to mock)
+  if [[ $UI_MOCK -eq 1 ]]; then export VITE_API_MODE=mock; else export VITE_API_MODE="${VITE_API_MODE:-http}"; fi
+  UI_HOST="${UI_HOST:-127.0.0.1}"
+  # npm install every time: picks up new dependencies (e.g. qrcode-generator) after a git pull; fast when up to date
+  ( cd frontend && npm install --no-audit --no-fund && npm run dev -- --host "$UI_HOST" ) &
   UI_PID=$!
-  echo "==> UI: http://localhost:5173"
+  echo "==> Regime dashboard: http://localhost:5173  (VITE_API_MODE=$VITE_API_MODE)"
 fi
 
-echo "==> TRADING_MODE=$TRADING_MODE  logs: $LOG_DIR  api: http://localhost:$PORT/docs  supervised: $SUPERVISED"
+echo "==> Regime backend: TRADING_MODE=$TRADING_MODE  data (saved strategies, agent state, logs): $LOG_DIR  api: http://localhost:$PORT/docs  supervised: $SUPERVISED"
 if [[ $SUPERVISED -eq 0 ]]; then
   uvicorn backend.app.main:app --host 0.0.0.0 --port "$PORT" &
   API_PID=$!

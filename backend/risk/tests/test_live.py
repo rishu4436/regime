@@ -308,7 +308,7 @@ def test_quote_mismatch(clock):
     assert not v.approved
 
 
-@pytest.mark.parametrize("qprice,bps,ok", [(100.99, 50, True), (101.5, 50, False), (98.0, 50, False), (100.2, 150, False)])
+@pytest.mark.parametrize("qprice,bps,ok", [(100.99, 50, True), (101.5, 50, False), (98.0, 50, True), (96.0, 50, False), (100.2, 150, False)])
 def test_quote_slippage(clock, qprice, bps, ok):
     v = live_rm(clock).check(lbuy(), lpf(), lctl(), context=ctx(quote=quote(price=qprice, slippage_bps=bps)))
     assert names(v)["live_slippage"].passed is ok and v.approved is ok
@@ -362,3 +362,11 @@ def test_pending_buy_counts_toward_daily_notional_then_settles(clock):
     assert rm.daily_live_notional_used(now=T0) == pytest.approx(34.5)
     rm.record_execution(fill(0, status=OrderStatus.FAILED, coid="p2"))  # failed swap releases it
     assert rm.daily_live_notional_used(now=T0) == pytest.approx(19.5)
+
+
+def test_daily_notional_counts_buy_fee(clock):
+    rm = live_rm(clock)
+    r = fill(19.99)
+    r = r.model_copy(update={"fee": 0.02})
+    rm.record_execution(r)
+    assert rm.daily_live_notional_used(now=T0) == pytest.approx(20.01)

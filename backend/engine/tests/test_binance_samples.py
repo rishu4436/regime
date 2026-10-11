@@ -31,7 +31,7 @@ def live(now=NOW, market_context=None, **cfg) -> DefaultStrategyEngine:
     return DefaultStrategyEngine(
         live_safe=True,
         clock=lambda: now,
-        live_config=LiveSafetyConfig(**cfg) if cfg else None,
+        live_config=LiveSafetyConfig(**{"shrink_manual_size": True, **cfg}),
         market_context=market_context,
     )
 
@@ -245,7 +245,12 @@ def test_price_impact_gate_matches_risk_1pct():
         sig = run({"status": "trading", **ctx})
         assert sig.action == Action.STAY_OUT and sig.conditions_failed == ["live_price_impact"]
     # <= 1% -> full live-safe size (20 USDT on 1000), strings parsed with float()
-    for imp in ("0.35", 0.35, "1", 1.0, "0.0001", 0, "0", -0.2):
+    # the exchange reports no sign: a large NEGATIVE impact is blocked by size, like Bot 3's risk
+    for imp in (-1.5, "-1.01", -3):
+        sig = run({"status": "trading", "priceImpactPercent": imp})
+        assert sig.action == Action.STAY_OUT and sig.conditions_failed == ["live_price_impact"], imp
+        assert "direction not reported" in sig.reason
+    for imp in ("0.35", 0.35, "1", 1.0, "0.0001", 0, "0", -0.2, "-1"):
         sig = run({"status": "trading", "priceImpactPercent": imp})
         assert sig.action == Action.BUY and sig.proposed_notional == pytest.approx(20.0), imp
         assert "impact" not in sig.reason
@@ -346,3 +351,23 @@ def test_min_order_equity_unknown_buys_equity_below_floor_stays_out():
     hint = _buy("NVDAon", {"min_order_usdt": 20, "equity": "12"}, 1000)  # context equity hint is a known equity
     assert hint.conditions_failed == ["live_below_min_order"]
     assert _buy("NVDAon", {"min_order_usdt": 20}, 20).proposed_notional == pytest.approx(20.0)  # equity == floor
+
+
+# ---------------------------------------------------------------- Manual: the user's own size in live mode
+@pytest.mark.parametrize(
+    "sym,pct,equity,expected",
+    [
+        ("NVDAB", 10, 100, 10.0),  # 10% of 100 used as set (no x0.25 / 2% shrink)
+        ("NVDAB", 15, 100, 15.0),
+        ("NVDAB", 50, 1000, 25.0),  # 500 -> the 25 USDT per-order cap
+        ("NVDAon", 10, 100, 20.0),  # 10 -> raised to the 20 USDT Ondo minimum
+        ("NVDAon", 22, 100, 22.0),
+    ],
+)
+def test_manual_live_buy_uses_user_size(sym, pct, equity, expected):
+    s = always_in(sym, volume=False)
+    s.risk.position_size_pct = pct
+    eng = DefaultStrategyEngine(live_safe=True, clock=lambda: NOW)  # default config: no Manual shrink
+    sig = eng.evaluate_manual(s, extended(sym), pf(equity))
+    assert sig.action == Action.BUY and sig.proposed_notional == pytest.approx(expected)
+    assert f"your size {pct:g}%" in sig.reason and "x0.25" not in sig.reason

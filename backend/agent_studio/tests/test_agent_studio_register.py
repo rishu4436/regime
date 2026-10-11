@@ -180,11 +180,11 @@ def test_testnet_registration_writes_identity(env):
     env.mp.setenv("AGENT_STUDIO_PRIVATE_KEY", KEY)
     assert run(env, []) == 0
     assert env.calls["network"] == "bsc-testnet"
-    assert env.calls["lookup"] == "teamwork-stock-agent"
+    assert env.calls["lookup"] == "Regime"
     name, _desc, eps = env.calls["uri_args"]
-    assert name == "teamwork-stock-agent" and eps[0]["name"] == "web"
+    assert name == "Regime" and eps[0]["name"] == "web"
     _, metadata = env.calls["register"]
-    assert {"key": "app", "value": "teamwork"} in metadata
+    assert {"key": "app", "value": "Regime"} in metadata
     rec = json.loads(env.path.read_text())
     assert rec["erc8004_id"] == 42 and rec["tx_hash"] == "0x" + "ab" * 32
     assert (
@@ -223,7 +223,7 @@ def test_recovers_agent_already_on_chain(env):
         existing={
             "agent_id": 77,
             "agent_uri": "data:old",
-            "name": "teamwork-stock-agent",
+            "name": "Regime",
         },
     )
     assert run(env, [], sdk=sdk) == 0

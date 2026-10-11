@@ -54,7 +54,7 @@ def pf(positions=(), equity=1000.0):
 
 def live(now: datetime, **cfg) -> DefaultStrategyEngine:
     return DefaultStrategyEngine(
-        live_safe=True, clock=lambda: now, live_config=LiveSafetyConfig(**cfg) if cfg else None
+        live_safe=True, clock=lambda: now, live_config=LiveSafetyConfig(**{"shrink_manual_size": True, **cfg})
     )
 
 

@@ -91,7 +91,7 @@ class DefaultStrategyEngine:
         ``reference_price_only``, ``price_impact_pct`` or ``priceImpactPercent`` (percent units, from a quote),
         ``reference_price``, ``equity`` (USDT hint), ``min_order_usdt`` / ``minOrderUsdt`` (token minimum order,
         overrides the per-family default). Applies to BUYs only: off-hours / closed / no liquidity /
-        paused / reference_price_only -> STAY_OUT 'live_token_paused'; impact > max_price_impact_pct (1%) ->
+        paused / reference_price_only -> STAY_OUT 'live_token_paused'; |impact| > max_price_impact_pct (1%) ->
         STAY_OUT 'live_price_impact' (impact None / unparseable = unknown: no block). SELLs are never blocked.
         """
         norm = normalize_market_context(ctx)
@@ -122,13 +122,20 @@ class DefaultStrategyEngine:
         )
 
     def _size(
-        self, symbol: str, pct: float, equity: float, cs: Sequence[Candle], base: dict, met: Sequence[str] = ()
+        self,
+        symbol: str,
+        pct: float,
+        equity: float,
+        cs: Sequence[Candle],
+        base: dict,
+        met: Sequence[str] = (),
+        user_sized: bool = False,
     ) -> tuple[float, float, str, Optional[Signal]]:
         """(size %, notional, reason note, blocking STAY_OUT or None) for a BUY."""
         ctx = self._market.get(symbol)
         if not self.live_safe:
             return pct, equity * pct / 100, "", None
-        d = live_size(symbol, pct, equity, cs, self.live_config, ctx)
+        d = live_size(symbol, pct, equity, cs, self.live_config, ctx, user_sized=user_sized)
         if d.blocker is not None:
             name, why = d.blocker
             blocked = Signal(
@@ -196,7 +203,10 @@ class DefaultStrategyEngine:
             return Signal(
                 action=Action.STAY_OUT,
                 conditions_failed=["cooldown"],
-                reason=f"Cooldown: {since} bars since last exit (need > {r.cooldown_bars})",
+                reason=(
+                    f"Cooldown: {since} {'bar' if since == 1 else 'bars'} since the last exit "
+                    f"(needs more than {r.cooldown_bars})"
+                ),
                 **base,
             )
         if len(cs) < self.warmup_bars + 1:
@@ -249,7 +259,7 @@ class DefaultStrategyEngine:
                 **base,
             )
         size_pct, notional, size_note, blocked = self._size(
-            strategy.symbol, r.position_size_pct, portfolio.equity, cs, base, ev.met
+            strategy.symbol, r.position_size_pct, portfolio.equity, cs, base, ev.met, user_sized=True
         )
         if blocked is not None:
             return blocked

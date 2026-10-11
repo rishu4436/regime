@@ -108,6 +108,55 @@ def _live_size_note(m: "re.Match[str]") -> str:
         return "; " + raised_text(amount)
     return f"; live-safe size {amount} USDT"
 _BLOCKED_SEG_RE = re.compile(r"Blocked \([a-z0-9_]+\):[^;]*")
+# Engine price-impact detail in free text (alerts, reasons): 'quote price impact 1.5% > 1% (direction not reported, ...)'
+_UNSIGNED_SEG_RE = re.compile(r"(?:quote )?price impact [^;()]*\((?:direction not reported|counted as adverse)[^)]*\)", re.I)
+
+
+# 'RSI_EXIT: RSI(14)=74.1 > 70' -> 'RSI exit, RSI(14)=74.1 is above 70' (label keeps its own capitals, comparators in words)
+_EXIT_PREFIX_RE = re.compile(r"^(" + "|".join(k for k in EXIT_LABEL) + r"):\s*([^;]*)")
+_CMP_WORDS = ((">=", "is at or above"), ("<=", "is at or below"), (">", "is above"), ("<", "is below"))
+
+
+def _cmp_words(t: str) -> str:
+    for op, words in _CMP_WORDS:
+        o = re.escape(op)
+        t = re.sub(r"\s+" + o + r"(?!=)\s+|\s*" + o + r"(?!=)\s*(?=[-+]?\d)", f" {words} ", t)
+    return t
+
+
+def _exit_prefix(m: "re.Match[str]") -> str:
+    label = EXIT_LABEL[m.group(1)]
+    rest = _cmp_words(m.group(2).strip())
+    return label[:1].upper() + label[1:] + (f", {rest}" if rest else "")
+
+
+# Loop reason 'BUY not executed: awaiting your approval of the pending BUY (30600a72...); ...' is shown to the user:
+# lowercase the actions and drop the internal id in parentheses.
+_PAREN_ID_RE = re.compile(r"\s*\((?:id[:\s]*)?(?:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}|[0-9a-f]{8,})\)", re.I)
+
+
+def _pending_soften(t: str) -> str:
+    t = re.sub(r"^\s*(BUY|SELL|STAY_OUT) not executed:", lambda m: _human(m.group(1)).capitalize() + " not executed:", t)
+    t = re.sub(r"\b(pending|the|a|your) (BUY|SELL)\b", lambda m: f"{m.group(1)} {m.group(2).lower()}", t)
+    if re.search(r"pending|approv|confirm", t, re.I):
+        t = _PAREN_ID_RE.sub("", t)
+    return t
+
+
+MODE_TEXT: dict[str, str] = {"SIM": "simulation", "PAPER": "paper trading", "LIVE": "live"}
+ROUTE_TEXT: dict[str, str] = {"SWAP": "a swap", "RFQ": "an RFQ quote"}
+
+
+def mode_text(d: Decision) -> str:
+    """'manual mode, simulation' / 'auto mode, paper trading' (LIVE decisions have their own wording)."""
+    tm = str(getattr(d.mode, "value", d.mode) or "")
+    return f"{str(getattr(d.agent_mode, 'value', d.agent_mode)).lower()} mode, {MODE_TEXT.get(tm.upper(), tm.lower())}"
+
+
+def route_text(route: Any) -> str:
+    """SWAP / RFQ -> 'a swap' / 'an RFQ quote' (unknown routes as given)."""
+    v = str(getattr(route, "value", route) or "")
+    return ROUTE_TEXT.get(v.upper(), v)
 
 
 def humanize_reason(text: Optional[str], keywords: bool = False) -> str:
@@ -118,6 +167,7 @@ def humanize_reason(text: Optional[str], keywords: bool = False) -> str:
         return ""
     t = _AWAIT_PREFIX_RE.sub("", t)
     t = _BLOCKED_SEG_RE.sub(lambda m: live_facts.plain_reason(m.group(0), keywords), t)
+    t = _UNSIGNED_SEG_RE.sub(lambda m: live_facts.price_impact_text("live_price_impact", m.group(0)) or m.group(0), t)
     t = _LIVE_SIZE_RE.sub(_live_size_note, t)
     t = _RAISED_RE.sub(lambda m: raised_text(m.group(1)), t)
     t = re.sub(r"^Regime (?=[A-Z_]+\b)", "Market regime ", t)
@@ -127,7 +177,8 @@ def humanize_reason(text: Optional[str], keywords: bool = False) -> str:
                          f"{PRESET_LABEL.get(m.group(3), m.group(3))}", t)
     t = re.sub(r"\b([a-z][a-z ]*?) \+ (PATIENT|BALANCED|ACTIVE):",
                lambda m: f"{m.group(1)} market with the {STYLE_LABEL[m.group(2)]} style:", t)
-    t = re.sub(r"^(" + "|".join(k for k in EXIT_LABEL) + r"):", lambda m: EXIT_LABEL[m.group(1)].capitalize() + ":", t)
+    t = _pending_soften(t)
+    t = _EXIT_PREFIX_RE.sub(_exit_prefix, t)
     t = _EXIT_RE.sub(lambda m: EXIT_LABEL[m.group(1)], t)
     t = _PRESET_RE.sub(lambda m: PRESET_LABEL[m.group(1)], t)
     t = live_facts.ENV_NAME_RE.sub("a live-trading setting", t)
@@ -204,6 +255,41 @@ def _reason_line(d: Decision, keywords: bool) -> Optional[str]:
     return "Reason: " + _sentence(r) if r else None
 
 
+def reason_text(d: Decision, keywords: bool = True) -> str:
+    """The decision's own reason in plain words, minus parts another sentence already gives ('' if none)."""
+    rl = _reason_line(d, keywords)
+    return rl[len("Reason: "):] if rl else ""
+
+
+_ENGINE_IMPACT_SEG_RE = re.compile(r"(?:quote )?price impact[^;]*", re.I)
+
+
+def engine_reason_texts(d: Decision, keywords: bool = True) -> list[str]:
+    """Plain words for the engine's live STAY_OUT codes. Price-impact codes use the engine's own detail (numbers) so
+    the text is identical to risk's for the same situation (see ``dedupe_block_reasons``)."""
+    sig = d.signal
+    codes, _ = _engine_codes(d)
+    out: list[str] = []
+    for c in codes:
+        t = None
+        if c in live_facts.PRICE_IMPACT_CODES:
+            m = _ENGINE_IMPACT_SEG_RE.search((sig.reason if sig is not None else "") or "")
+            t = live_facts.price_impact_text(c, m.group(0) if m else "")
+        t = t or live_facts.plain_reason(c, keywords)
+        if t not in out:
+            out.append(t)
+    return out
+
+
+def dedupe_block_reasons(d: Decision, reasons: Sequence[str], keywords: bool = True) -> list[str]:
+    """Risk block reasons minus those the engine's stay-out already gave (same situation, same words: say it once)."""
+    said = set(engine_reason_texts(d, keywords))
+    return [r for r in reasons if r not in said]
+
+
+SAME_REASON = "for the same reason"
+
+
 def _conditions_parts(d: Decision, keywords: bool) -> list[str]:
     sig = d.signal
     if sig is None:
@@ -213,7 +299,7 @@ def _conditions_parts(d: Decision, keywords: bool) -> list[str]:
         parts.append("Conditions met: " + ", ".join(cond_text(c) for c in sig.conditions_met) + ".")
     codes, others = _engine_codes(d)
     if codes:
-        parts.append("Stayed out because " + "; ".join(live_facts.plain_reason(c, keywords) for c in codes) + ".")
+        parts.append("Stayed out because " + "; ".join(engine_reason_texts(d, keywords)) + ".")
     if others:
         parts.append("Conditions not met: " + ", ".join(cond_text(c) for c in others) + ".")
     return parts
@@ -305,7 +391,7 @@ def explain_decision(d: Decision) -> str:
     if live_facts.is_live(d):
         return explain_live_decision(d)
     verb = {Action.BUY: "Buy", Action.SELL: "Sell", Action.STAY_OUT: "Stay out of"}[d.action]
-    parts = [f"{verb} {d.symbol} ({d.agent_mode.value} mode, {d.mode.value})."]
+    parts = [f"{verb} {d.symbol} ({mode_text(d)})."]
     ctx = f"Strategy: {strategy_label(d.strategy)}"
     if d.regime is not None:
         ctx += f", market regime: {_human(d.regime.value)}"
@@ -333,11 +419,15 @@ def explain_decision(d: Decision) -> str:
                 txt += "; waiting for your confirmation before executing"
             parts.append(txt + ".")
         else:
-            reasons = "; ".join(live_facts.plain_reasons(v.reasons, keywords=False)) or ", ".join(
-                cond_text(c.name) for c in v.checks if not c.passed) or "no reason given"
-            parts.append(f"Risk layer blocked the trade: {_sentence(reasons)}")
+            plain = live_facts.plain_reasons(v.reasons, keywords=False)
+            reasons = "; ".join(dedupe_block_reasons(d, plain, keywords=False)) or ", ".join(
+                cond_text(c.name) for c in v.checks if not c.passed and not plain)
+            if plain and not reasons:
+                parts.append(f"Risk layer blocked the trade too, {SAME_REASON}.")
+            else:
+                parts.append(f"Risk layer blocked the trade: {_sentence(reasons or 'no reason given')}")
     if ex is not None and not waiting:
-        txt = f"Execution: {status_text(ex.status)} via {ex.path.value}"
+        txt = f"Execution: {status_text(ex.status)} via {route_text(ex.path)}"
         if ex.filled_quantity:
             txt += f", {ex.filled_quantity:g} {ex.symbol} @ {_price(ex.avg_price)} ({_money(ex.notional)}, fee {_money(ex.fee)})"
         if ex.error:
@@ -353,7 +443,7 @@ def explain_decision(d: Decision) -> str:
 # ------------------------------------------------------------------ LIVE (real funds; autonomous unless confirmation is on)
 _LIVE_DONE = {"BUY": "bought", "SELL": "sold"}
 _REDUCED_RE = re.compile(r"reduced from ([\d,.]+) to ([\d,.]+) USDT")
-AWAITING_SENTENCE = ("The agent proposed this trade and it is waiting for your OK in the dashboard; nothing was sent and "
+AWAITING_SENTENCE = ("Regime proposed this trade and it is waiting for your OK in the dashboard; nothing was sent and "
                      "no real funds moved.")
 
 
@@ -367,11 +457,11 @@ def live_execution_sentence(d: Decision, own: bool = True) -> Optional[str]:
     status = (f["status"] or "").upper()
     side = (f["side"] or ("SELL" if d.action == Action.SELL else "BUY")).upper()
     sym = f["symbol"] or d.symbol
-    route = f" via {f['route']}" if f["route"] else ""
+    route = f" via {route_text(f['route'])}" if f["route"] else ""
     how = " on its own" if own else " after your OK"
     if status in ("FILLED", "PARTIALLY_FILLED") and (f["quantity"] or f["amount_usdt"]):
         amt = f"{f['amount_usdt']:,.2f} USDT" if f["amount_usdt"] is not None else "an unreported USDT amount"
-        txt = (f"The agent {_LIVE_DONE.get(side, side.lower())} {sym}{how} with real funds on BNB Chain mainnet: "
+        txt = (f"Regime {_LIVE_DONE.get(side, side.lower())} {sym}{how} with real funds on BNB Chain mainnet: "
                f"{amt}{route}")
         if f["fill_price"] is not None:
             txt += f" at a fill price of {_price(f['fill_price'])}"
@@ -384,7 +474,7 @@ def live_execution_sentence(d: Decision, own: bool = True) -> Optional[str]:
                 else " Price impact unknown.")
     elif status == "PENDING_CONFIRMATION":
         amt = f" for {f['amount_usdt']:,.2f} USDT" if f["amount_usdt"] is not None else ""
-        txt = (f"The agent submitted a {side} of {sym}{amt}{route}{how} with real funds; the transaction is "
+        txt = (f"Regime submitted a {side} of {sym}{amt}{route}{how} with real funds; the transaction is "
                f"waiting to settle on BNB Chain (not filled yet).")
     else:
         why = f": {live_facts.plain_reason(f['error'])}" if f["error"] else ""
@@ -408,7 +498,7 @@ def live_block_reasons(d: Decision) -> list[str]:
 
 
 def live_size_cuts(d: Decision) -> list[str]:
-    """'size cut from 30.00 to 25.00 USDT by the per-order cap (set by the agent's risk limits)' for capped approvals,
+    """'size cut from 30.00 to 25.00 USDT by the per-order cap (set by Regime's risk limits)' for capped approvals,
     'size raised to the token minimum (10.00 USDT)' when risk raised a small buy to the minimum order."""
     v = d.risk_verdict
     if v is None or not v.approved:
@@ -459,7 +549,12 @@ def explain_live_decision(d: Decision) -> str:
             cuts = live_size_cuts(d)
             parts.append(f"Live risk checks passed ({_money(v.adjusted_notional)})" + ("; " + "; ".join(cuts) if cuts else "") + ".")
         else:
-            parts.append("Risk blocked the trade, no real funds were spent: " + _sentence("; ".join(live_block_reasons(d))))
+            blocks = live_block_reasons(d)
+            rest = dedupe_block_reasons(d, blocks)
+            if rest:
+                parts.append("Risk blocked the trade, no real funds were spent: " + _sentence("; ".join(rest)))
+            else:
+                parts.append(f"Risk blocked the trade too, {SAME_REASON}; no real funds were spent.")
     if waiting:
         parts.append(AWAITING_SENTENCE)
         return " ".join(parts)
@@ -467,7 +562,7 @@ def explain_live_decision(d: Decision) -> str:
     if ex_txt:
         parts.append(ex_txt)
     elif d.action != Action.STAY_OUT and (v is None or v.approved):
-        parts.append("The agent is placing this order on its own; no fill yet." if not conf
+        parts.append("Regime is placing this order on its own; no fill yet." if not conf
                      else "The order is being placed after your OK; no fill yet.")
     parts.extend(wallet_hints(d))
     return " ".join(parts)
@@ -489,13 +584,16 @@ def control_line(s: StatusSnapshot) -> str:
         state = "paused"
     else:
         state = "running"
-    txt = f"Agent is {state} in {c.trading_mode.value} mode"
+    if c.trading_mode == TradingMode.LIVE and not c.confirmation_mode and state == "running":
+        txt = "Regime is trading autonomously 24/7 with real funds on BNB Chain mainnet (LIVE mode)"
+    else:
+        txt = f"Regime is {state} in {c.trading_mode.value} mode"
     if c.trading_mode == TradingMode.LIVE:
         if c.confirmation_mode:
             txt += (" with real funds on BNB Chain mainnet; confirmation mode is on, so each trade waits for your OK in "
                     "the dashboard")
-        else:
-            txt += ", trading autonomously 24/7 with real funds on BNB Chain mainnet"
+        elif state != "running":
+            txt += ", real funds on BNB Chain mainnet; when running it trades autonomously 24/7"
     else:
         txt += ", trades need your confirmation" if c.confirmation_mode else ", trades auto-execute"
     if c.reason:
@@ -592,7 +690,7 @@ def answer(question: str, s: StatusSnapshot, performance: Optional[PerformanceSu
         controls = ("pause / override / emergency stop"
                     if s.control.trading_mode == TradingMode.LIVE and not s.control.confirmation_mode
                     else "confirm / pause / override / emergency stop")
-        return ("I can only explain what the agent is doing; I never place, change or cancel trades. "
+        return ("I can only explain what Regime is doing; I never place, change or cancel trades. "
                 f"Use the dashboard controls ({controls}) to act. " + control_line(s))
     builders = {"last": last_decision_line, "regime": regime_line, "strategy": strategy_line,
                 "positions": positions_line, "performance": lambda st: performance_line(st, performance), "control": control_line,

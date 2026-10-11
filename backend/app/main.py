@@ -8,10 +8,13 @@ import asyncio
 import contextlib
 import logging
 import os
+import sys
+import threading
+from urllib.parse import urlsplit
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -28,7 +31,7 @@ from .schemas import (
     PortfolioView,
     AskRequest, ConfirmationModeRequest, EmergencyStopRequest, LoopStartRequest, ManualActivateRequest, ParseRequest,
     ParseResponse, PresetsTable, PresetsTableEntry, ReasonRequest, DecisionView, Heartbeat, LiveStatus, LoopStateView,
-    StatusView, SystemInfoView, WalletInfo,
+    StatusView, SystemInfoView, WalletInfo, WalletConnectStart, WalletConnectStatus, WalletReconcileResult,
 )
 from .live import agent_identity
 from .settings import Settings
@@ -46,11 +49,46 @@ class AppState:
         self.bus = EventBus(EventLog(path))
         self.loop = TradingLoop(settings, comps, self.bus)
         self.store = StrategyStore(settings.log_dir)
+        if not settings.log_dir:
+            log.warning("LOG_DIR is not set: saved strategies and agent state are kept in memory only and are lost on "
+                        "restart (run.sh / run.ps1 set LOG_DIR=<repo>/logs)")
         self.interval = settings.loop_interval_seconds
         self.task: Optional[asyncio.Task] = None
         self.want_running = False  # watchdog restarts the loop task while this is True
         self.monitor: Optional[asyncio.Task] = None
         self.stall_alerted = False
+        self.wallet_connect = None  # one process-wide WalletConnect (built on first use, see make_wallet_connect)
+        self.wallet_connect_lock = threading.Lock()
+        self.wallet_connect_handled: set[str] = set()
+
+
+LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost", "::ffff:127.0.0.1"}
+
+
+def make_wallet_connect(settings: Settings):
+    """LIVE: the real baw (BAW_CMD / PATH). SIM/PAPER: the bundled fake baw (backend/app/dev_baw.py), so the dashboard's
+    Connect wallet can be demoed without touching Binance."""
+    from backend.exchange.baw import BawCli
+    from backend.exchange.wallet_connect import WalletConnect
+    if settings.trading_mode.value == "LIVE":
+        return WalletConnect(cli=BawCli())
+    fake = [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "dev_baw.py")]
+    return WalletConnect(cli=BawCli(cmd=fake))
+
+
+def require_local(request: Request) -> None:
+    """Wallet sign-in is localhost-only (the Vite dev proxy also connects from localhost)."""
+    host = (request.client.host if request.client else "") or ""
+    fwd = [h.strip() for h in (request.headers.get("x-forwarded-for") or "").split(",") if h.strip()]
+    # a LAN visitor talking to the backend directly (Host http://192.168.x.y:8000) is refused
+    hh = (request.headers.get("host") or "localhost").strip().lower()
+    hh = hh[1:].split("]")[0] if hh.startswith("[") else hh.rsplit(":", 1)[0] if hh.count(":") == 1 else hh
+    # Vite's proxy rewrites Host (changeOrigin) but passes the browser's Origin: a page opened from a LAN address is refused
+    origin = (request.headers.get("origin") or "").strip().lower()
+    oh = urlsplit(origin).hostname if origin and origin != "null" else "localhost"
+    if host not in LOCAL_HOSTS or any(h not in LOCAL_HOSTS for h in fwd) or hh not in LOCAL_HOSTS or oh not in LOCAL_HOSTS:
+        raise HTTPException(403, "Wallet sign-in only works on the PC running the Regime backend "
+                                 "(open the dashboard at http://localhost there).")
 
 
 def create_app(settings: Optional[Settings] = None, components: Optional[Components] = None) -> FastAPI:
@@ -68,7 +106,7 @@ def create_app(settings: Optional[Settings] = None, components: Optional[Compone
         st.monitor.cancel()
         await _stop_task(st)
 
-    app = FastAPI(title="Autonomous On-Chain Stock Trading Agent", version=CONTRACTS_VERSION, lifespan=lifespan)
+    app = FastAPI(title="Regime - Autonomous On-Chain Stock Trading Agent", version=CONTRACTS_VERSION, lifespan=lifespan)
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
     app.state.st = st
     L = st.loop
@@ -102,6 +140,41 @@ def create_app(settings: Optional[Settings] = None, components: Optional[Compone
     @app.get("/api/wallet", response_model=WalletInfo)
     def wallet() -> WalletInfo:
         return WalletInfo.model_validate(L.wallet())
+
+    def wallet_connector():
+        with st.wallet_connect_lock:
+            if st.wallet_connect is None:
+                st.wallet_connect = make_wallet_connect(settings)
+            return st.wallet_connect
+
+    @app.post("/api/wallet/connect", response_model=WalletConnectStart)
+    def wallet_connect_start(request: Request) -> WalletConnectStart:
+        """Start the Agentic Wallet QR sign-in (localhost only). SIM/PAPER use the fake baw."""
+        require_local(request)
+        from backend.exchange.baw import BawError
+        wc = wallet_connector()
+        wc.expected_address = L.expected_wallet_address()
+        try:
+            return WalletConnectStart.model_validate(wc.start())
+        except BawError as e:
+            raise HTTPException(502, f"could not start the wallet sign-in: {e}")
+
+    @app.get("/api/wallet/connect", response_model=WalletConnectStatus)
+    def wallet_connect_poll(request: Request, session_id: str) -> WalletConnectStatus:
+        """{status, address, wallet_changed, error}. On the first `connected`: wallet + limits re-read, and a
+        different wallet blocks LIVE ("different wallet connected") until POST /api/wallet/reconcile."""
+        require_local(request)
+        r = wallet_connector().poll(session_id)
+        if r.get("status") == "connected" and session_id not in st.wallet_connect_handled:
+            st.wallet_connect_handled.add(session_id)
+            L.on_wallet_connected(r.get("address"), bool(r.get("wallet_changed")))
+        return WalletConnectStatus.model_validate(r)
+
+    @app.post("/api/wallet/reconcile", response_model=WalletReconcileResult)
+    def wallet_reconcile(request: Request) -> WalletReconcileResult:
+        """Check saved positions against the connected wallet, drop those it doesn't hold, clear the block (localhost only)."""
+        require_local(request)
+        return WalletReconcileResult.model_validate(guard(L.reconcile_wallet))
 
     # ---------------------------------------------------------------- market data
     @app.get("/api/tokens", response_model=list[TokenView])

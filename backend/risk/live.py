@@ -35,7 +35,12 @@ class LiveRiskProfile(BaseModel):
 
     max_quote_age_seconds: float = Field(default=float(QUOTE_TTL_SECONDS), gt=0, description="Also blocks expired quotes")
     max_slippage_pct: float = Field(
-        default=1.0, gt=0, description="Max |quote price - reference price| / reference, and max quote slippage tolerance")
+        default=1.0, gt=0, description=(
+            "Max ADVERSE price impact (quote worse than the reference price, or the exchange-reported impact), and max "
+            "quote slippage tolerance"))
+    max_favorable_impact_pct: float = Field(default=3.0, gt=0, description=(
+        "Sanity cap on a FAVORABLE quote (better than the reference price). Small favorable gaps are allowed; beyond this "
+        "the quote is probably bad data, so the BUY is blocked"))
     require_quote: bool = Field(
         default=False, description="True = LIVE BUY is approved only when a quote is supplied in LiveContext")
 

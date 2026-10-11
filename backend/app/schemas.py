@@ -95,6 +95,15 @@ class ExecutionView(ExecutionResult):
 
 class DecisionView(Decision):
     execution: Optional[ExecutionView] = None
+    awaiting_decision_id: Optional[str] = Field(default=None, description="STAY_OUT while a BUY waits for approval: "
+                                                "id of that pending BUY decision (the reason text has no id)")
+
+    @model_serializer(mode="wrap")
+    def _drop_unset_awaiting(self, handler):  # only emitted when set: other decisions stay contract-shaped
+        data = handler(self)
+        if isinstance(data, dict) and data.get("awaiting_decision_id") is None:
+            data.pop("awaiting_decision_id", None)
+        return data
 
 
 class StatusView(StatusSnapshot):
@@ -112,6 +121,30 @@ class LiveStatus(_M):
     blocked_reasons: list[str] = Field(default_factory=list)
     cooldowns: list[dict] = Field(default_factory=list, description="[{symbol, until, code, reason}] after 40367/40369/40374")
     chain_pending: list[dict] = Field(default_factory=list, description="BUYs submitted and waiting on chain")
+    wallet_block: Optional[dict] = Field(default=None, description="v0.8 {address, expected, since}: a different wallet signed "
+                                         "in; no orders until POST /api/wallet/reconcile")
+
+
+class WalletConnectStart(_M):
+    session_id: str
+    qr_url: str
+    pairing_code: Optional[str] = None
+    expires_at: Optional[str] = None
+
+
+class WalletConnectStatus(_M):
+    status: str = Field(description="pending | connected | expired | failed")
+    address: Optional[str] = None
+    wallet_changed: bool = False
+    error: Optional[str] = None
+
+
+class WalletReconcileResult(_M):
+    address: Optional[str] = None
+    was_blocked: bool
+    kept: list[dict] = Field(default_factory=list)
+    dropped: list[dict] = Field(default_factory=list)
+    wallet_blocked: bool = False
 
 
 class SystemInfoView(SystemInfo):
