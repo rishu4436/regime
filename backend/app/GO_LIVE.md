@@ -19,15 +19,20 @@ LIVE switch is opt-in, and the caps default to tiny amounts (25 USDT per order).
    ```
    The session can expire in **up to 48 h**. The agent then pauses with `session_expired` (alert
    `WALLET_SESSION_EXPIRED`). Repeat these steps, then `POST /api/control/resume`.
-3. **Set `abnormalTxnHandling = AutoReject` in the Binance app** (Agentic Wallet → settings). If you skip this, a
-   transaction that Binance flags as abnormal waits for manual review. While it waits, the wallet is tx-locked and
-   **every** trade is blocked for up to 5 minutes. With AutoReject the flagged order fails at once. The agent logs it as
-   a normal failed BUY and carries on.
+3. **Wallet settings in the Binance app** (Agentic Wallet → settings). Set exactly these three:
+   - **Daily limit:** the USDT the agent may trade per day.
+   - **Trade all tokens:** on, so the wallet doesn't refuse the agent's tokens.
+   - **`abnormalTxnHandling = AutoReject`:** if you skip this, a transaction that Binance flags as abnormal waits for
+     manual review. While it waits, the wallet is tx-locked and **every** trade is blocked for up to 5 minutes. With
+     AutoReject the flagged order fails at once. The agent logs it as a normal failed BUY and carries on.
+
+   The wallet has no per-order limit or token list that can be read or set. The per-order size and the token choice come
+   from the agent's own caps (`RISK_LIVE_MAX_ORDER_USDT`, `BINANCE_LIVE_MAX_ORDER_USDT`, `LIVE_ALLOWED_TOKENS`). The agent
+   reads the wallet settings via `baw wallet settings` about every 10 minutes and after every trade, and it stays under
+   the remaining daily limit.
 4. **Fund the wallet.** Deposit USDT for trading plus BNB for gas. Keep at least `RISK_LIVE_MIN_BNB` (default 0.002 BNB)
    above the gas reserve.
-5. **Set the wallet limits in the Binance app** (daily quota, per-order limit, allowed tokens). The agent reads them via
-   `baw wallet settings` about every 10 minutes and after every trade. It trades under the **lower** of the wallet's
-   limits and its own `RISK_LIVE_*` caps.
+5. **Daily limit facts:**
    - The **daily quota resets at 00:00 UTC = 05:30 IST**.
    - The `exit_quota_shortfall` warning (alert `LIVE_LIMIT_EXIT_QUOTA_SHORTFALL`) means the remaining quota could not
      cover selling every open position. Raise the quota or reduce exposure.
