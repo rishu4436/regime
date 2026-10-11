@@ -27,6 +27,7 @@ export const bscAddr = (addr: string) => `https://bscscan.com/address/${addr}`;
 export const shortHex = (h: string, n = 6) => (h.length > 2 * n + 2 ? `${h.slice(0, n + 2)}…${h.slice(-n)}` : h);
 export const balAsset = (b: WalletBalance) => b.asset ?? b.symbol ?? "?";
 export const balAmount = (b: WalletBalance) => b.amount ?? b.quantity ?? 0;
+export const balValue = (b: WalletBalance) => b.usd_value ?? b.value_usdt ?? null;
 /** Stricter of our cap and the wallet's own (Agentic Wallet) limit, when it exposes one. */
 export const stricter = (ours?: number | null, wallet?: number | null) =>
   ours == null ? wallet ?? null : wallet == null ? ours : Math.min(ours, wallet);
@@ -81,11 +82,12 @@ export function useLiveState(status: StatusSnapshot | null, tick: number): LiveS
   useEffect(() => { const t = window.setInterval(() => { setNow(Date.now()); loadLoop(); }, 5000); return () => window.clearInterval(t); }, []);
 
   const iv = (loop?.interval_seconds ?? 5) * 1000;
-  const lastTick = loop?.last_tick_at ? Date.parse(loop.last_tick_at) : seen.current.at;
-  const runningSince = loop?.started_at ? Date.parse(loop.started_at) : seen.current.since;
+  const H = loop?.heartbeat;
+  const lastTick = H?.last_tick_at ? Date.parse(H.last_tick_at) : loop?.last_tick_at ? Date.parse(loop.last_tick_at) : seen.current.at;
+  const runningSince = H?.started_at ? Date.parse(H.started_at) : loop?.started_at ? Date.parse(loop.started_at) : seen.current.since;
   const nextTick = loop?.next_tick_at ? Date.parse(loop.next_tick_at) : loop?.running && lastTick ? lastTick + iv : null;
   const stale = !!loop?.running && lastTick != null && now - lastTick > Math.max(3 * iv, 15000);
-  const hb: Heartbeat = { runningSince, lastTick, nextTick, stale, observed: !loop?.started_at };
+  const hb: Heartbeat = { runningSince, lastTick, nextTick, stale, observed: !H?.started_at && !loop?.started_at };
   const gate = gateRaw ?? deriveGate(system, status, wallet);
   const isLive = system?.trading_mode === "LIVE" || status?.control.trading_mode === "LIVE";
   return { system, gate, gateSource: gateRaw ? "backend" : gate ? "derived" : null, wallet, walletEndpoint, loop, hb, now, isLive, refresh: load };

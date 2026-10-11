@@ -5,7 +5,7 @@ import type { Decision, ExecutionResult, StatusSnapshot } from "../contracts";
 import { api } from "../api";
 import type { LiveExecutionFields } from "../api/types";
 import { cls, time, usd } from "../lib/format";
-import { ago, balAmount, balAsset, bscAddr, bscTx, dur, limitsOf, shortHex, stricter, useLive } from "../lib/live";
+import { ago, balAmount, balAsset, balValue, bscAddr, bscTx, dur, limitsOf, shortHex, stricter, useLive } from "../lib/live";
 import { conditionLabel, controlReason, exchangeCodeLabels, strategyLabel } from "../lib/strategy";
 import { ActionBadge } from "./Badges";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -58,6 +58,7 @@ export function AgentIdentityCard() {
   const id = (system as typeof system & { agent_identity?: { erc8004_id?: string | number | null; registry?: string | null; studio_version?: string | null } | null }).agent_identity;
   return (
     <Card title="Agent identity" extra={<span className="pill">BNB Agent Studio · ERC-8004</span>}>
+      {!id && <div className="small muted" style={{ marginBottom: 8 }}>Agent Studio identity: <b>not registered yet</b></div>}
       <div className="kv">
         <span className="k">ERC-8004 id</span><span className="mono">{id?.erc8004_id ?? (id ? <span className="faint">placeholder</span> : NA)}</span>
         <span className="k">Registry</span><span className="small">{id?.registry ?? NA}</span>
@@ -144,11 +145,12 @@ export function AutonomyMonitor({ status, refresh }: { status: StatusSnapshot | 
         </div>
       </div>
       <div className="autonomy-stats">
-        <div><span className="lbl">Running since</span><b>{loop.running ? dur(hb.runningSince, now) : "stopped"}</b>{hb.runningSince && loop.running ? <span className="faint small">{hb.observed ? "seen by this page" : new Date(hb.runningSince).toLocaleString()}</span> : null}</div>
-        <div><span className="lbl">Last tick</span><b className={hb.stale ? "neg" : ""}>{ago(hb.lastTick, now)}</b><span className="faint small">{loop.ticks} ticks</span></div>
+        <div><span className="lbl">Running since</span><b>{loop.running ? dur(hb.runningSince, now) : "stopped"}</b>{hb.runningSince && loop.running ? <span className="faint small">{hb.observed ? "seen by this page" : new Date(hb.runningSince).toLocaleString()}{loop.heartbeat?.autostart ? " · autostart" : ""}</span> : null}</div>
+        <div><span className="lbl">Last tick</span><b className={hb.stale ? "neg" : ""}>{ago(hb.lastTick, now)}</b><span className="faint small">{loop.ticks} ticks{loop.heartbeat?.restarts ? ` · ${loop.heartbeat.restarts} restart${loop.heartbeat.restarts > 1 ? "s" : ""}` : ""}</span></div>
         <div><span className="lbl">Next tick</span><b>{loop.running ? (nextIn == null ? "—" : nextIn === 0 ? "now" : `in ${nextIn}s`) : "—"}</b><span className="faint small">every {loop.interval_seconds}s</span></div>
         <div><span className="lbl">Execution</span><b>{c.confirmation_mode ? "asks before entries" : "autonomous"}</b><span className="faint small">{isLive ? "real funds" : c.trading_mode}</span></div>
       </div>
+      {loop.heartbeat?.last_error && <div className="banner amber" style={{ margin: "12px 0 0" }}><span className="grow small"><b>Last loop error:</b> {loop.heartbeat.last_error}</span></div>}
       {hb.stale && <div className="banner red" style={{ margin: "12px 0 0" }}><span className="grow"><b>No tick for {ago(hb.lastTick, now).replace(" ago", "")}.</b> The loop says it is running but hasn't produced a cycle; check the backend logs.</span></div>}
       {auto && <div className="banner red" style={{ margin: "12px 0 0" }}><span className="grow"><b>Automatic emergency stop:</b> {controlReason(c.reason)}. No new entries until you reset it.</span></div>}
       {ask === "stop" && (
@@ -190,8 +192,8 @@ export function CapsPanel({ status, decisions }: { status: StatusSnapshot | null
   const dayCap = L.limit_source ? L.daily_limit_usdt ?? L.daily_notional_cap_usdt : stricter(L.daily_notional_cap_usdt ?? L.daily_limit_usdt, W?.daily_limit_usdt);
   const which = (ours?: number | null, w?: number | null) => (w == null ? null : <> · agent {usd(ours, 0)} vs wallet {usd(w, 0)}</>);
   const src = (k: "per_order_cap_usdt" | "daily_limit_usdt", ours?: number | null, w?: number | null) => {
-    const s = L.limit_source?.[k] ?? (w == null ? (ours == null ? null : "risk") : (ours ?? Infinity) <= w ? "risk" : "wallet");
-    return s ? <span className={`pill ${s === "wallet" ? "warn" : ""}`} style={{ marginLeft: 6, fontSize: ".66rem" }}>set by {s === "wallet" ? "wallet" : "agent"}</span> : null;
+    const ls = L.limit_source, s = (typeof ls === "string" ? ls : ls?.[k]) ?? (w == null ? (ours == null ? null : "risk") : (ours ?? Infinity) <= w ? "risk" : "wallet");
+    return s ? <span className={`pill ${s === "wallet" ? "warn" : ""}`} style={{ marginLeft: 6, fontSize: ".66rem" }} title={`limit_source: ${s}`}>set by {s === "wallet" ? "wallet" : "agent"}</span> : null;
   };
   const toStop = L.daily_loss_cap_usdt != null && loss != null ? Math.max(0, L.daily_loss_cap_usdt - loss) : null;
   return (
@@ -222,7 +224,7 @@ export function WalletPanel() {
   const reserve = wallet?.limits?.bnb_gas_reserve ?? wallet?.bnb_gas_reserve ?? null;
   const bnb = wallet?.balances.find((b) => balAsset(b) === "BNB");
   const gasLow = reserve != null && bnb ? balAmount(bnb) < reserve * 2 : false, gasOut = reserve != null && bnb ? balAmount(bnb) < reserve : false;
-  const total = wallet?.balances.reduce((a, b) => a + (b.value_usdt ?? 0), 0);
+  const total = wallet?.balances.reduce((a, b) => a + (balValue(b) ?? 0), 0);
   return (
     <Card title="Wallet" extra={<>{wallet && <span className={`pill ${wallet.connected ? "ok" : "bad"}`}><span className="dot" />{wallet.connected ? "connected" : "disconnected"}</span>}
       <button className="btn ghost" style={{ padding: "3px 9px", marginLeft: 6 }} onClick={refresh} title="Refresh balances">↻</button></>}>
@@ -252,7 +254,7 @@ export function WalletPanel() {
                 {wallet.balances.map((b) => (
                   <tr key={balAsset(b)}><td><b>{balAsset(b)}</b></td>
                     <td className={`r${balAsset(b) === "BNB" && gasLow ? " neg" : ""}`}>{balAmount(b).toLocaleString(undefined, { maximumFractionDigits: balAsset(b) === "USDT" ? 2 : 6 })}</td>
-                    <td className="r">{b.value_usdt != null ? usd(b.value_usdt) : NA}</td></tr>
+                    <td className="r">{balValue(b) != null ? usd(balValue(b)) : NA}</td></tr>
                 ))}
               </tbody>
             </table>

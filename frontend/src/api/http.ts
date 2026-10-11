@@ -74,8 +74,8 @@ export class HttpApi implements ApiClient {
   async getLiveGate() {
     const g = await this.optional<LiveGate>("/api/live/status");
     if (g) return g;
-    const sys = await this.system().catch(() => null) as (SystemInfo & { live_status?: LiveGate; live_gate?: LiveGate }) | null;
-    return sys?.live_status ?? sys?.live_gate ?? null;
+    const sys = await this.system().catch(() => null) as (SystemInfo & { live?: LiveGate; live_status?: LiveGate; live_gate?: LiveGate }) | null;
+    return sys?.live ?? sys?.live_status ?? sys?.live_gate ?? null;
   }
   /** GET /api/wallet (bot6/live), else the copy inside /api/system, else null ("not available"). */
   async getWallet() {

@@ -32,7 +32,8 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
   useEffect(() => { api.getPerformance().then(setPerf).catch(() => setPerf(null)); }, [tick]);
   const symbol = status?.active_symbol ?? "NVDAB";
 
-  useEffect(() => { api.getCandles(symbol, "1h", 150).then(setCandles).catch(() => setCandles([])); }, [symbol, tick]);
+  // default token NVDAB; a backend whose token list lacks it falls back to NVDAon for the idle chart
+  useEffect(() => { api.getCandles(symbol, "1h", 150).then(setCandles).catch(() => status?.active_symbol ? setCandles([]) : api.getCandles("NVDAon", "1h", 150).then(setCandles).catch(() => setCandles([]))); }, [symbol, tick]);
 
   const pf = status?.portfolio;
   const unreal = pf ? (pf.positions ?? []).reduce((a, p) => a + (p.unrealized_pnl ?? 0), 0) : null;

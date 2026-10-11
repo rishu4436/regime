@@ -32,14 +32,14 @@ export interface LiveLimits {
   daily_limit_usdt?: number | null;          // effective daily limit (stricter of agent and wallet)
   daily_remaining_usdt?: number | null;
   /** Which side set each effective cap (bot3/live 53907b5): "risk" (agent) or "wallet". */
-  limit_source?: { per_order_cap_usdt?: "risk" | "wallet" | string; daily_limit_usdt?: "risk" | "wallet" | string } | null;
+  limit_source?: string | { per_order_cap_usdt?: "risk" | "wallet" | string; daily_limit_usdt?: "risk" | "wallet" | string } | null; // bot6/live may send one string ("app")
   allowed_tokens?: string[] | null;
   /** Risk warnings for the UI, e.g. the exit-reserve warning (remaining daily quota can't cover selling all positions). */
   warnings?: string[] | null;
   /** The wallet's own limits (Agentic Wallet / Binance App), if it exposes them: the stricter one applies. */
   wallet?: { per_order_cap_usdt?: number | null; daily_limit_usdt?: number | null; allowed_tokens?: string[] | null } | null;
 }
-export interface WalletBalance { asset?: string; symbol?: string; amount?: number; quantity?: number; value_usdt?: number | null; contract_address?: string | null }
+export interface WalletBalance { symbol?: string; asset?: string; amount?: number; quantity?: number; usd_value?: number | null; value_usdt?: number | null; contract_address?: string | null }
 /** GET /api/wallet: the connected wallet (Agentic Wallet `baw`) on BNB Smart Chain. */
 export interface WalletInfo {
   provider?: string | null;                  // "baw"
@@ -66,7 +66,11 @@ export interface LiveGate {
 /** ExecutionResult as the LIVE backend sends it (extra optional fields until they are in the contract). */
 export interface LiveExecutionFields { price_impact_pct?: number | null; tx_hash?: string | null; explorer_url?: string | null; route?: string | null; quote_expires_at?: string | null; real_funds?: boolean | null }
 /** LoopState extras requested for the 24/7 monitor (optional; the UI falls back to what it observes). */
-export interface LoopHeartbeat { started_at?: string | null; last_tick_at?: string | null; next_tick_at?: string | null }
+export interface LoopHeartbeat {
+  started_at?: string | null; last_tick_at?: string | null; next_tick_at?: string | null;
+  /** bot6/live: GET /api/loop -> heartbeat */
+  heartbeat?: { started_at: string; uptime_s: number; last_tick_at?: string | null; seconds_since_tick?: number | null; restarts?: number; last_error?: string | null; autostart?: boolean } | null;
+}
 
 export type ParseResult = { kind: "MANUAL"; strategy: ManualStrategy } | { kind: "AUTO"; config: AutoConfig };
 export type ActivateManualBody = { strategy_id: string } | { strategy: ManualStrategy };
