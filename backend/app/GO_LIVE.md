@@ -9,7 +9,7 @@ LIVE switch is opt-in, and the caps default to tiny amounts (25 USDT per order).
    - Windows: if `baw` is not on PATH, `run.ps1` sets
      `BAW_CMD=["node","<npm root -g>\@binance\agentic-wallet\dist\index.js"]` automatically. You can also set `BAW_CMD`
      yourself to a JSON argv list, a path to `dist\index.js`, or a binary.
-2. **Sign in** (verified by Bot 4 with baw 1.10.0):
+2. **Sign in** (verified with baw 1.10.0):
    ```bash
    baw auth signin --json                      # shows a QR code and returns a qrCodeId (--image opens the QR as a picture)
    #   -> scan the QR with the Binance app and approve
@@ -45,7 +45,7 @@ LIVE switch is opt-in, and the caps default to tiny amounts (25 USDT per order).
    - The `exit_quota_shortfall` warning (alert `LIVE_LIMIT_EXIT_QUOTA_SHORTFALL`) means the remaining quota could not
      cover selling every open position. Raise the quota or reduce exposure.
 
-### Optional: on-chain agent identity (ERC-8004, Bot 5)
+### Optional: on-chain agent identity (ERC-8004)
 This step registers the agent's identity so `/api/system.agent_identity` shows it. It never touches the trading wallet.
 1. Create a **new, identity-only** EVM key. Don't use the trading wallet or any wallet holding funds. The command is in
    `backend/agent_studio/README.md`:
@@ -78,7 +78,7 @@ RISK_LIVE_MAX_EXPOSURE_USDT=50
 RISK_LIVE_MAX_SLIPPAGE_PCT=1.0       # also passed to the executor (baw --slippage), never higher
 RISK_LIVE_MAX_DATA_AGE_S=900
 RISK_LIVE_MIN_BNB=0.002
-BINANCE_LIVE_MAX_ORDER_USDT=25       # Bot 4 executor hard cap (independent second cap)
+BINANCE_LIVE_MAX_ORDER_USDT=25       # Exchange/Wallet executor hard cap (independent second cap)
 
 # 24/7
 LOOP_AUTOSTART=true                  # on start: resume the saved agent, else Auto (AUTO_EXECUTE) on DEFAULT_AGENT_SYMBOL

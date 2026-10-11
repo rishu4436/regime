@@ -17,7 +17,7 @@ shrink a signal, and the explainer (`backend/llm`) only puts it into words.
 | Regime detector | `regime.py` | Six regimes, checked in order (first match wins): HIGH_VOLATILITY, OVERSOLD_PULLBACK, DOWNTREND, STRONG_UPTREND, MILD_UPTREND, SIDEWAYS. Returns a confidence, a reason and the features it used. |
 | Presets and Auto mode | `presets.py` | Five presets (DCA, Smart DCA, Buy the Dip, Trend, Grid). A regime × trader-style table (PATIENT / BALANCED / ACTIVE) picks **one** preset, or "pause". Only that preset is evaluated. |
 | Manual evaluator | `manual.py`, `engine.py` | User-built rules: AND/OR entry conditions, hard filters (min volume, market hours), RSI/MACD exits, cooldown, max open positions. |
-| Exits | `exits.py` | Intrabar stop loss, take profit, trailing stop and max loss, with rules identical to Bot 3's `backend/risk/exits.py`. |
+| Exits | `exits.py` | Intrabar stop loss, take profit, trailing stop and max loss, with rules identical to the risk module's `backend/risk/exits.py`. |
 | Backtest | `backtest.py` | The same evaluator code run over history. Mark-to-market equity, optional fees and slippage, deterministic output. |
 | Real-data layer | `data.py` | Cleans candles, infers the timeframe, detects gaps and dead bars, classifies token families. |
 | Live safety | `live.py` | `live_safe=True` gates and sizes for PAPER/LIVE. It only ever makes the engine more conservative. |
@@ -146,7 +146,7 @@ entry point (`evaluate_manual`, `evaluate_auto`, `detect_regime`, `backtest_manu
   within the 25 USDT cap and equity, and otherwise returns `live_below_min_order`. See [exchange.md](exchange.md).
 - **Caps, wallet limits, slippage:** the engine only shrinks: ×0.25 sizing, capped at 2% of equity and at 25 USDT.
   Risk's caps are binding. See [risk.md](risk.md).
-- **Exit parity and integration tests:** the engine and risk share one exit rule set, checked by Bot 6's e2e parity
+- **Exit parity and integration tests:** the engine and risk share one exit rule set, checked by the App/Integration e2e parity
   test. See [integration.md](integration.md).
 
 ## 4. Engine/risk parity on price impact
