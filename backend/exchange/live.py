@@ -104,6 +104,7 @@ class BinanceWeb3Client(TokenStatusMixin):
         self.max_live_notional = max_live_notional
         self._clock = clock
         self._tokens: dict[str, TokenInfo] = {t.symbol: t for t in (tokens or DEFAULT_TOKENS)}
+        self._registry_symbols = frozenset(self._tokens)  # our own registry: never reported as "unlisted"
         self._routes: dict[str, tuple[Quote, RouteContext]] = {}
         self.executions: list[ExecutionResult] = []
         # Public (no-key) RWA status endpoints; None disables them (status then comes from rwa/price + candles).
@@ -186,8 +187,13 @@ class BinanceWeb3Client(TokenStatusMixin):
             return [dict(r) for r in self._universe[1]]
         if errors:
             log.warning("token list: %s (source=%s)", "; ".join(errors), source)
-        registry = rows_from_tokens(self._tokens.values(), "registry", self.enable_xstock, unlisted=bool(api_rows))
-        rows = merge_rows(api_rows, public_rows, registry)
+        api_syms = {r["symbol"] for r in api_rows}
+        registry = rows_from_tokens([t for s, t in self._tokens.items() if s in self._registry_symbols],
+                                    "registry", self.enable_xstock)
+        for r in registry:
+            if r["symbol"] not in api_syms:
+                self._apply_token_status(r)
+        rows = merge_rows(api_rows, registry, public_rows)
         for r in rows:
             st = self._status_cache.get(r["symbol"])
             if st is not None and st.max_order_usdt:
@@ -196,6 +202,22 @@ class BinanceWeb3Client(TokenStatusMixin):
         self._universe_by_symbol = {r["symbol"]: r for r in rows}
         self.universe_source, self.universe_error = source, ("; ".join(errors) or None)
         return [dict(r) for r in rows]
+
+    def _apply_token_status(self, row: dict) -> None:
+        """Registry token missing from rwa/tokens (e.g. AAPLB): use the same get_token_status as /api/tokens."""
+        try:
+            st = self.get_token_status(row["symbol"])
+        except Exception as e:  # noqa: BLE001 - keep UNKNOWN (tradable as before) when status is unavailable
+            log.warning("token status for %s failed: %s", row["symbol"], e)
+            return
+        row.update(status=st.trading_status.value, tradable=st.tradable, reason=st.reason,
+                   min_order_usdt=st.min_order_usdt, max_order_usdt=st.max_order_usdt,
+                   reference_price=st.reference_price, shares_multiplier=st.shares_multiplier,
+                   market_status=st.market_status, reason_code=st.reason_code,
+                   next_open_time=st.next_open_time.isoformat() if st.next_open_time else None,
+                   source="registry+token_status")
+        if st.price is not None:
+            row["price"] = st.price
 
     def _apply_price_info(self, rows: list[dict]) -> None:
         if not hasattr(self.api, "get_price_info"):
