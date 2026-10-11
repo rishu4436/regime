@@ -42,12 +42,12 @@ Status: `DefaultStrategyEngine` implements every `StrategyEngine` method. No I/O
 ## Module map
 | File | What |
 |---|---|
-| `engine.py` | `DefaultStrategyEngine(fee_pct=0.0, slippage_bps=0.0, warmup_bars=60)`, the Protocol implementation |
+| `engine.py` | `DefaultStrategyEngine(fee_pct=0.0, slippage_bps=0.0, warmup_bars=60, manual_price_exits=False)`, the Protocol implementation |
 | `indicators.py` | Causal indicators: `sma`, `ema`, `rsi` (Wilder), `macd`, `bollinger`, `volume_average`, `atr`, `rolling_max/min`, `crossed_above/below`; `rsi_simulator` (the old buggy formula, only for parity tests) |
 | `regime.py` | `detect_regime(candles)`: 6 regimes, thresholds as module constants |
 | `presets.py` | `PRESET_MAP` (regime x style → ordered preset preferences + size multiplier), `STYLE_PARAMS`, `BASE_SIZE_PCT`, `evaluate_preset()` for the 5 presets |
 | `manual.py` | Manual rule evaluation shared by live + backtest: indicators, AND/OR entry, hard filters, RSI/MACD exits |
-| `exits.py` | Intrabar price exits (TP/SL/trailing/max-loss), the rules agreed with Bot 3 |
+| `exits.py` | Intrabar price exits (TP/SL/trailing/max-loss): the contracts v0.2 `ExitRules` rules, identical to Bot 3's `backend/risk/exits.py` |
 | `backtest.py` | `run_backtest()`: the deterministic bar loop; `BacktestRun` = `BacktestResult` + per-trade notes |
 
 ## API
@@ -79,9 +79,18 @@ Candles are sorted by timestamp defensively. `Signal.conditions_met/failed` use 
   `is None`, so a MACD of exactly 0.0 is a valid value.
 
 ### Manual evaluator (live, `evaluate_manual`)
-1. Exits first, for each open position in `strategy.symbol`: the price exits below on the last bar's OHLC, using
-   `Position.highest_price` as the carried trailing high-water mark, then the RSI exit and the MACD bearish cross on the
-   close. If one triggers, the signal is **SELL** for 100% of the position.
+1. Exits first, for the open positions in `strategy.symbol`, oldest first:
+   - **Price exits** (SL, TP, trailing, max-loss) are **off by default**. The live loop runs
+     `RiskManager.check_exits` (Bot 3) *before* the engine, and then raises `Position.highest_price` with the current
+     bar's high. Checking price exits again here would fire them twice and use a high-water mark that already includes
+     this bar. `DefaultStrategyEngine(manual_price_exits=True)` turns them on, using the rules below with
+     `Position.highest_price` as the prior-bar high-water mark, and `Position.stop_loss_price` / `take_profit_price` /
+     `trailing_stop_pct` overriding the strategy's percentages, the same way Bot 3 does.
+   - Then the RSI exit and the MACD bearish cross, on the close.
+   - **SELL signal (contracts v0.2):** one Signal per call, for one position. It sets `exit_reason`, `position_id`
+     (`Position.id`), `price` = the intended fill (the level, the open on a gap, or the close for RSI/MACD exits), and
+     `proposed_notional = qty × price`. If several positions qualify, the oldest is chosen and the reason text says how
+     many others also qualify.
 2. Entry gate: fewer than `max_open_positions` held, `bars_since_exit[symbol] > cooldown_bars` (a missing key means no
    cooldown), and the hard filters below.
 3. Entry conditions: each enabled condition whose indicator is ready gives one boolean. Conditions still warming up are
@@ -95,18 +104,21 @@ Candles are sorted by timestamp defensively. `Signal.conditions_met/failed` use 
 - **Breakout** (HIGH: close > max high of the previous `lookback` bars; LOW: close < min low) and
   `max_loss_per_trade_pct` are supported. Both are off by default.
 
-### Exit semantics (agreed with Bot 3 `check_exits`; Bot 6 parity-tests these)
+### Exit semantics (contracts v0.2 `ExitRules`, identical to Bot 3's `check_exits`; parity-tested by Bot 6)
 For each open position on each bar after its entry bar (an entry fills at its bar's close, so that bar is never checked):
-1. **Stop level** = the highest of: the stop loss `entry*(1-sl%)`, the trailing level carried from the previous bar,
-   and the max-loss level `entry - capital_at_entry*max_loss%/qty`. The reason comes from whichever rule owns that
-   level. On an exact tie the order is TRAILING_STOP > STOP_LOSS > MAX_LOSS.
-2. **Gap down**: `open <= stop` → exit at the **open**.
-3. **Gap up**: `open >= TP level` (`entry*(1+tp%)`) → TAKE_PROFIT at the **open**.
-4. `low <= stop` → exit at the stop level. **If TP and SL are both hit in the same bar, the stop wins** (conservative).
-5. `high >= TP` → TAKE_PROFIT at the TP level.
-6. If nothing triggers, ratchet the trail: `trail = max(trail, bar_high*(1-trail%))`. The new level is used from the
-   next bar on. The initial trail is `entry*(1-trail%)`.
-7. Then RSI exit (`RSI > threshold`) and MACD bearish cross on the close, filled at the close.
+1. Hit tests, each against its own level:
+   - stop loss `low <= entry*(1-sl%)`
+   - trailing `low < trail` (**strict**), where `trail = hwm_prev*(1-trail%)` and `hwm_prev` is the highest high of the
+     **prior** bars since entry, starting at the entry price. A bar's own high never tightens its own stop.
+   - max loss `low <= entry - starting_capital*max_loss%/qty`
+   - take profit `high >= entry*(1+tp%)`
+2. If **any stop** is hit, it beats the take profit, even when TP is also touched and even when the bar opened above
+   TP. Among the stops that were hit, the **highest level wins**, because it is touched first on the way down. Exact
+   ties go TRAILING_STOP > STOP_LOSS > MAX_LOSS. The fill is the level, or the **open** if `open < level` (gap down).
+3. Otherwise, a TP hit fills at the level, or at the **open** if `open > level` (gap up).
+4. If nothing exits, `hwm = max(hwm, bar.high)` for the next bar. This is the same thing the app's `raise_highs` does
+   after `check_exits`.
+5. Then the RSI exit (`RSI > threshold`) and the MACD bearish cross, on the close, filled at the close.
 
 ### Backtest (`backtest_manual`)
 - Bar loop from `warmup_bars` (60, the same as the simulator): exits, then entry at the close (never on the last bar),
@@ -148,8 +160,12 @@ and classify 99% of 480 seeded mock series correctly.
 | HIGH_VOLATILITY | DCA › Smart DCA (×0.5) | **pause** | Grid (×0.5) |
 | DOWNTREND | DCA (×0.25, minimal) | **pause** | **pause** |
 
-BUY size = `BASE_SIZE_PCT[style]` (5 / 10 / 15 %) × multiplier, applied to `AutoConfig.capital`. SELL = the whole
-position.
+BUY size = `BASE_SIZE_PCT[style]` (5 / 10 / 15 %) × multiplier, applied to `AutoConfig.capital`. SELL targets the
+**oldest** position in the symbol (`position_id`, 100% of it, `price` = close). `exit_reason` maps each preset onto the
+closest `ExitReason`, because there is no generic strategy-exit value:
+- Buy the Dip → `RSI_EXIT`
+- Trend → `MACD_EXIT`, or `TRAILING_STOP` when the close drops below EMA20 (EMA20 acts as the trailing line)
+- Grid top cell → `TAKE_PROFIT`
 
 Presets (`STYLE_PARAMS` per style):
 - **DCA**: buy on a clock-aligned schedule (every 24/12/6 bars).
@@ -169,8 +185,8 @@ Presets (`STYLE_PARAMS` per style):
 | 4 | Volume average over the **whole** series (look-ahead) | Rolling 20, including the current bar, even when `period=None` | No look-ahead (kickoff decision) |
 | 5 | `minVol` is pushed into the entry conditions, so with OR it can trigger an entry | Hard filter, always ANDed (+ optional absolute `min_volume`) | Contract decision |
 | 6 | Market hours faked as `i % 24 < 16` | Real UTC 13:00–20:00 on weekdays, using candle timestamps | Contract decision |
-| 7 | TP/SL/trailing checked on the close only | Intrabar high/low; SL wins a same-bar tie; gaps fill at the open; trail checked against the previous bar's level, then ratcheted with this bar's high | Realistic; agreed with Bot 3 |
-| 8 | Exits fill at the close | Fill at the stop/target level, or at the open on a gap | Same |
+| 7 | TP/SL/trailing checked on the close only; trailing → TP → SL priority | Intrabar high/low. Any hit stop (SL, trailing or max-loss) beats TP, and the highest hit stop wins. Trailing is strict (`low < trail`) and uses prior-bar highs only | Contracts v0.2; identical to Bot 3 |
+| 8 | Exits fill at the close | Fill at the stop/target level, or at the open on a gap (SL/trailing: `open < level`; TP: `open > level`) | Same |
 | 9 | Equity is realised-only and `continue` skips `equity.push` | Mark-to-market every bar, one point per candle | Drawdown was understated |
 | 10 | Sizing uses realised capital | Mark-to-market equity, capped by cash | Consistent with the M2M curve |
 | 11 | No fees or slippage | `fee_pct` / `slippage_bps` (default 0) | Real SWAP/RFQ fills cost money |
@@ -183,11 +199,11 @@ candles. That is intentional: the kickoff required the fixes. The README line ab
 trade list") is superseded.
 
 ## Tests
-`pytest backend/engine` runs 103 tests:
+`pytest backend/engine` runs 122 tests:
 - indicators against hand-computed values and independent pandas references
 - regime detection on all mock shapes and 25 seeds per regime
 - the full preset map and evaluate_auto
 - evaluator gates and filters
-- every exit rule in isolation and inside the backtest
+- every exit rule in isolation and inside the backtest, plus a copy of Bot 6's exit-parity fixtures from `tests/e2e/test_exit_parity.py`
 - backtest determinism and invariants, mark-to-market drawdown, fees and slippage, edge cases
 - live/backtest consistency
