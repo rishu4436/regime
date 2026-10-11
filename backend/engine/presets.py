@@ -257,7 +257,7 @@ def evaluate_preset(
             return PresetDecision(Action.STAY_OUT, "Grid: flat range", failed=["range"])
         step = (hi - lo) / sp.grid_levels
         level = int(min(max((close - lo) / step, 0), sp.grid_levels - 1e-9))  # 0 = bottom cell
-        pos = f"cell {level + 1}/{sp.grid_levels} of range {lo:.4g}-{hi:.4g}"
+        pos = f"cell {level + 1} of {sp.grid_levels} (1 = bottom, {sp.grid_levels} = top) of range {lo:.4g}-{hi:.4g}"
         if holding and level >= sp.grid_levels - 1:
             return PresetDecision(
                 Action.SELL, f"Grid: price in the top grid {pos}", ["top_cell"], exit_reason=ExitReason.TAKE_PROFIT
@@ -269,6 +269,12 @@ def evaluate_preset(
                 Action.STAY_OUT,
                 f"Grid: price broke below the range ({close:.4g} < {lo:.4g}), not catching it",
                 failed=["in_range"],
+            )
+        if level >= sp.grid_levels - 1:
+            return PresetDecision(
+                Action.STAY_OUT,
+                f"Grid: price at the top of the range, {pos}; buys only in the bottom cell",
+                failed=["bottom_cell"],
             )
         return PresetDecision(Action.STAY_OUT, f"Grid: price mid-range, {pos}", failed=["bottom_cell"])
 

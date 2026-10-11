@@ -149,7 +149,7 @@ wins:
 | 5 | MILD_UPTREND | close > SMA50 and slope ≥ 0.75% |
 | 6 | SIDEWAYS | everything else |
 
-With fewer than 61 candles the result is SIDEWAYS with confidence 0.1. The thresholds were tuned on 1h mock candles
+With fewer than 60 candles the result is SIDEWAYS with confidence 0.1. The thresholds were tuned on 1h mock candles
 and classify 99% of 480 seeded mock series correctly.
 
 ### Auto mode: style mapping (first ENABLED preset wins; none → stay out)
@@ -245,7 +245,7 @@ irregular: hourly bars are missing off-hours and at weekends, DEX volume is ofte
   - Dead bars (high == low and volume == 0, i.e. a closed or illiquid market) are ignored. If more than 50% of the
     last 20 bars are dead, the result is SIDEWAYS at confidence 0.2 with `features["insufficient_data"]=1`, so a
     flat closed-market stretch is never read as a trend.
-  - Fewer than 61 active bars gives the same insufficient-data result.
+  - Fewer than 60 active bars gives the same insufficient-data result.
   - Volatility uses only returns between contiguous bars (gap <= 1.5 bars), so overnight and weekend gaps are not
     counted as volatility.
   - Percent thresholds are multiplied by `clamp(sqrt(bar_hours), 0.25, 5)`. 1h is x1, 4h is x2 and 1d is about x4.9,

@@ -25,7 +25,7 @@ EMA_PERIOD = 20
 RSI_PERIOD = 14
 SLOPE_LOOKBACK = 10  # bars over which the SMA50 slope / return are measured
 VOL_LOOKBACK = 20
-MIN_BARS = SMA_PERIOD + SLOPE_LOOKBACK + 1  # 61 ACTIVE bars
+MIN_BARS = SMA_PERIOD + SLOPE_LOOKBACK  # 60 ACTIVE bars: SMA50 exists at the last bar and 10 bars earlier
 
 HIGH_VOL_STDEV_PCT = 2.0  # stdev of per-bar log returns (last 20 bars) >= 2% -> HIGH_VOLATILITY
 PULLBACK_RSI = 30.0  # RSI(14) below this ...  (RSI is unit-free: never scaled)

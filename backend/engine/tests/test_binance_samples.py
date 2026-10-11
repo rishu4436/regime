@@ -68,7 +68,7 @@ def test_real_samples_parse_and_shape():
 
 def test_real_samples_regime_never_crashes_and_ondo_is_sideways():
     for s in ("NVDAB", "NVDAon", "TSLAx"):
-        ra = detect_regime(kline_candles(s))  # 48 bars < 61: insufficient -> low-confidence SIDEWAYS
+        ra = detect_regime(kline_candles(s))  # 48 bars < 60: insufficient -> low-confidence SIDEWAYS
         assert ra.regime == Regime.SIDEWAYS and ra.confidence <= 0.2 and ra.features["insufficient_data"] == 1
     ra = detect_regime(extended("NVDAon"))
     assert ra.regime == Regime.SIDEWAYS and ra.features["volatility_pct"] < 0.2  # oracle-like off-hours prices
