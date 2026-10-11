@@ -328,3 +328,10 @@ def test_pending_exit_codes():
     from backend.llm.live import plain_reason
     assert "still settling" in plain_reason("pending_exit")
     assert "still settling" in plain_reason("exit_pending")
+
+
+def test_exchange_cap_and_lock_codes_are_plain():
+    from backend.llm import live
+    for raw in ("order_cap_exceeded", "order_cap_exceeded: SELL 550 > 500", "tx_locked"):
+        txt = live.plain_reason(raw)
+        assert "order_cap_exceeded" not in txt and "tx_locked" not in txt

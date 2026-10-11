@@ -271,6 +271,9 @@ REASON_TEXT: dict[str, str] = {
     "wallet_limits_stale": "warning: the Agentic Wallet's limits were last read more than 15 minutes ago",
     "wallet_session_expired": ("the Agentic Wallet session expired, so live trading is paused until Rishu re-scans the "
                                "QR code in the Binance App"),
+    "order_cap_exceeded": ("the order is larger than the per-order limit set for live trading, so the exchange layer "
+                           "refused it and nothing was sent"),
+    "tx_locked": "the Agentic Wallet is busy with another transaction or an App confirmation, so Regime waits",
     "stale_price": "the latest price data is stale (too old), so Regime will not trade on it",
 }
 
