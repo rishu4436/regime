@@ -75,7 +75,8 @@ def test_registration_file_never_has_placeholder(monkeypatch):
     monkeypatch.delenv("AGENT_PUBLIC_BASE_URL", raising=False)
     reg = build_registration_file()
     assert reg["name"] == AGENT_NAME
-    assert "Agentic Wallet" in reg["description"] and "Grok" in reg["description"]
+    assert reg["name"] == "Regime"
+    assert reg["description"] == "Autonomous tokenized-stock trading agent on BNB Chain"
     assert [e["name"] for e in reg["endpoints"]] == ["web"]
     assert all(STATUS_URL_PLACEHOLDER not in e["endpoint"] for e in reg["endpoints"])
 
@@ -107,3 +108,13 @@ def test_agent_card_shape(monkeypatch):
     assert "read-only-status" in card["capabilities"]
     assert card["identity"] is None
     json.dumps(card)  # serialisable
+
+
+def test_agent_card_is_named_regime():
+    from backend.agent_studio.agent_card import build_agent_card
+
+    card = build_agent_card()
+    assert card["name"] == card["display_name"] == "Regime"
+    assert card["description"] == "Autonomous tokenized-stock trading agent on BNB Chain"
+    assert "Agentic Wallet" in card["summary"] and "Grok" in card["summary"]
+    assert card["endpoints"]["repo"] == "https://github.com/rishu4436/teamwork"

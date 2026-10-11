@@ -95,7 +95,7 @@ def test_f1_requires_confirmation_without_execution_is_awaiting():
 def test_f1_filled_after_user_ok_drops_on_its_own():
     sig = _sig()
     txt = templates.explain_decision(_d(sig, _verdict(sig, conf=True), _ex()))
-    assert "The agent bought NVDAB after your OK with real funds" in txt and "on its own" not in txt
+    assert "Regime bought NVDAB after your OK with real funds" in txt and "on its own" not in txt
     assert "confirmation mode" in txt and f"https://bscscan.com/tx/{TX}" in txt
 
 

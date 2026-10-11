@@ -1,4 +1,4 @@
-"""Agent card / ERC-8004 registration metadata for the teamwork agent.
+"""Agent card / ERC-8004 registration metadata for Regime, the trading agent.
 
 Two views of the same facts:
 
@@ -26,10 +26,15 @@ from .config import (
     TRADING_WALLET_ENV,
 )
 
-AGENT_NAME = "teamwork-stock-agent"
-AGENT_DISPLAY_NAME = "Teamwork Tokenized-Stock Agent"
-AGENT_DESCRIPTION = (
-    "Autonomous 24/7 tokenized-stock trader on BNB Chain. Trades bStock and Ondo "
+#: Product name. Also the ERC-8004 registration name and the name ``register.py`` looks up to avoid a double
+#: registration (nothing is registered yet, so the identity carries this name from the start).
+AGENT_NAME = "Regime"
+AGENT_DISPLAY_NAME = "Regime"
+#: On-chain description (kept short: every byte of the registration file is gas).
+AGENT_DESCRIPTION = "Autonomous tokenized-stock trading agent on BNB Chain"
+#: Longer off-chain summary for the API / dashboard card only.
+AGENT_SUMMARY = (
+    "Regime trades 24/7 on its own on BNB Chain. It trades bStock and Ondo "
     "tokenized US equities through the Binance Agentic Wallet (spot, BSC mainnet), "
     "picks one strategy per market regime, enforces layered risk limits (agent caps "
     "plus wallet guardrails) and explains every decision in plain English with Grok."
@@ -109,7 +114,7 @@ def build_metadata(trading_wallet: str | None = None) -> list[dict[str, str]]:
     ``trading_wallet`` for the Agentic Wallet's *public* address instead.
     """
     items = [
-        {"key": "app", "value": "teamwork"},
+        {"key": "app", "value": "Regime"},
         {"key": "capabilities", "value": ",".join(CAPABILITIES)},
     ]
     wallet = (trading_wallet or os.environ.get(TRADING_WALLET_ENV) or "").strip()
@@ -132,6 +137,7 @@ def build_agent_card(
         "name": AGENT_NAME,
         "display_name": AGENT_DISPLAY_NAME,
         "description": AGENT_DESCRIPTION,
+        "summary": AGENT_SUMMARY,
         "capabilities": list(CAPABILITIES),
         "endpoints": {
             "repo": REPO_URL,

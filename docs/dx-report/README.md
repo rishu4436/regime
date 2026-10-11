@@ -1,19 +1,21 @@
-# Developer Experience Report: team `teamwork`
+# Developer Experience Report: Regime
 
 *BNB Hack: Tokenized Stocks Edition. Repo: [rishu4436/teamwork](https://github.com/rishu4436/teamwork). Written 11 Oct 2026.*
 
 ## Summary
 
-`teamwork` is an autonomous trading agent for tokenized stocks (bStocks such as NVDAB, plus Ondo tokens) on BNB Smart
+**Regime** is an autonomous trading agent for tokenized stocks (bStocks such as NVDAB, plus Ondo tokens) on BNB Smart
 Chain mainnet, built to run 24/7 without asking before each trade. It reads market data, quotes and token status from
 the **Binance Web3 API**, and it executes trades through the **Binance Agentic Wallet** (`baw` CLI). A deterministic
 strategy/regime engine proposes every trade, and a deterministic risk layer can block or shrink it. **The LLM (xAI
-Grok) only explains decisions in plain language; it never places trades.** The agent also has an on-chain **ERC-8004
+Grok) only explains decisions in plain language; it never places trades.** Regime also has an on-chain **ERC-8004
 identity** built with the BNB Agent Studio SDK (`bnbagent` 0.5.0).
 
-**Status at the time of writing:** the full loop has run end to end in simulation and against fake exchanges. **No
-real-funds swap has been made yet**, and **the ERC-8004 identity has not been registered on mainnet yet.** Statements
-about live fills come from the `baw` CLI source and docs, and every section marks what it did not verify.
+**Status at the time of writing:** the full loop has run end to end in simulation and against fake exchanges, and
+**Regime made its first real-funds trade on BNB Chain mainnet on its own** on 11 Oct 2026 at 09:25 IST: Auto mode
+(Grid) bought 0.0434 NVDAB for 10 USDT at about 230.47
+([BscScan](https://bscscan.com/tx/0x228c02688cd2a8170b38dba6abfdb4f95fca9e9e22ae6bed6a191d0b88a19f22)).
+**The ERC-8004 identity has not been registered on mainnet yet.** Every section marks what it did not verify.
 
 ## Sections
 
@@ -34,7 +36,7 @@ The required **AI stack** section is [ai-stack.md](ai-stack.md). In short:
 - Grok (`XAI_API_KEY`) explains, with an offline template fallback.
 - In LIVE, explanations must not use approval wording and must carry a BscScan tx link.
 - The Agentic Wallet executes under both its own limits and ours.
-- Agent Studio provides the agent's ERC-8004 identity.
+- Agent Studio provides Regime's ERC-8004 identity (agent name `Regime`).
 
 ## Top pain points
 

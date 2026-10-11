@@ -32,7 +32,7 @@ IDENTITY_FILE_ENV = "AGENT_STUDIO_IDENTITY_FILE"
 
 REPO_URL = "https://github.com/rishu4436/teamwork"
 #: Placeholder until Rishu exposes the API publicly; .invalid never resolves.
-STATUS_URL_PLACEHOLDER = "https://teamwork-agent.invalid/api/system"
+STATUS_URL_PLACEHOLDER = "https://regime-agent.invalid/api/system"
 STATUS_PATH = "/api/system"
 
 

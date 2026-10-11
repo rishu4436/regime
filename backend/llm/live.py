@@ -111,14 +111,87 @@ def execution_facts(execution: Any) -> dict[str, Any]:
 
 # ----------------------------------------------------------------------------------------------- reasons
 WALLET = "set by the Agentic Wallet"
-AGENT = "set by the agent's risk limits"
+AGENT = "set by Regime's risk limits"
+
+# ----------------------------------------------------------------------------------------------- price impact
+# Bot 3 risk (15beac5) 'live_slippage' is directional: a quote WORSE than the reference price by more than 1% is blocked
+# (adverse slippage); a BETTER quote is fine up to a 3% sanity cap, beyond that it is blocked as 'likely a bad quote'
+# (sells mirrored). Binance's own priceImpactPercent has no sign, so risk and Bot 2's engine (c89f7e0,
+# 'live_price_impact') count its size as adverse: "... (direction not reported, counted as adverse)".
+PRICE_IMPACT_CODES = frozenset({"live_slippage", "live_price_impact", "slippage", "price_impact"})
+UNSIGNED_IMPACT_TEXT = "Binance didn't say which way the price impact goes, so Regime treated it as a cost to be safe"
+_N = r"(\d+(?:\.\d+)?)"
+_BAD_QUOTE_RE = re.compile(r"likely a bad quote|sanity (?:limit|cap)", re.I)
+_UNSIGNED_RE = re.compile(r"direction not reported|counted as adverse", re.I)
+_ADVERSE_RE = re.compile(_N + r"\s*%\s*worse than the (?:reference|market) price", re.I)
+_FAVORABLE_RE = re.compile(_N + r"\s*%\s*better than the (?:reference|market) price", re.I)
+_SANITY_RE = re.compile(_N + r"\s*%\s*sanity", re.I)
+_IMPACT_RE = re.compile(r"price impact\s*(?:of\s*)?-?" + _N + r"\s*%", re.I)
+_MAX_RE = re.compile(r"(?:\bmax(?:imum)?|>)\s*" + _N + r"\s*%", re.I)
+_TOL_RE = re.compile(r"slippage tolerance\s*" + _N + r"\s*%\s*\(max\s*" + _N + r"\s*%\)", re.I)
+_PRICES_RE = re.compile(r"quote\s+" + _N + r"\s+vs\s+reference\s+" + _N, re.I)
+
+
+def pct_text(x: Optional[float]) -> str:
+    """1.5 -> '1.5', 1.0 -> '1', 0.123 -> '0.12' (same rendering for engine '1.5%' and risk '1.50%')."""
+    return "?" if x is None else (f"{x:.2f}".rstrip("0").rstrip(".") or "0")
+
+
+def _num_after(pat: "re.Pattern[str]", text: str, group: int = 1) -> Optional[float]:
+    m = pat.search(text or "")
+    return _float(m.group(group)) if m else None
+
+
+def price_impact_text(code: str, detail: Any) -> Optional[str]:
+    """Plain words for a price-impact / slippage block (risk 'live_slippage', engine 'live_price_impact').
+
+    The same situation gives the same text from risk and engine (numbers rendered by ``pct_text``), so an explanation
+    can drop the duplicate. Returns None for detail it does not recognise (older formats keep the generic wording)."""
+    d = _clean(detail or "")
+    parts: list[str] = []
+    tol_text: Optional[str] = None
+    tm = _TOL_RE.search(d)
+    if tm:
+        tol, tol_cap = _float(tm.group(1)), _float(tm.group(2))
+        if tol is not None and tol_cap is not None and tol > tol_cap + 1e-9:
+            tol_text = (f"the allowed slippage on the swap ({pct_text(tol)}%) is above the {pct_text(tol_cap)}% limit")
+        d_main = d[:tm.start()] + d[tm.end():]
+    else:
+        d_main = d
+    if _BAD_QUOTE_RE.search(d_main) or (_FAVORABLE_RE.search(d_main) and "bad quote" in d_main.lower()):
+        fav, cap = _num_after(_FAVORABLE_RE, d_main), _num_after(_SANITY_RE, d_main)
+        how = (f"{pct_text(fav)}% better, more than {pct_text(cap)}%" if fav is not None and cap is not None
+               else f"more than {pct_text(cap)}%" if cap is not None else "far more than normal")
+        parts.append(f"the quote was suspiciously better than the market price ({how}), so Regime skipped it as a "
+                     f"likely bad quote")
+    elif _UNSIGNED_RE.search(d_main) or (code == "live_price_impact" and _IMPACT_RE.search(d_main)):
+        size, cap = _num_after(_IMPACT_RE, d_main), _num_after(_MAX_RE, d_main)
+        if size is not None and cap is not None and size <= cap + 1e-9:
+            pass  # impact within the limit: only the slippage tolerance (if any) failed
+        elif size is not None and cap is not None:
+            parts.append(f"{UNSIGNED_IMPACT_TEXT}, and at {pct_text(size)}% it is over the {pct_text(cap)}% limit")
+        else:
+            parts.append(UNSIGNED_IMPACT_TEXT + ", and it is over the price-impact limit")
+    elif _ADVERSE_RE.search(d_main):
+        size, cap = _num_after(_ADVERSE_RE, d_main), _num_after(_MAX_RE, d_main)
+        if cap is None or size is None or size > cap + 1e-9:
+            limit = f"more than the {pct_text(cap)}% slippage limit" if cap is not None else "more than the slippage limit"
+            parts.append(f"the quote's price was {pct_text(size)}% worse than the market price, {limit}")
+    elif _FAVORABLE_RE.search(d_main):
+        pass  # a better price within the sanity cap is never a problem
+    elif not tol_text:
+        return None
+    if tol_text:
+        parts.append(tol_text)
+    return "; ".join(parts) if parts else None
+
 
 # code -> plain-language reason. "{d}" is not used; details (numbers) are appended in parentheses by plain_reason.
 REASON_TEXT: dict[str, str] = {
     # --- Bot 3 risk check names
-    "trading_mode": "live trading is not enabled (the live-trading switches in the agent's settings are off)",
+    "trading_mode": "live trading is not enabled (the live-trading switches in Regime's settings are off)",
     "emergency_stop": "the emergency stop is active, so no new buys are made",
-    "paused": "the agent is paused",
+    "paused": "Regime is paused",
     "max_open_positions": "the maximum number of open positions is reached",
     "cooldown": "the cooldown after the last exit on this token has not finished",
     "daily_loss_limit": "the daily loss limit is reached",
@@ -128,9 +201,9 @@ REASON_TEXT: dict[str, str] = {
     "max_token_exposure": "the max exposure limit for this token is reached",
     "max_total_exposure": "the max total exposure limit is reached",
     "max_loss_per_trade": "the max-loss-per-trade limit",
-    "live_daily_loss_cap": ("the daily loss cap was hit: the agent triggered an emergency stop on its own and is "
+    "live_daily_loss_cap": ("the daily loss cap was hit: Regime triggered an emergency stop on its own and is "
                             "selling all open positions"),
-    "live_stale_data": "the latest price data is stale (too old), so the agent will not trade on it",
+    "live_stale_data": "the latest price data is stale (too old), so Regime will not trade on it",
     "live_future_data": "the latest price data has a timestamp in the future (clock or feed problem)",
     "live_market_hours": "the token's stock market session is closed",
     "live_market_hours_now": "the token's stock market session is closed right now",
@@ -159,9 +232,9 @@ REASON_TEXT: dict[str, str] = {
     "live_thin_liquidity": "on-chain liquidity is too thin right now",
     "live_illiquid_family": "xStock tokens are excluded in live trading (no usable liquidity on BNB Chain)",
     "live_token_paused": "the token is paused or closed for trading right now",
-    "live_price_impact": "the quote's price impact is over the cap",
+    "live_price_impact": UNSIGNED_IMPACT_TEXT + ", and it is over the price-impact limit",
     "live_below_min_order": ("the token's minimum order (e.g. 20 USD for Ondo tokens) would exceed the per-order cap, "
-                             "so the agent stays out"),
+                             "so Regime stays out"),
     # --- Bot 4 / generic exchange reason codes
     "market_closed": "the token's market is closed",
     "offhours": "the token is in off-hours trading",
@@ -182,23 +255,23 @@ REASON_TEXT: dict[str, str] = {
     "price_impact": "the quote's price impact is over the cap",
     "pending_exit": "the exit is held because the buy is still settling on-chain; it runs as soon as the fill is confirmed",
     "exit_pending": "the exit is held because the buy is still settling on-chain; it runs as soon as the fill is confirmed",
-    "order_in_flight": "an earlier swap is still settling on-chain, so the agent waits for it before placing another",
+    "order_in_flight": "an earlier swap is still settling on-chain, so Regime waits for it before placing another",
     "session_expired": "the Agentic Wallet session expired, so trading is paused until Rishu re-scans the QR code",
     "wallet_not_ready": "the Agentic Wallet isn't connected yet, so trading is paused until Rishu scans the QR code",
     "above_maximum": "the order is above the token's maximum order size",
     "xstock_disabled": "xStock tokens are excluded in live trading (no usable liquidity on BNB Chain)",
     "slippage_exceeded": ("the swap was rejected on-chain because the fill would have been worse than the slippage cap "
                           "(no trade happened)"),
-    "exit_quota_reserve": ("part of the Agentic Wallet's daily allowance is kept in reserve so the agent can still sell "
+    "exit_quota_reserve": ("part of the Agentic Wallet's daily allowance is kept in reserve so Regime can still sell "
                            "all open positions today"),
-    "wallet_exit_reserve": ("part of the Agentic Wallet's daily allowance is kept in reserve so the agent can still sell "
+    "wallet_exit_reserve": ("part of the Agentic Wallet's daily allowance is kept in reserve so Regime can still sell "
                             "all open positions today"),
     "exit_quota_shortfall": ("warning: the Agentic Wallet's remaining daily allowance cannot cover selling all open "
                              "positions today"),
     "wallet_limits_stale": "warning: the Agentic Wallet's limits were last read more than 15 minutes ago",
     "wallet_session_expired": ("the Agentic Wallet session expired, so live trading is paused until Rishu re-scans the "
                                "QR code in the Binance App"),
-    "stale_price": "the latest price data is stale (too old), so the agent will not trade on it",
+    "stale_price": "the latest price data is stale (too old), so Regime will not trade on it",
 }
 
 # Binance Web3 API error codes (Bot 4 errors.py; trading-api/error-codes)
@@ -213,11 +286,11 @@ EXCHANGE_CODE_TEXT: dict[int, str] = {
     40401: "the price quote expired before execution (quotes are valid for about 30 seconds)",
     40462: "the swap no longer matched its quote",
     40366: "the order is over the Ondo maximum single order size",
-    40367: "the token's market is closed (Ondo market state not tradable) - the agent skips this token for a short cooldown",
+    40367: "the token's market is closed (Ondo market state not tradable) - Regime skips this token for a short cooldown",
     40368: "the Ondo stablecoin pair is not valid",
-    40369: "the token's market is closed (outside its trading time) - the agent skips this token for a short cooldown",
+    40369: "the token's market is closed (outside its trading time) - Regime skips this token for a short cooldown",
     40370: "the trading pair is not valid for this token",
-    40374: "there is not enough liquidity for this order - the agent skips this token for a short cooldown",
+    40374: "there is not enough liquidity for this order - Regime skips this token for a short cooldown",
     40375: "the order is below the token's minimum order size (Ondo minimum is 20 USD)",
     42901: "a previous order is still being submitted",
 }
@@ -316,6 +389,10 @@ def plain_reason(reason: Any, keywords: bool = True) -> str:
     m = _BLOCKED_RE.match(raw)
     if m:
         name, detail = m.group("name"), _clean(m.group("detail"))
+        if name in PRICE_IMPACT_CODES:
+            pt = price_impact_text(name, detail)
+            if pt:
+                return pt
         text = _code_text(name, detail) or _keyword_text(detail) or name.replace("_", " ")
         if name in NO_DETAIL or has_env_names(detail):
             detail = ""
@@ -327,15 +404,22 @@ def plain_reason(reason: Any, keywords: bool = True) -> str:
     m2 = re.match(r"^(?P<code>[a-z][a-z0-9_]+)\s*[:\-]\s*(?P<detail>.+)$", raw)
     if m2 and m2.group("code") in REASON_TEXT:
         detail = _clean(m2.group("detail"))
+        pt = price_impact_text(m2.group("code"), detail) if m2.group("code") in PRICE_IMPACT_CODES else None
+        if pt:
+            return pt
         return f"{_code_text(m2.group('code'), detail)} ({detail})"
     m3 = _CODE_RE.match(raw)
     if m3 and int(m3.group("code")) in EXCHANGE_CODE_TEXT:
         rest = _clean(re.sub(r"^[A-Z0-9_]+:\s*", "", m3.group("rest")))
         text = EXCHANGE_CODE_TEXT[int(m3.group("code"))]
         return f"{text} ({rest}; Binance code {m3.group('code')})" if rest else f"{text} (Binance code {m3.group('code')})"
+    if _BAD_QUOTE_RE.search(raw) or _UNSIGNED_RE.search(raw) or _ADVERSE_RE.search(raw):
+        pt = price_impact_text("", raw)
+        if pt:
+            return pt
     kw = _keyword_text(raw) if keywords else None
     if has_env_names(raw):
-        return kw or "live trading is not enabled (the live-trading switches in the agent's settings are off)"
+        return kw or "live trading is not enabled (the live-trading switches in Regime's settings are off)"
     return f"{kw} ({raw})" if kw else raw
 
 

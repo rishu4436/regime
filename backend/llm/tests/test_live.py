@@ -46,7 +46,7 @@ def _blocked(*reasons, checks=()):
 def test_live_filled_buy_names_real_funds_amount_route_fill_tx_and_bscscan():
     txt = templates.explain_decision(_decision(ex=_ex()))
     assert "LIVE, real funds, autonomous" in txt
-    assert "The agent bought NVDAB on its own with real funds on BNB Chain mainnet: 24.99 USDT via SWAP at a fill price of 182.4" in txt
+    assert "Regime bought NVDAB on its own with real funds on BNB Chain mainnet: 24.99 USDT via SWAP at a fill price of 182.4" in txt
     assert f"Tx hash {TX}: https://bscscan.com/tx/{TX}." in txt
     assert not APPROVAL.search(txt)
 
@@ -66,7 +66,7 @@ def test_live_rfq_sell_exit_with_dict_like_extra_fields():
     ex = _ex(symbol="NVDAon", side=OrderSide.SELL, path=ExecutionPath.RFQ, avg_price=150.1, notional=20.5, tx_hash=None)
     d = _decision(sig, None, ex, action=Action.SELL)
     txt = templates.explain_decision(d)
-    assert "The agent sold NVDAon on its own with real funds" in txt and "via RFQ" in txt and "150.1" in txt
+    assert "Regime sold NVDAon on its own with real funds" in txt and "via RFQ" in txt and "150.1" in txt
     assert "Exit trigger: the trailing stop was hit." in txt and "Sold position" not in txt
 
 
@@ -106,7 +106,7 @@ def test_sim_output_unchanged(buy_decision):
 # ------------------------------------------------------------------ risk blocks (Bot 3 bot3/live real strings)
 @pytest.mark.parametrize("reason,phrase", [
     ("Blocked (live_daily_loss_cap): Today's LIVE loss 5.20 USDT (realized + unrealized), cap 5.00 USDT",
-     "daily loss cap was hit: the agent triggered an emergency stop on its own and is selling all open positions"),
+     "daily loss cap was hit: Regime triggered an emergency stop on its own and is selling all open positions"),
     ("Blocked (live_stale_data): Latest market data is 900s old, limit 180s", "stale"),
     ("Blocked (live_quote): Quote expired at 10:01:02 UTC", "quote expired"),
     ("Blocked (live_slippage): Quote price 183.1 vs reference 180.0: impact 1.72%, slippage tolerance 0.50%; max 1.0% - too much slippage",
@@ -130,7 +130,7 @@ def test_sim_output_unchanged(buy_decision):
     ("Blocked (live_quote_notional): Quote notional 30.00 USDT vs approved size 25.00 USDT (per-order cap 20.00, set by wallet)",
      "set by the Agentic Wallet"),
     ("Blocked (live_quote_notional): Quote notional 30.00 USDT vs approved size 25.00 USDT (per-order cap 25.00, set by risk)",
-     "set by the agent's risk limits"),
+     "set by Regime's risk limits"),
     ("Blocked (emergency_stop): Emergency stop is active - all new entries are blocked", "emergency stop is active"),
     ("Blocked (max_total_exposure): Total exposure 50 USDT", "max total exposure"),
     ("Blocked (wallet_exit_reserve): keeping 25 USDT of the daily quota to sell all open positions", "kept in reserve"),
@@ -160,7 +160,7 @@ def test_size_cut_names_limit_and_who_set_it():
         RiskCheck(name="wallet_exit_reserve", passed=True, detail="Exit quota reserve: reduced from 20.00 to 15.00 USDT"),
     ])
     txt = templates.explain_decision(_decision(sig, v, None))
-    assert "size cut from 30.00 to 25.00 USDT by the per-order cap (set by the agent's risk limits)" in txt
+    assert "size cut from 30.00 to 25.00 USDT by the per-order cap (set by Regime's risk limits)" in txt
     assert "size cut from 25.00 to 20.00 USDT by the per-transaction limit (set by the Agentic Wallet)" in txt
     assert "size cut from 20.00 to 15.00 USDT by part of the Agentic Wallet's daily allowance is kept in reserve" in txt
 
@@ -176,7 +176,7 @@ def test_size_cut_names_limit_and_who_set_it():
     ("live_thin_liquidity", "liquidity is too thin"),
     ("live_future_data", "in the future"),
     ("live_no_data", "no valid price candles"),
-    ("live_price_impact", "price impact is over the cap"),
+    ("live_price_impact", "which way the price impact goes"),
 ])
 def test_engine_stay_out_codes(code, phrase):
     sig = _sig(action=Action.STAY_OUT, conditions_met=[], conditions_failed=[code])
@@ -252,7 +252,7 @@ def test_live_blocked_prompt_has_plain_block_reasons(make_client, reply):
     DefaultExplainer(client).explain_decision(_blocked("Blocked (live_order_cap): LIVE per-order cap 25.00 USDT"))
     content = rec.payloads[0]["messages"][1]["content"]
     facts = json.loads(content.split("LIVE FACTS JSON:\n", 1)[1].split("\n\nDECISION JSON", 1)[0])
-    assert facts["block_reasons"] == ["the per-order cap (set by the agent's risk limits) (LIVE per-order cap 25.00 USDT)"]
+    assert facts["block_reasons"] == ["the per-order cap (set by Regime's risk limits) (LIVE per-order cap 25.00 USDT)"]
 
 
 def test_live_summary_prompt_is_autonomous(make_client, reply):

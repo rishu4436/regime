@@ -1,4 +1,4 @@
-"""BNB Agent Studio integration (ERC-8004 agent identity) for the teamwork agent.
+"""BNB Agent Studio integration (ERC-8004 agent identity) for Regime, the trading agent.
 
 Read-only, dependency-free API surface (safe to import from the FastAPI app):
 

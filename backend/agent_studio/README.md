@@ -1,6 +1,6 @@
 # backend/agent_studio: BNB Agent Studio / ERC-8004 identity (Bot 5)
 
-This gives our trading agent an **on-chain ERC-8004 identity** on BNB Smart Chain using the
+This gives **Regime**, our trading agent, an **on-chain ERC-8004 identity** on BNB Smart Chain using the
 BNB Agent Studio Python SDK **`bnbagent` 0.5.0** (PyPI, verified against the installed source).
 It also lets the API show that identity (`/api/system` → `agent_identity`).
 
@@ -94,7 +94,7 @@ Safety rules the CLI enforces:
 - A mainnet run requires `--confirm-mainnet`.
 - There's no `--private-key` flag.
 - An existing identity file for the same network isn't overwritten without `--force`.
-- If this key already owns an agent named `teamwork-stock-agent` (checked through the 8004scan indexer), that agent is reused instead of registering a second one.
+- If this key already owns an agent named `Regime` (checked through the 8004scan indexer), that agent is reused instead of registering a second one.
 
 Exit codes:
 - `0` ok.
