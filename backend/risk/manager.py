@@ -91,7 +91,7 @@ class DefaultRiskManager:
             return self._control
 
     def pause(self, reason: str = "") -> ControlState:
-        return self._update(paused=True, reason=f"Paused: {reason}" if reason else "Paused by user")
+        return self._update(paused=True, reason=reason or "Paused by user")
 
     def resume(self) -> ControlState:
         """Clears pause. Does NOT clear an emergency stop (use ``reset_emergency_stop``)."""
@@ -104,7 +104,7 @@ class DefaultRiskManager:
     def emergency_stop(self, reason: str = "") -> ControlState:
         """Sets emergency_stopped=True (``paused`` untouched): every BUY is blocked and check_exits closes all positions."""
         return self._update(emergency_stopped=True,
-                            reason=f"EMERGENCY STOP: {reason}" if reason else "EMERGENCY STOP by user")
+                            reason=reason or "Emergency stop by user")
 
     def reset_emergency_stop(self) -> ControlState:
         """Explicit user action: clears emergency_stopped and leaves ``paused`` unchanged."""

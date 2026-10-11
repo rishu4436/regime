@@ -27,7 +27,7 @@ def test_pause_resume(clock):
 def test_emergency_stop_requires_explicit_reset(clock):
     rm = DefaultRiskManager(clock=clock)
     s = rm.emergency_stop("wallet drained?")
-    assert s.emergency_stopped and not s.paused and "EMERGENCY" in s.reason  # paused untouched
+    assert s.emergency_stopped and not s.paused and s.reason == "wallet drained?"  # paused untouched
     s = rm.resume()
     assert s.emergency_stopped and not s.paused and "reset_emergency_stop" in s.reason  # resume never clears it
     s = rm.reset_emergency_stop()
