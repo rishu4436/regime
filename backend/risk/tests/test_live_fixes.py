@@ -8,7 +8,7 @@ from backend.risk import DefaultRiskManager, LiveContext, LiveRiskProfile, RiskC
 from backend.risk.live import TokenStatus, WalletLimits
 
 from .conftest import T0, make_portfolio, pos
-from .test_live import lbuy, lctl, live_rm, names, quote
+from .test_live import lbuy, lctl, live_rm, names, open_wallet, quote
 
 
 def wallet(W, positions=(), **kw):
@@ -18,7 +18,7 @@ def wallet(W, positions=(), **kw):
 
 def wctx(W, tmin=None, **kw):
     base = dict(data_timestamp=T0 - timedelta(seconds=60), balances={"USDT": W, "BNB": 0.01}, reference_price=100.0,
-                token_status=TokenStatus(trading_status="trading", min_order_usdt=tmin))
+                token_status=TokenStatus(trading_status="trading", min_order_usdt=tmin), wallet_limits=open_wallet())
     base.update(kw)
     return LiveContext(**base)
 

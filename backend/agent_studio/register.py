@@ -39,7 +39,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from .agent_card import AGENT_NAME, build_metadata, build_registration_file
+from .agent_card import (
+    AGENT_NAME,
+    build_metadata,
+    build_registration_file,
+    complete_registration_file,
+    ensure_registration_uri,
+)
 from .config import (
     NETWORKS,
     PRIVATE_KEY_ENV,
@@ -202,8 +208,8 @@ def _preview_registration(
         "identity_registry": net.registry,
         "chain_id": net.chain_id,
     }
-    file_ = gen.generate_registration_file(**kwargs)
-    uri = gen.generate_agent_uri(**kwargs)
+    file_ = complete_registration_file(gen.generate_registration_file(**kwargs))
+    uri = ensure_registration_uri(gen.generate_agent_uri(**kwargs))
     return {
         "registration_file": file_,
         "agent_uri": uri,
@@ -371,9 +377,9 @@ def register(
 
     reg = build_registration_file(args.status_url)
     endpoints = [sdk.AgentEndpoint.from_dict(e) for e in reg["endpoints"]]
-    agent_uri = agent.generate_agent_uri(
+    agent_uri = ensure_registration_uri(agent.generate_agent_uri(
         name=reg["name"], description=reg["description"], endpoints=endpoints
-    )
+    ))
     out(
         f"Registering '{AGENT_NAME}' on {net.sdk_name} (registry {registry}) from {owner} ..."
     )

@@ -74,10 +74,13 @@ Each of these forced UI or backend work that a non-crypto user would otherwise f
 - The `baw` JSON error codes (`SESSION_EXPIRED`, `TX_LOCKED`, `APP_CONFIRMATION_REQUIRED`) were specific enough to
   turn into plain-English banners.
 
-## 5. Not yet verified on mainnet (as of writing)
+## 5. What a mainnet run has and has not shown
 
-- **[unverified]** "Settling on-chain" and "Exit queued until fill" were only seen in the mock LIVE scenario; no real
-  position had opened during our test run of `integ-v8` on NVDAB.
-- **[unverified]** Token status badges depend on `/api/tokens.token_status`, which lands with the app/integration layer's live PR.
-- **[unverified]** The session-expired banner was tested against mocked reasons, not a real 48 h expiry.
-- **TODO (Rishu):** add the first real mainnet tx hash here once the live trade is done.
+Regime placed two autonomous NVDAB buys on 11 Oct 2026, both 10 USDT, Auto mode, Grid, with no human approving the trade:
+
+- 09:25 IST, [0x228c02688cd2a8170b38dba6abfdb4f95fca9e9e22ae6bed6a191d0b88a19f22](https://bscscan.com/tx/0x228c02688cd2a8170b38dba6abfdb4f95fca9e9e22ae6bed6a191d0b88a19f22)
+- 12:01 IST, [0x187fdc3e1023e1ecd37af1dc7bed4176a13e75e39a0b35727681538c0690bf7f](https://bscscan.com/tx/0x187fdc3e1023e1ecd37af1dc7bed4176a13e75e39a0b35727681538c0690bf7f)
+
+- **[unverified]** "Settling on-chain" and "Exit queued until fill" were exercised in the mock LIVE scenario. The two mainnet fills above are entries. This report does not claim a mainnet exit was watched through those states.
+- **[unverified]** Token-status badges read `/api/tokens.token_status`. The route is in the app. This report does not claim every badge was re-checked on mainnet.
+- **[unverified]** The session-expired banner was tested against mocked reasons. On 11 Oct the live session did drop after about 80 minutes (`WALLET_SESSION_EXPIRED`, wallet status "illegal parameter"; see `GO_LIVE.md`). A full 48-hour expiry was not waited out.

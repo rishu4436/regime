@@ -58,10 +58,10 @@ def compute_features(candles: Sequence[Candle], bar_seconds: int = DEFAULT_BAR_S
     last = closes[-1]
     window_start = len(candles) - VOL_LOOKBACK - 1
     pairs = [(i, j) for i, j in contiguous_pairs(candles, bar_seconds) if i >= window_start]
-    used_gap_returns = 0.0
-    if len(pairs) < MIN_CONTIGUOUS_RETURNS:  # very sparse data: fall back to all consecutive pairs
-        pairs = [(i - 1, i) for i in range(window_start + 1, len(candles))]
-        used_gap_returns = 1.0
+    # A short gap-free sample is not a license to score weekend or overnight jumps as
+    # volatility. Leave the estimate at zero instead of filling it from non-contiguous pairs.
+    if len(pairs) < MIN_CONTIGUOUS_RETURNS:
+        pairs = []
     rets = [math.log(closes[j] / closes[i]) for i, j in pairs]
     hi20 = max(c.high for c in candles[-VOL_LOOKBACK:])
     sma_now, sma_prev = s50[-1], s50[-1 - SLOPE_LOOKBACK]
@@ -79,7 +79,7 @@ def compute_features(candles: Sequence[Candle], bar_seconds: int = DEFAULT_BAR_S
         "dist_from_sma_pct": (last / sma_now - 1) * 100,
         "dist_from_ema_pct": (last / e20[-1] - 1) * 100,
         "vol_returns_used": float(len(rets)),
-        "vol_used_gap_returns": used_gap_returns,
+        "vol_used_gap_returns": 0.0,
     }
 
 

@@ -379,7 +379,7 @@ class WalletSettingsProvider:
         except Exception as e:
             self._cached, self.last_error = None, f"{type(e).__name__}: {e}"
             if not self._failing and self.on_error:
-                self.on_error(f"wallet settings unavailable ({self.last_error}); LIVE uses risk's own caps")
+                self.on_error(f"wallet settings unavailable ({self.last_error}); LIVE buys stay blocked until a wallet read succeeds")
             self._failing = True
         self._at = now
         return self._cached

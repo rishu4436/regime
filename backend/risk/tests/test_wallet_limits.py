@@ -79,24 +79,36 @@ def test_allowed_token_by_address():
     assert w.allows("NVDAon", "0xabcDEF") and not w.allows("NVDAon", None)
 
 
-def test_trade_all_tokens_false_without_list_passes_with_note(clock):
+def test_trade_all_tokens_false_without_list_blocks(clock):
     v = check(live_rm(clock), wallet_limits=wl(trade_all_tokens=False))
     c = names(v)["wallet_allowed_token"]
-    assert v.approved and c.passed and "not verified" in c.detail
+    assert not v.approved and not c.passed and "allow-list" in c.detail
+
+
+def test_trade_all_tokens_true_without_list_passes(clock):
+    v = check(live_rm(clock), wallet_limits=wl(trade_all_tokens=True, daily_limit_usdt=500.0))
+    c = names(v)["wallet_allowed_token"]
+    assert v.approved and c.passed and "trades all tokens" in c.detail
 
 
 # ------------------------------------------------------------------ missing limits / require flag
-def test_no_wallet_limits_informational(clock):
-    v = check(live_rm(clock))
+def test_no_wallet_limits_blocks_by_default(clock):
+    v = check(live_rm(clock), wallet_limits=None)
     c = names(v)["wallet_limits"]
-    assert v.approved and c.passed and "only our own LIVE limits apply" in c.detail
+    assert not v.approved and not c.passed and "require_wallet_limits is on" in c.detail
     assert "wallet_per_tx_cap" not in names(v)
 
 
+def test_require_wallet_limits_can_be_turned_off(clock):
+    v = check(live_rm(clock, require_wallet_limits=False), wallet_limits=None)
+    c = names(v)["wallet_limits"]
+    assert v.approved and c.passed and "only our own LIVE limits apply" in c.detail
+
+
 def test_require_wallet_limits_blocks(clock):
-    v = check(live_rm(clock, require_wallet_limits=True))
+    v = check(live_rm(clock, require_wallet_limits=True), wallet_limits=None)
     assert not v.approved and not names(v)["wallet_limits"].passed
-    v = check(live_rm(clock, require_wallet_limits=True), wallet_limits=wl(daily_limit_usdt=500.0))
+    v = check(live_rm(clock, require_wallet_limits=True), wallet_limits=wl(daily_limit_usdt=500.0, trade_all_tokens=True))
     assert v.approved
 
 
@@ -178,9 +190,10 @@ def test_from_baw_trade_all_tokens_true_and_explicit_list():
 
 
 # ------------------------------------------------------------------ token status
-def test_token_status_missing_is_informational(clock):
-    v = check(live_rm(clock))
-    assert v.approved and names(v)["live_token_status"].passed
+def test_token_status_missing_blocks(clock):
+    v = check(live_rm(clock), token_status=None)
+    c = names(v)["live_token_status"]
+    assert not v.approved and not c.passed and "not verified" in c.detail
 
 
 def test_token_status_trading_passes(clock):

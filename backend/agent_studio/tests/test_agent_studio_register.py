@@ -135,6 +135,8 @@ def test_dry_run_sends_nothing_and_writes_nothing(env):
     assert plan["registry"] == NETWORKS["testnet"].registry
     assert plan["owner_address"] == OWNER
     assert plan["agent_uri_bytes"] > 0
+    reg_file = plan["registration_file"]
+    assert reg_file["x402Support"] is False and reg_file["active"] is True and reg_file["image"]
     assert "register" not in env.calls and "wallet" not in env.calls
     assert not env.path.exists()
     assert KEY not in "\n".join(env.out) and KEY[2:] not in "\n".join(env.out)

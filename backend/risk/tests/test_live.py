@@ -7,7 +7,7 @@ from backend.contracts import (
     Action, AgentMode, Candle, ControlState, ExecutionPath, ExecutionResult, ExitReason, OrderSide, OrderStatus, Quote,
     Signal, TradingMode,
 )
-from backend.risk import DefaultRiskManager, LiveContext, LiveRiskProfile, RiskConfig, in_market_hours
+from backend.risk import DefaultRiskManager, LiveContext, LiveRiskProfile, RiskConfig, TokenStatus, WalletLimits, in_market_hours
 
 from .conftest import T0, make_portfolio, pos
 
@@ -45,9 +45,17 @@ def quote(notional=25.0, price=100.2, age=5, ttl=30, symbol="NVDAon", side=Order
                  expires_at=T0 - timedelta(seconds=age) + timedelta(seconds=ttl))
 
 
+def open_wallet(**kw):
+    """A readable wallet that trades every token, so other LIVE gates can be tested on their own."""
+    base = dict(source="test", trade_all_tokens=True, daily_limit_usdt=1_000_000.0, daily_used_usdt=0.0)
+    base.update(kw)
+    return WalletLimits(**base)
+
+
 def ctx(**kw):
     base = dict(data_timestamp=T0 - timedelta(seconds=60), balances={"USDT": 100.0, "BNB": 0.01},
-                reference_price=100.0, quote=quote())
+                reference_price=100.0, quote=quote(), token_status=TokenStatus(trading_status="trading"),
+                wallet_limits=open_wallet())
     base.update(kw)
     return LiveContext(**base)
 

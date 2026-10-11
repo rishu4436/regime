@@ -48,13 +48,12 @@ The required **AI stack** section is [ai-stack.md](ai-stack.md). In short:
 6. **Agent Studio's managed runtime is testnet-only and has no Agentic Wallet wallet kind,** so a mainnet trading agent can use Studio only for identity. See [ai-stack.md](ai-stack.md) #8.
 7. **Numeric error codes with no message, and no shared reason vocabulary.** Every layer had to map codes to plain English by hand. See [ai-stack.md](ai-stack.md) #12 and [ux.md](ux.md) #4.
 
-## Rishu's experience (to fill in)
+## What the 11 Oct mainnet run recorded
 
-> **TODO (Rishu):** write this in your own words before submitting. Judges reject reports that read as perfunctory or
-> AI-generated. Suggested prompts:
-> - setting up the Binance app and Agentic Wallet;
-> - scanning the `baw` QR on your PC;
-> - finding (or not finding) the wallet's limit settings;
-> - the first real trade and its BscScan link;
-> - registering the agent identity;
-> - what you would tell the Binance and BNB Chain teams to fix first.
+These are the facts already in this repo. The first-person account of setting up the Binance app, scanning the QR, and what to tell the Binance and BNB Chain teams is still the author's to write. Judges reject a report that pretends that account was written by the team when it was not.
+
+- First autonomous buy: 11 Oct 2026, 09:25 IST, 10 USDT of NVDAB, Auto mode, Grid. [BscScan](https://bscscan.com/tx/0x228c02688cd2a8170b38dba6abfdb4f95fca9e9e22ae6bed6a191d0b88a19f22).
+- Second autonomous buy: the same day, 12:01 IST, again 10 USDT of NVDAB. [BscScan](https://bscscan.com/tx/0x187fdc3e1023e1ecd37af1dc7bed4176a13e75e39a0b35727681538c0690bf7f).
+- The `baw` session dropped the same day after about 80 minutes, not after the 48-hour ceiling. `GO_LIVE.md` records `WALLET_SESSION_EXPIRED` and a wallet status of "illegal parameter". Stop-loss and take-profit swaps wait until sign-in.
+- The ERC-8004 identity is prepared in `backend/agent_studio/` and is not registered on-chain in this tree. The registration file now includes `active: true`, `x402Support: false`, and a public image, because Regime does not charge callers via x402.
+- Wallet settings still do not return a per-transaction cap or the token allow-list. A LIVE buy is now blocked when `tradeAllTokens` is false and no list came back, and when the wallet-limits snapshot or the token-status snapshot is missing.

@@ -247,7 +247,8 @@ irregular: hourly bars are missing off-hours and at weekends, DEX volume is ofte
     flat closed-market stretch is never read as a trend.
   - Fewer than 60 active bars gives the same insufficient-data result.
   - Volatility uses only returns between contiguous bars (gap <= 1.5 bars), so overnight and weekend gaps are not
-    counted as volatility.
+    counted as volatility. If that window has fewer than five contiguous returns, volatility is 0. Gap jumps are
+    not used to fill the sample, including when the caller passes an explicit timeframe.
   - Percent thresholds are multiplied by `clamp(sqrt(bar_hours), 0.25, 5)`. 1h is x1, 4h is x2 and 1d is about x4.9,
     so normal 3% daily moves are not HIGH_VOLATILITY on D1. RSI thresholds are not scaled.
   - The timeframe comes from `AutoConfig.timeframe` in auto mode, otherwise it is inferred from the bar spacing.

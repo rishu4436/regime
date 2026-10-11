@@ -89,7 +89,7 @@ class LiveRiskProfile(BaseModel):
     reserve_wallet_quota_for_exits: bool = Field(
         default=True, description="Shrink LIVE BUYs so the wallet's daily quota (which counts SELLs) can still sell everything")
     require_wallet_limits: bool = Field(
-        default=False, description="True = LIVE BUY blocked unless LiveContext.wallet_limits (the wallet's own caps) is supplied")
+        default=True, description="LIVE BUY blocked unless LiveContext.wallet_limits (the wallet's own caps) is supplied. Set False only to skip that proof.")
     bump_to_min_order: bool = Field(default=True, description=(
         "LIVE only: a sized BUY below the effective minimum (max(min_order_notional, token min_order_usdt)) is raised to "
         "that minimum when it still fits every hard ceiling (per-order caps, wallet balance - fee buffer, LIVE exposure, "

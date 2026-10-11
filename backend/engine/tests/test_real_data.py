@@ -130,6 +130,26 @@ def test_token_type_inference():
 
 
 # ---------------------------------------------------------------- regime on real-shaped data
+def test_sparse_window_does_not_score_gaps_as_volatility():
+    """Fewer than five gap-free returns must not be filled in from overnight jumps."""
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    price = 100.0
+    cs = []
+    for i in range(70):
+        cs.append(Candle(timestamp=t0 + timedelta(hours=i), open=price, high=price * 1.001,
+                         low=price * 0.999, close=price, volume=10))
+    last = cs[-1].timestamp
+    for i in range(1, 21):
+        price *= 1.25
+        ts = last + timedelta(days=2 * i)
+        cs.append(Candle(timestamp=ts, open=price, high=price, low=price * 0.99, close=price, volume=10))
+    ra = detect_regime(cs)
+    assert ra.features["vol_used_gap_returns"] == 0
+    assert ra.features["vol_returns_used"] == 0
+    assert ra.features["volatility_pct"] == 0
+    assert ra.regime != Regime.HIGH_VOLATILITY
+
+
 def test_weekend_gaps_are_not_volatility():
     # every overnight/weekend gap opens 6% away (alternating); within a session the stock is calm
     cs = real_shaped_candles(days=40, gap_jump=0.06, gap_after=timedelta(hours=2), seed=3, noise=0.002)
@@ -169,7 +189,13 @@ def test_timeframe_scaling_daily_noise_is_normal():
     assert detect_regime(hourly).regime == Regime.HIGH_VOLATILITY
     assert detect_regime(cs).features["threshold_scale"] == pytest.approx(math.sqrt(24))
     assert detect_regime(cs).regime != Regime.HIGH_VOLATILITY
-    assert detect_regime(cs, Timeframe.H1).regime == Regime.HIGH_VOLATILITY  # explicit timeframe wins
+    # An explicit 1h timeframe changes the threshold scale. It does not turn the
+    # day-long jumps between these candles into hourly volatility.
+    forced = detect_regime(cs, Timeframe.H1)
+    assert forced.features["threshold_scale"] == pytest.approx(1.0)
+    assert forced.features["vol_used_gap_returns"] == 0
+    assert forced.features["volatility_pct"] == 0
+    assert forced.regime != Regime.HIGH_VOLATILITY
     assert timeframe_scale(60) == 0.25 and timeframe_scale(3600) == 1.0 and timeframe_scale(14_400) == 2.0
 
 

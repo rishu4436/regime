@@ -512,8 +512,8 @@ class DefaultRiskManager:
 
         ts = ctx.token_status
         if ts is None:
-            checks.append(RiskCheck(name="live_token_status", passed=True,
-                                    detail=f"No token status supplied for {sym} - tradability not verified"))
+            checks.append(RiskCheck(name="live_token_status", passed=False,
+                                    detail=f"No token status supplied for {sym} - tradability not verified - no LIVE BUY"))
         else:
             st = ts.trading_status.strip().lower()
             if st != "trading":
@@ -539,9 +539,16 @@ class DefaultRiskManager:
             ids = (sym, getattr(signal, "token_address", None), getattr(q, "token_address", None),
                    getattr(q, "contract_address", None))
             if wl.allowed_tokens is None:
-                checks.append(RiskCheck(name="wallet_allowed_token", passed=True, detail=(
-                    "Wallet trades only an App-side allow-list that baw does not return - not verified here"
-                    if wl.trade_all_tokens is False else "Wallet has no token allow-list")))
+                if wl.trade_all_tokens is False:
+                    checks.append(RiskCheck(name="wallet_allowed_token", passed=False, detail=(
+                        "Wallet trades only an App-side allow-list that baw does not return, so this token "
+                        "cannot be checked - no LIVE BUY")))
+                elif wl.trade_all_tokens is True:
+                    checks.append(RiskCheck(name="wallet_allowed_token", passed=True,
+                                            detail="Wallet trades all tokens"))
+                else:
+                    checks.append(RiskCheck(name="wallet_allowed_token", passed=True,
+                                            detail="Wallet has no token allow-list"))
             else:
                 ok = wl.allows(*ids)
                 checks.append(RiskCheck(name="wallet_allowed_token", passed=ok, detail=(

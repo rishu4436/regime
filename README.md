@@ -11,7 +11,11 @@ US market hours; xStocks (`…x`) are off by default.
 **Live on mainnet:** Regime's first autonomous trade bought 10 USDT of NVDAB on 11 Oct 2026 at 09:25 IST.
 [View it on BscScan](https://bscscan.com/tx/0x228c02688cd2a8170b38dba6abfdb4f95fca9e9e22ae6bed6a191d0b88a19f22).
 
-**Docs:** [Developer Experience Report](docs/dx-report/) · [Demo script](docs/demo-script.md) ·
+**Try it in the browser, no install and no keys:** [SIM demo](https://wide-introducing-widely-francisco.trycloudflare.com).
+Sample prices and simulated cash only. It cannot spend money. If that page is down, the steps below start the
+same SIM mode on your own computer.
+
+**Docs:** [How to run it (beginner)](HOW_TO_RUN.md) · [Developer Experience Report](docs/dx-report/) · [Demo script](docs/demo-script.md) ·
 [Going live with real funds](backend/app/GO_LIVE.md) · [API reference](backend/app/API.md)
 
 **Status:** explanations use built-in plain-English templates unless `XAI_API_KEY` is set (then xAI Grok writes them,

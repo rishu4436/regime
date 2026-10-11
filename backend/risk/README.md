@@ -274,8 +274,8 @@ wallet's, so a BUY is shrunk/blocked before the wallet would reject it.
 
 | Check | Effect |
 |---|---|
-| `wallet_limits` | informational pass "Wallet limits not supplied - only our own LIVE limits apply"; **blocks** if `LiveRiskProfile.require_wallet_limits=True` (default False) |
-| `wallet_allowed_token` | blocks when `allowed_tokens` is set and the symbol (or `token_address` on the signal/quote, if present) is not in it; case-insensitive |
+| `wallet_limits` | **blocks** a LIVE BUY when no wallet-limits snapshot is supplied (`require_wallet_limits` default True). Set the flag False to pass with "only our own LIVE limits apply" |
+| `wallet_allowed_token` | blocks when `allowed_tokens` is set and the symbol (or `token_address` on the signal/quote, if present) is not in it; case-insensitive. Also blocks when `trade_all_tokens` is false and `baw` returned no list |
 | `wallet_per_tx_cap` | reduces size to `per_tx_limit_usdt` |
 | `wallet_daily_limit` | reduces size to `min(daily_limit - daily_used, daily_left)`, floored at 0 |
 | `live_quote_notional` | quote notional must be ≤ approved size and ≤ the **effective** per-order cap |
@@ -300,8 +300,8 @@ also listed in Bot 4's `binance-research.md` §3):
 **Provisional (NOT backed by any doc):** `baw` documents **no per-transaction limit** and does **not return the token
 allow-list** (only `tradeAllTokens: false`). `from_baw` tolerates aliases such as `perTxLimit`, `perTransactionLimit`,
 `singleTxLimit`, `allowedTokens`, `tokenWhitelist`, `allowedContracts` in case a CLI version or wrapper returns them; otherwise
-pass `allowed_tokens=` explicitly. With `tradeAllTokens=false` and no list, `wallet_allowed_token` passes with a "not
-verified" note (the wallet itself will still reject). Prediction/DeFi/x402/dev-mode quotas are separate and ignored.
+pass `allowed_tokens=` explicitly. With `tradeAllTokens=false` and no list, `wallet_allowed_token` **blocks** the
+LIVE BUY, because the App-side list cannot be checked. `tradeAllTokens=true` passes. Prediction/DeFi/x402/dev-mode quotas are separate and ignored.
 Bot 4's dedicated `agentic-wallet-deep-research.md` did not exist yet when this was written.
 
 `live_limits(portfolio, ctx)` reports **effective** values: `per_order_cap_usdt`, `daily_notional_cap_usdt` and
@@ -311,7 +311,7 @@ raw) and `wallet_limits` (raw wallet values, or None).
 
 **Token status — `LiveContext.token_status: TokenStatus`** (`trading_status`, `min_order_usdt`, `reference_price_only`;
 a plain dict works). Check `live_token_status` blocks unless `trading_status == "trading"` and `reference_price_only` is
-False, e.g. "NVDAon is off-hours - price is reference only - no LIVE BUY". Missing → informational pass.
+False, e.g. "NVDAon is off-hours - price is reference only - no LIVE BUY". A missing status blocks the LIVE BUY.
 
 **Token minimum order:** in LIVE the minimum is `max(min_order_notional (10), token_status.min_order_usdt)` (Ondo: 20 USD).
 Below it the LIVE bump raises the order to it when the hard caps allow; otherwise `min_order_notional` fails with

@@ -14,6 +14,8 @@ Pure functions, no network, no SDK import.
 
 from __future__ import annotations
 
+import base64
+import json
 import os
 from typing import Any
 
@@ -32,6 +34,9 @@ AGENT_NAME = "Regime"
 AGENT_DISPLAY_NAME = "Regime"
 #: On-chain description (kept short: every byte of the registration file is gas).
 AGENT_DESCRIPTION = "Autonomous tokenized-stock trading agent on BNB Chain"
+#: Public image for the ERC-8004 registration file. The SDK writes an empty image when none is passed.
+AGENT_IMAGE_URL = "https://raw.githubusercontent.com/rishu4436/regime/main/docs/screenshots/dashboard.png"
+REGISTRATION_TYPE = "https://eips.ethereum.org/EIPS/eip-8004#registration-v1"
 #: Longer off-chain summary for the API / dashboard card only.
 AGENT_SUMMARY = (
     "Regime trades 24/7 on its own on BNB Chain. It trades bStock and Ondo "
@@ -104,6 +109,41 @@ def build_registration_file(status_url: str | None = None) -> dict[str, Any]:
         "description": AGENT_DESCRIPTION,
         "endpoints": build_endpoints(status_url),
     }
+
+
+def complete_registration_file(file: dict[str, Any]) -> dict[str, Any]:
+    """Fill the EIP-8004 registration fields the bnbagent 0.5.0 generator leaves out.
+
+    ``x402Support`` stays false: Regime does not charge callers via x402. ``active``
+    stays true. An image, type, or either flag already set on ``file`` is kept.
+    """
+    out = dict(file)
+    out.setdefault("type", REGISTRATION_TYPE)
+    if not out.get("image"):
+        out["image"] = AGENT_IMAGE_URL
+    out.setdefault("x402Support", False)
+    out.setdefault("active", True)
+    return out
+
+
+def registration_data_uri(file: dict[str, Any]) -> str:
+    raw = json.dumps(file, sort_keys=True, separators=(",", ":")).encode()
+    return "data:application/json;base64," + base64.b64encode(raw).decode()
+
+
+def ensure_registration_uri(uri: str) -> str:
+    """Re-encode a data-URI registration file with the fields ``complete_registration_file`` adds.
+
+    A URI that is not a decodable registration JSON object is returned unchanged.
+    """
+    payload = uri.split(",", 1)[1] if uri.startswith("data:") and "," in uri else uri
+    try:
+        file = json.loads(base64.b64decode(payload))
+    except (ValueError, json.JSONDecodeError):
+        return uri
+    if not isinstance(file, dict):
+        return uri
+    return registration_data_uri(complete_registration_file(file))
 
 
 def build_metadata(trading_wallet: str | None = None) -> list[dict[str, str]]:

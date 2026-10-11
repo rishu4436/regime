@@ -382,7 +382,16 @@ def test_wallet_settings_provider_never_runs_outside_live_and_caches():
     assert sim.get() is None and not calls
     live = WalletSettingsProvider(object(), TradingMode.LIVE, runner=runner, ttl_s=60)
     live.get(); live.get()
-    assert len(calls) == 1 and calls[0][0].replace("\\", "/").rsplit("/", 1)[-1] in ("baw", "baw.cmd") and calls[0][1:3] == ("wallet", "settings")
+    assert len(calls) == 1
+    cmd = [str(part) for part in calls[0]]
+    assert cmd[-3:] == ["wallet", "settings", "--json"]
+    head = cmd[0].replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if head in ("baw", "baw.cmd"):
+        assert cmd[1:4] == ["wallet", "settings", "--json"]
+    else:
+        # Windows resolves baw to `node <npm>/@binance/agentic-wallet/dist/index.js`.
+        assert head in ("node", "node.exe")
+        assert "agentic-wallet" in cmd[1].replace("\\", "/")
 
     errs = []
     bad = WalletSettingsProvider(object(), TradingMode.LIVE, runner=lambda cmd: (_ for _ in ()).throw(FileNotFoundError("baw")),

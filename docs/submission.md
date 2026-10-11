@@ -96,6 +96,22 @@ dashboard. The diagram is in the [README](../README.md#architecture).
 
 ## Try it
 
+**Live demo, no install and no keys:** https://wide-introducing-widely-francisco.trycloudflare.com
+
+The page is a SIM copy. It uses sample prices and simulated cash. It does not connect to a wallet, it holds no
+private key or seed phrase, and it cannot spend money. The mode pill says SIM. Auto mode is already on NVDAB
+with the Balanced style, and every decision has a plain-English reason. Open **Manual Builder** to change the
+rules and **Backtest** to run them on past candles.
+
+Wallet sign-in and trading-limit edits stay on the computer that runs the backend. A judge does not need them
+for this demo. The two real mainnet buys are on BscScan, linked from the [README](../README.md), not inside
+this SIM page.
+
+The link stays up while the demo computer is on. It is a separate process from any LIVE agent. If the page
+does not load, use the steps below. They also start in SIM, with no keys. On the demo computer,
+`.\backend\app\deploy\judge-demo.ps1` prints a fresh link. That script does not read `.env` and does not turn
+on live trading.
+
 ```bash
 git clone https://github.com/rishu4436/regime.git
 cd regime
@@ -103,11 +119,13 @@ backend/app/deploy/run.sh        # Windows: .\backend\app\deploy\run.ps1
 ```
 
 Open http://localhost:5173. Regime starts in SIM mode with no keys, no wallet and no real money. Going live is
-covered in [GO_LIVE.md](../backend/app/GO_LIVE.md).
+covered in [GO_LIVE.md](../backend/app/GO_LIVE.md). Do not put a private key, a seed phrase, or the contents
+of `.env` in the submission.
 
 ## Links
 
 - [README](../README.md)
+- [How to run it (beginner)](../HOW_TO_RUN.md)
 - [Demo script](demo-script.md)
 - [Developer Experience Report](dx-report/)
 - [Going live with real funds](../backend/app/GO_LIVE.md)

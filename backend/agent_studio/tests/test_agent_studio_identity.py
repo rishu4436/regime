@@ -1,3 +1,4 @@
+import base64
 import json
 
 import pytest
@@ -69,6 +70,30 @@ def test_testnet_explorer_and_chain_id_fallback(tmp_path):
 )
 def test_malformed_files_return_none(tmp_path, payload):
     assert get_agent_identity(_write(tmp_path, payload)) is None
+
+
+def test_complete_registration_file_fills_eip_fields_without_overwriting():
+    from backend.agent_studio.agent_card import (
+        AGENT_IMAGE_URL,
+        REGISTRATION_TYPE,
+        complete_registration_file,
+        ensure_registration_uri,
+    )
+
+    filled = complete_registration_file({"name": "Regime", "image": ""})
+    assert filled["type"] == REGISTRATION_TYPE
+    assert filled["image"] == AGENT_IMAGE_URL
+    assert filled["x402Support"] is False
+    assert filled["active"] is True
+    kept = complete_registration_file(
+        {"image": "https://example.com/a.png", "x402Support": True, "active": False}
+    )
+    assert kept["image"] == "https://example.com/a.png"
+    assert kept["x402Support"] is True and kept["active"] is False
+    uri = ensure_registration_uri("data:application/json;base64,e30=")
+    data = json.loads(base64.b64decode(uri.split(",", 1)[1]))
+    assert data["x402Support"] is False and data["active"] is True and data["image"] == AGENT_IMAGE_URL
+    assert ensure_registration_uri("not-a-uri") == "not-a-uri"
 
 
 def test_registration_file_never_has_placeholder(monkeypatch):
