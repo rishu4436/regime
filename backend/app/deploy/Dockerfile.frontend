@@ -1,9 +1,12 @@
-# Build context: repo root
+# Regime dashboard. Build context: repo root
 FROM node:20-alpine AS build
 WORKDIR /ui
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY frontend ./
+# the image talks to the real backend (nginx proxies /api /ws /health); pass VITE_API_MODE=mock for a demo-only image
+ARG VITE_API_MODE=http
+ENV VITE_API_MODE=$VITE_API_MODE
 RUN npm run build
 
 FROM nginx:1.27-alpine

@@ -1,4 +1,4 @@
-# teamwork — Autonomous Trading Agent for Tokenized On-Chain Stocks
+# Regime — Autonomous Trading Agent for Tokenized On-Chain Stocks
 
 Hackathon project: an autonomous agent that trades tokenized stocks (NVDAon, TSLAx, AAPLB — Ondo / xStock / BStock
 style tokens) using **Binance Agent Studio**, the **Binance Web3 API** (market data + trading) and the **Binance Agentic Wallet**.
@@ -64,6 +64,11 @@ Per-bar decision loop (in `backend/app`): `RiskManager.check_exits` → `Strateg
 
 Requirements: Python 3.11+, Node 20+.
 
+One command (backend :8000 + dashboard :5173 talking to the real backend, SIM by default):
+`backend/app/deploy/run.sh` (macOS/Linux) or `.\backend\app\deploy\run.ps1` (Windows). Add `--mock` / `-Mock` for the
+dashboard's built-in mock data. Use **Connect wallet** in the dashboard to sign in the Agentic Wallet by QR (localhost
+only; in SIM/PAPER a fake wallet signs in so the flow can be demoed). By hand:
+
 ```bash
 # backend
 python -m venv .venv && source .venv/bin/activate      # on the shared box: source /workspace/.venv/bin/activate
@@ -74,7 +79,7 @@ uvicorn backend.app.main:app --reload --port 8000       # http://localhost:8000/
 
 # frontend
 cd frontend && npm install
-npm run dev                                             # http://localhost:5173 (proxies /api and /ws to :8000)
+VITE_API_MODE=http npm run dev                          # http://localhost:5173 (proxies /api and /ws to :8000; default is mock data)
 npm run build
 ```
 

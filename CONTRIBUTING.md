@@ -1,4 +1,4 @@
-# Team workflow (6 bots + coordinator)
+# Regime — team workflow (6 bots + coordinator)
 
 ## Ownership — the golden rule
 Each bot edits **only its own directory**. Everything else is read-only for it.

@@ -1,6 +1,6 @@
-# Going LIVE: autonomous 24/7 agent with real funds on BNB Smart Chain
+# Going LIVE with Regime: autonomous 24/7 agent with real funds on BNB Smart Chain
 
-LIVE places **real orders** from a Binance Agentic Wallet (`baw` CLI) on BSC. The default is `TRADING_MODE=SIM`. Every
+Regime in LIVE places **real orders** from a Binance Agentic Wallet (`baw` CLI) on BSC. The default is `TRADING_MODE=SIM`. Every
 LIVE switch is opt-in, and the caps default to tiny amounts (25 USDT per order). Read this whole page before switching.
 
 ## 1. One-time setup
@@ -140,3 +140,12 @@ happens for 3 intervals. Drop `--backend-only` / `-BackendOnly` to also run the 
 
 Stop the process. Then set `TRADING_MODE=SIM`, or remove one of the switches. LIVE state lives in its own file
 (`agent_state.live.json`), so SIM never resumes into LIVE and the reverse is also true.
+
+## Signing in from the dashboard (Connect wallet)
+On the PC running the backend, open http://localhost:5173 and click **Connect wallet** (or **Reconnect wallet** when the
+session expired). Scan the QR code (or enter the pairing code) in the Binance app. This runs `baw auth signin` /
+`baw auth verify` for you and only works from localhost. After sign-in the backend re-reads the wallet's balances and
+limits. If a **different** wallet signs in than the one in `agent_state.live.json` (or `BINANCE_WALLET_ADDRESS`), LIVE
+stays blocked ("different wallet connected") until you check the saved positions against it:
+`curl -X POST http://localhost:8000/api/wallet/reconcile` (drops saved positions the new wallet doesn't hold, then
+unblocks). See `backend/app/API.md` (v0.8).
