@@ -16,7 +16,7 @@ from backend.contracts import Alert, AutoConfig, Decision, ManualStrategy, Perfo
 
 
 from . import live as live_facts
-from . import prompts, templates
+from . import narratives, prompts, templates
 from .client import GrokClient, GrokConfig, LLMError
 from .parser import (DEFAULT_ENTRY_NOTE, StrategyValidationError, keyword_parse_with_notes, strategy_notes, text_has_entry_rule,
                      validate_llm_strategy)
@@ -59,6 +59,15 @@ class DefaultExplainer:
     def set_live_limits(self, limits: Optional[dict]) -> None:
         """Pass Bot 3's risk.live_limits() dict (min_wallet_usdt, bnb_gas_reserve, ...) for small-wallet / gas hints."""
         templates.set_live_limits(limits)
+
+    def explain_picks(self, picks, skipped=None) -> list[str]:
+        """Auto-pick wording (template only): one sentence per picked and per skipped token."""
+        return narratives.explain_picks(picks, skipped)
+
+    def narrative_of(self):
+        """A ``narrative_of(symbol, name=None)`` for the engine's rank_tokens: sector map, plus Grok for unmapped
+        tokens when this explainer has a key (cached, short timeout)."""
+        return narratives.make_narrative_of(self)
 
     # ------------------------------------------------------------------ internals
     def _try_llm(self, fn: Callable[[], T], fallback: Callable[[], T]) -> T:

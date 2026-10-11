@@ -335,6 +335,7 @@ def set_live_limits(limits: Optional[Mapping[str, Any]]) -> None:
     """Latest risk.live_limits() dict (e.g. min_wallet_usdt, bnb_gas_reserve). None / non-mapping clears it."""
     global _LIVE_LIMITS
     _LIVE_LIMITS = dict(limits) if isinstance(limits, Mapping) else {}
+    live_facts.set_order_cap(_LIVE_LIMITS.get("per_order_cap_usdt"))
 
 
 def _num(v: Any) -> Optional[float]:
