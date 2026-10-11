@@ -5,11 +5,13 @@ import { ActionBadge, RegimeBadge } from "../components/Badges";
 import { PriceChart, type TradeMarker } from "../components/Charts";
 import { Card, Segmented, Skeleton, StatCard, useToast } from "../components/ui";
 import { cls, humanize, num, time, usd } from "../lib/format";
-import { conditionLabel, controlReason, EXIT_LABEL, strategyLabel, TOKENS } from "../lib/strategy";
+import { conditionLabel, controlReason, EXIT_LABEL, heldExit, isExitQueued, isPendingPos, strategyLabel, TOKENS } from "../lib/strategy";
 import { Controls } from "./Controls";
 import { AlertsPanel, AskAgent } from "./Insights";
 import { ApiError, type PerformanceSummary } from "../api/types";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { ActivityFeed, AgentIdentityCard, AutonomyMonitor, CapsPanel, LiveGateCard, TxLink, WalletPanel } from "../components/Live";
+import { useLive } from "../lib/live";
 
 interface Props { status: StatusSnapshot | null; refresh: () => void; tick: number; alertsVersion: number; go: (tab: "manual" | "auto") => void }
 
@@ -28,19 +30,24 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
   const [closeTarget, setCloseTarget] = useState<{ kind: "lot"; id: string; symbol: string } | { kind: "all"; symbol: string } | null>(null);
   const [askReset, setAskReset] = useState(false);
   useEffect(() => { api.getPerformance().then(setPerf).catch(() => setPerf(null)); }, [tick]);
-  const symbol = status?.active_symbol ?? "NVDAon";
+  const symbol = status?.active_symbol ?? "NVDAB";
 
-  useEffect(() => { api.getCandles(symbol, "1h", 150).then(setCandles).catch(() => setCandles([])); }, [symbol, tick]);
+  // default token NVDAB; a backend whose token list lacks it falls back to NVDAon for the idle chart
+  useEffect(() => { api.getCandles(symbol, "1h", 150).then(setCandles).catch(() => status?.active_symbol ? setCandles([]) : api.getCandles("NVDAon", "1h", 150).then(setCandles).catch(() => setCandles([]))); }, [symbol, tick]);
 
   const pf = status?.portfolio;
-  const unreal = pf ? (pf.positions ?? []).reduce((a, p) => a + (p.unrealized_pnl ?? 0), 0) : null;
+  const unreal = pf ? (pf.positions ?? []).reduce((a, p) => a + (isPendingPos(p) ? 0 : p.unrealized_pnl ?? 0), 0) : null;
   const totalPnl = pf ? pf.equity - pf.starting_capital : null;
   const decisions = status?.recent_decisions ?? [];
   // authoritative list from GET /api/confirmations (recent_decisions only holds the last 20); refreshed on every snapshot
   const [pendingList, setPendingList] = useState<Decision[] | null>(null);
   const [gone, setGone] = useState<Set<string>>(() => new Set());
   useEffect(() => { api.getConfirmations().then(setPendingList).catch(() => setPendingList(null)); }, [status, tick]);
-  const pending = (pendingList ?? decisions.filter((d) => d.execution?.status === "PENDING_CONFIRMATION")).filter((d) => !gone.has(d.id!));
+  // approval cards only exist when confirmation mode is deliberately on (the agent is autonomous otherwise)
+  const pending = status?.control.confirmation_mode ? (pendingList ?? decisions.filter((d) => d.execution?.status === "PENDING_CONFIRMATION")).filter((d) => !gone.has(d.id!)) : [];
+  const { isLive } = useLive();
+  const [feed, setFeed] = useState<Decision[]>([]);
+  useEffect(() => { api.getDecisions(60).then(setFeed).catch(() => {}); }, [status, tick]);
   const shown = filter === "ALL" ? decisions : decisions.filter((d) => d.action !== "STAY_OUT");
   const last = status?.last_decision;
   const lastPx = candles?.[candles.length - 1]?.close, firstPx = candles?.[0]?.close;
@@ -71,7 +78,8 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
 
   return (
     <>
-      {status?.control.emergency_stopped && (
+      <AutonomyMonitor status={status} refresh={refresh} />
+      {status?.control.emergency_stopped && !isLive && (
         <div className="banner red" role="alert">
           <span style={{ fontSize: "1.4rem" }}>■</span>
           <span className="grow">
@@ -86,7 +94,7 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
         <div className="banner blue">
           <span className="grow">No strategy is running. Build rules in <b>Manual Builder</b> or let the agent choose in <b>Auto Mode</b>.</span>
           <button className="btn ghost" onClick={() => go("manual")}>Open builder</button>
-          <button className="btn" onClick={() => api.activateAuto({ symbol: "NVDAon", style: "BALANCED", capital: 10000, activation: "CONFIRMATION" }).then(ensureLoop).then(() => { toast("Auto mode started (Balanced, NVDAon)", "success"); refresh(); }).catch((e) => toast(e instanceof Error ? e.message : String(e), "error"))}>⚡ Quick start Auto</button>
+          <button className="btn" onClick={() => isLive ? go("auto") : api.activateAuto({ symbol: "NVDAB", style: "BALANCED", capital: 10000, activation: "CONFIRMATION" }).then(ensureLoop).then(() => { toast("Auto mode started (Balanced, NVDAB)", "success"); refresh(); }).catch((e) => toast(e instanceof Error ? e.message : String(e), "error"))}>⚡ Quick start Auto</button>
         </div>
       )}
 
@@ -136,12 +144,14 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
                 <thead><tr><th>Token</th><th className="r">Qty</th><th className="r">Entry</th><th className="r">Price</th><th className="r">uPnL</th><th>Stops</th><th>Strategy</th><th></th></tr></thead>
                 <tbody>
                   {(pf?.positions ?? []).map((p, i) => (
-                    <tr key={p.id ?? `${p.symbol}-${i}`}>
-                      <td><b>{p.symbol}</b>{p.id && <div className="faint small" title={p.id}>lot {p.id.slice(0, 6)}</div>}</td><td className="r">{num(p.quantity)}</td><td className="r">{usd(p.avg_entry_price)}</td><td className="r">{usd(p.current_price)}</td>
-                      <td className={`r ${cls(p.unrealized_pnl)}`}>{usd(p.unrealized_pnl)}</td>
+                    <tr key={p.id ?? `${p.symbol}-${i}`} className={isPendingPos(p) ? "settling" : undefined}>
+                      <td><b>{p.symbol}</b>{isPendingPos(p) && <span className="pill warn" style={{ marginLeft: 6 }} title={`In-flight buy${(p as { client_order_id?: string }).client_order_id ? ` · order ${(p as { client_order_id?: string }).client_order_id}` : ""}`}>⏳ Settling on-chain</span>}
+                        {heldExit(p) && <span className="pill warn" style={{ marginLeft: 6 }} title={[heldExit(p)?.code, heldExit(p)?.reason, heldExit(p)?.source].filter(Boolean).join(" · ")}>Exit queued until fill</span>}
+                        {p.id && <div className="faint small" title={p.id}>lot {p.id.slice(0, 6)}</div>}</td><td className="r">{num(p.quantity)}</td><td className="r">{usd(p.avg_entry_price)}</td><td className="r">{usd(p.current_price)}</td>
+                      <td className={`r ${isPendingPos(p) ? "" : cls(p.unrealized_pnl)}`}>{isPendingPos(p) ? "—" : usd(p.unrealized_pnl)}</td>
                       <td className="small">SL {usd(p.stop_loss_price)} · TP {usd(p.take_profit_price)}{p.trailing_stop_pct ? ` · trail ${p.trailing_stop_pct}%` : ""}</td>
                       <td className="small trunc" title={p.strategy}>{p.strategy}</td>
-                      <td><button className="btn ghost" style={{ padding: "4px 10px" }} title="Close this lot at the last price"
+                      <td><button className="btn ghost" style={{ padding: "4px 10px" }} disabled={isPendingPos(p)} title={isPendingPos(p) ? "Buy still settling on-chain: exit queued until fill" : "Close this lot at the last price"}
                         onClick={() => setCloseTarget(p.id ? { kind: "lot", id: p.id, symbol: p.symbol } : { kind: "all", symbol: p.symbol })}>Close</button></td>
                     </tr>
                   ))}
@@ -166,6 +176,8 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
               </div>
             )}
           </Card>
+          {isLive && <><CapsPanel status={status} decisions={feed} /><WalletPanel /><LiveGateCard /></>}
+          <AgentIdentityCard />
           <Controls status={status} onChange={refresh} tick={tick} />
           <AskAgent tick={tick} />
           <AlertsPanel version={alertsVersion} />
@@ -173,7 +185,7 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
       </div>
 
       <div style={{ height: 16 }} />
-      <Card title={<>Decision log <span className="muted small" style={{ fontWeight: 400 }}>{shown.length}</span></>}
+      {isLive ? <ActivityFeed decisions={feed} confirmMode={!!status?.control.confirmation_mode} /> : <Card title={<>Decision log <span className="muted small" style={{ fontWeight: 400 }}>{shown.length}</span></>}
         extra={<Segmented size="sm" value={filter} onChange={setFilter} options={[{ value: "ALL", label: "All" }, { value: "TRADES", label: "Trades only" }]} />} pad={false}>
         <div className="table-wrap" style={{ padding: "4px 8px 8px" }}>
           <table>
@@ -183,15 +195,15 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
                 <tr key={d.id}>
                   <td className="small muted">{time(d.timestamp)}</td><td><ActionBadge action={d.action} /></td><td>{d.symbol}</td>
                   <td><RegimeBadge regime={d.regime} /></td><td className="small trunc" title={d.strategy}>{strategyLabel(d.strategy)}</td>
-                  <td className="small">{d.execution ? humanize(d.execution.status) : "—"}</td>
-                  <td className="wrap small">{d.signal?.exit_reason && <><ExitPill d={d} />{" "}</>}{d.reason}</td>
+                  <td className="small">{d.execution ? (d.execution.status === "PENDING_CONFIRMATION" && !status?.control.confirmation_mode ? "Waiting on chain" : humanize(d.execution.status)) : "—"} <TxLink exec={d.execution} /></td>
+                  <td className="wrap small">{isExitQueued(d.reason) && <><span className="pill warn">Exit queued until fill</span>{" "}</>}{d.signal?.exit_reason && <><ExitPill d={d} />{" "}</>}{d.reason}</td>
                 </tr>
               ))}
             </tbody>
           </table>
           {!shown.length && <div className="empty">Nothing logged yet</div>}
         </div>
-      </Card>
+      </Card>}
       {closeTarget && (
         <ConfirmDialog title={closeTarget.kind === "lot" ? `Close ${closeTarget.symbol} lot ${closeTarget.id.slice(0, 6)}?` : `Close all ${closeTarget.symbol}?`}
           confirmLabel={closeTarget.kind === "lot" ? "Close lot" : `Close all ${closeTarget.symbol}`} danger busy={busy === "close"} onCancel={() => setCloseTarget(null)}
@@ -233,7 +245,7 @@ function DecisionDetail({ d }: { d: Decision }) {
         <span className="k">Reason</span><span>{d.reason}</span>
         {d.signal?.exit_reason && <><span className="k">Exit</span><span><ExitPill d={d} />{d.signal.position_id && <span className="faint small"> · lot {d.signal.position_id.slice(0, 6)}</span>}</span></>}
         {v && <><span className="k">Risk check</span><span>{v.approved ? <span className="pill ok">approved</span> : <span className="pill bad">blocked</span>} <span className="small muted">{v.reasons?.join("; ")}{v.adjusted_notional ? ` ${usd(v.adjusted_notional)}` : ""}</span></span></>}
-        {d.execution && <><span className="k">Execution</span><span className="small">{humanize(d.execution.status)} {d.execution.avg_price ? `@ ${usd(d.execution.avg_price)}` : ""} {d.execution.error ?? ""}</span></>}
+        {d.execution && <><span className="k">Execution</span><span className="small">{humanize(d.execution.status)} {d.execution.avg_price ? `@ ${usd(d.execution.avg_price)}` : ""} {d.execution.error ?? ""} <TxLink exec={d.execution} /></span></>}
       </div>
       {(d.signal?.conditions_met?.length || d.signal?.conditions_failed?.length) ? (
         <div className="chips">

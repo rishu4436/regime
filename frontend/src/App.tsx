@@ -1,8 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { CONTRACTS_VERSION, DEFAULT_INITIAL_CAPITAL, PresetNameValues, type AutoConfig } from "./contracts";
 import { API_MODE } from "./api";
+import { MOCK_SCENARIO, setMockScenario } from "./api/mock";
+import { LiveBanner, SessionBanner } from "./components/Live";
+import { LiveContext, useLiveState } from "./lib/live";
 import { ModeBadge, RegimeBadge } from "./components/Badges";
-import { ToastProvider } from "./components/ui";
+import { Toggle, ToastProvider } from "./components/ui";
 import { useStatus } from "./lib/useStatus";
 import { defaultStrategy, fillStrategy, type FullStrategy } from "./lib/strategy";
 import { AutoMode } from "./views/AutoMode";
@@ -31,6 +34,14 @@ export default function App() {
 function Shell() {
   const [tab, setTab] = useState<Tab>("dashboard");
   const { status, error, refresh, alertsVersion, tick } = useStatus();
+  const live = useLiveState(status, tick);
+  const mode = live.isLive ? "LIVE" : status?.control.trading_mode ?? live.system?.trading_mode;
+  // autonomous LIVE: activations default to AUTO_EXECUTE (inside the hard caps); confirmation is opt-in
+  useEffect(() => {
+    if (!live.isLive) return;
+    setAutoCfg((c) => ({ ...c, activation: "AUTO_EXECUTE" }));
+    setStrategyState((st) => ({ ...st, activation: "AUTO_EXECUTE" }));
+  }, [live.isLive]);
   const pendingCount = (status?.recent_decisions ?? []).filter((d) => d.execution?.status === "PENDING_CONFIRMATION").length;
   const meta = TABS.find((t) => t.id === tab) ?? TABS[0];
   const go = (t: Tab) => setTab(t);
@@ -38,7 +49,7 @@ function Shell() {
   const setStrategy = (st: FullStrategy) => { setStrategyState(st); try { localStorage.setItem(LS_KEY, JSON.stringify(st)); } catch { /* private mode */ } };
   const [capital, setCapital] = useState(DEFAULT_INITIAL_CAPITAL);
   const [run, setRun] = useState<BacktestRun | null>(null);
-  const [autoCfg, setAutoCfg] = useState<AutoConfig>({ symbol: "NVDAon", style: "BALANCED", enabled_presets: [...PresetNameValues], capital: DEFAULT_INITIAL_CAPITAL, timeframe: "1h", activation: "CONFIRMATION" });
+  const [autoCfg, setAutoCfg] = useState<AutoConfig>({ symbol: "NVDAB", style: "BALANCED", enabled_presets: [...PresetNameValues], capital: DEFAULT_INITIAL_CAPITAL, timeframe: "1h", activation: "CONFIRMATION" });
 
   const nav = TABS.map((t) => (
     <button key={t.id} className={`nav-item${tab === t.id ? " active" : ""}`} onClick={() => setTab(t.id)}>
@@ -48,12 +59,20 @@ function Shell() {
   ));
 
   return (
-    <div className="app">
+    <LiveContext.Provider value={live}>
+    <div className={`app${live.isLive ? " is-live" : ""}`}>
       <aside className="sidebar">
         <div className="brand"><div className="brand-logo">◆</div><div><b>Teamwork Agent</b><small>On-chain stocks</small></div></div>
         {nav}
         <div className="sidebar-foot">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>Mode <ModeBadge mode={status?.control.trading_mode} /></div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>Mode <ModeBadge mode={mode} /></div>
+          {live.isLive && <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>Network <span className="pill bad">BSC mainnet</span></div>}
+          {API_MODE === "mock" && (
+            <div className="scenario" title="Mock only: pretend the backend runs LIVE on mainnet with an Agentic Wallet. Nothing is sent anywhere.">
+              <span className="small">Demo LIVE scenario</span>
+              <Toggle checked={MOCK_SCENARIO === "LIVE"} onChange={(v) => setMockScenario(v ? "LIVE" : "SIM")} label="Demo LIVE scenario" />
+            </div>
+          )}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>API <span className="pill">{API_MODE === "mock" ? "mock" : "backend"}</span></div>
           <div className="faint">contracts v{CONTRACTS_VERSION}</div>
         </div>
@@ -64,9 +83,13 @@ function Shell() {
           {status?.current_regime && <RegimeBadge regime={status.current_regime} />}
           {status && (status.control.emergency_stopped ? <span className="pill bad"><span className="dot" />Stopped</span>
             : status.control.paused ? <span className="pill warn"><span className="dot" />Paused</span>
+            : status.agent_mode && !status.control.confirmation_mode ? <span className="pill ok"><span className="live-dot" />Autonomous</span>
             : <span className="pill ok"><span className="live-dot" />Live loop</span>)}
-          <ModeBadge mode={status?.control.trading_mode} />
+          {live.isLive && <span className="live-tag" title="Real funds on BNB Smart Chain mainnet"><span className="live-dot" />LIVE · MAINNET</span>}
+          <ModeBadge mode={mode} />
         </div>
+        <LiveBanner />
+        <SessionBanner />
         {error && <div className="banner amber"><span className="grow">Backend unreachable: {error}</span><span className="small muted">Start the API or run with VITE_API_MODE=mock</span></div>}
         {tab === "dashboard" && <Dashboard status={status} refresh={refresh} tick={tick} alertsVersion={alertsVersion} go={go} />}
         {tab === "manual" && <ManualBuilder strategy={strategy} setStrategy={setStrategy} capital={capital} setCapital={setCapital} run={run} setRun={setRun}
@@ -76,5 +99,6 @@ function Shell() {
       </main>
       <nav className="mobile-nav">{nav}</nav>
     </div>
+    </LiveContext.Provider>
   );
 }

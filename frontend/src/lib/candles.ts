@@ -86,6 +86,7 @@ const TF_OF: Record<string, Timeframe> = { "1m": "1m", "5m": "5m", "15m": "15m",
 /** Regime-switching series for mock backtests: consecutive segments of different regimes, continuous price. */
 export function generateMixedCandles(symbol: string, startPrice: number, n = 250, timeframe: Timeframe = "1h", seed = 42, startTime = DEFAULT_START): Candle[] {
   const orders: Record<string, Regime[]> = {
+    NVDAB: ["MILD_UPTREND", "SIDEWAYS", "OVERSOLD_PULLBACK", "STRONG_UPTREND", "MILD_UPTREND", "HIGH_VOLATILITY", "MILD_UPTREND"],
     NVDAon: ["MILD_UPTREND", "OVERSOLD_PULLBACK", "SIDEWAYS", "STRONG_UPTREND", "HIGH_VOLATILITY", "DOWNTREND", "MILD_UPTREND"],
     TSLAx: ["HIGH_VOLATILITY", "DOWNTREND", "OVERSOLD_PULLBACK", "STRONG_UPTREND", "SIDEWAYS", "HIGH_VOLATILITY", "MILD_UPTREND"],
     AAPLB: ["SIDEWAYS", "MILD_UPTREND", "OVERSOLD_PULLBACK", "SIDEWAYS", "DOWNTREND", "MILD_UPTREND", "SIDEWAYS"],

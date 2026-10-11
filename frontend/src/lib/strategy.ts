@@ -7,9 +7,10 @@ import {
 import { bollinger, ema, macd, rsi, sma, volumeAvg } from "./indicators";
 
 export const TOKENS = [
-  { symbol: "NVDAon", label: "NVDAon (NVIDIA)", start: 140 },
-  { symbol: "TSLAx", label: "TSLAx (Tesla)", start: 200 },
-  { symbol: "AAPLB", label: "AAPLB (Apple)", start: 170 },
+  { symbol: "NVDAB", label: "NVDAB (NVIDIA bStock, 24/7)", start: 140 },
+  { symbol: "NVDAon", label: "NVDAon (NVIDIA Ondo)", start: 140 },
+  { symbol: "AAPLB", label: "AAPLB (Apple bStock)", start: 170 },
+  { symbol: "TSLAx", label: "TSLAx (Tesla xStock)", start: 200 },
 ] as const;
 
 type DeepRequired<T> = { [K in keyof T]-?: T[K] extends object | undefined ? DeepRequired<NonNullable<T[K]>> : T[K] };
@@ -19,7 +20,7 @@ export type FullStrategy = DeepRequired<Omit<ManualStrategy, "id" | "created_at"
 export function defaultStrategy(): FullStrategy {
   return {
     name: "My strategy",
-    symbol: "NVDAon",
+    symbol: "NVDAB",
     timeframe: "1h",
     entry: {
       logic: "AND",
@@ -221,11 +222,41 @@ export const CONDITION_LABEL: Record<string, string> = {
   dca_schedule: "DCA schedule bar", near_sma20: "Near SMA20", drop_from_high: "Drop from high", rsi_recovered: "RSI recovered",
   trend_broken: "Trend broken", trend_lost: "Trend lost", warmup: "Indicators warmed up", range: "Range wide enough",
   in_range: "Inside range", bottom_cell: "Bottom grid cell", top_cell: "Top grid cell",
+  // LIVE safety (Bot 2 engine, bot2/live) and LIVE hard caps (Bot 3 risk, bot3/live)
+  insufficient_data: "Not enough history yet (needs 61 bars)",
+  live_stale_data: "Stale data", live_future_data: "Data timestamp in the future", live_no_data: "No market data",
+  live_no_volume: "No volume on the last bar", live_thin_liquidity: "Thin liquidity, size reduced or skipped",
+  live_market_hours: "Outside market hours", live_market_hours_now: "Outside market hours (now)",
+  live_allowed: "LIVE allowed (allow_live)", live_daily_loss_cap: "Daily loss cap (auto e-stop)", live_gas_reserve: "BNB gas reserve",
+  live_quote: "Valid quote", live_quote_notional: "Quote amount matches", live_slippage: "Slippage within limit",
+  live_wallet_quote: "Wallet can cover quote", live_daily_notional: "Daily traded cap", live_max_exposure: "Max open exposure",
+  live_order_cap: "Per-order cap", live_wallet_balance: "Wallet balance",
+  live_below_min_order: "Below minimum order", order_in_flight: "Earlier swap still settling, waiting", pending_exit: "Exit queued until fill", exit_pending: "Exit queued until fill", session_expired: "Agentic Wallet session expired, re-scan QR on host PC", wallet_not_ready: "Agentic Wallet session expired, re-scan QR on host PC", live_illiquid_family: "xStock excluded (no liquidity on BNB Chain)", live_token_paused: "Token paused", live_price_impact: "Price impact above limit",
+  // Binance Web3 exchange quote errors (Bot 4) used as market-state signals: a stay-out, not a failed trade
+  // Bot 4 exchange reasons and Bot 3 wallet / live checks
+  market_closed: "Market closed", insufficient_liquidity: "Insufficient liquidity", below_minimum: "Below minimum order",
+  above_maximum: "Above maximum order", xstock_disabled: "xStock disabled (no liquidity on BSC)", slippage_exceeded: "Slippage exceeded",
+  wallet_limits: "Wallet limits", wallet_allowed_token: "Token allowed by wallet", wallet_per_tx_cap: "Wallet per-trade cap",
+  wallet_daily_limit: "Wallet daily limit", wallet_exit_reserve: "Exit reserve (quota to sell all positions)",
+  live_token_status: "Token tradable now", live_symbol_allowed: "Token allowed", min_order_notional: "Minimum order size",
+  "40366": "Above Ondo max single order", "40367": "Ondo market not tradable now (off-hours)", "40369": "bStock outside trading time",
+  "40374": "Insufficient liquidity", "40375": "Below Ondo 20 USD minimum order",
 };
 /** Friendly label for a Signal.conditions_met/failed id (rule field, risk check, preset condition or ExitReason). */
 export const conditionLabel = (id: string) =>
   CONDITION_LABEL[id] ?? (id in EXIT_LABEL ? EXIT_LABEL[id as ExitReason] : id.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase()));
 /** ControlState.reason without the backend's "EMERGENCY STOP:" / "PAUSED:" prefix (the UI already says which). */
 export const controlReason = (r?: string | null) => (r ?? "").replace(/^\s*(EMERGENCY[ _]STOP|PAUSED)\s*:\s*/i, "").trim();
+/** Exchange error codes found in a reason text (e.g. "QuoteUnavailable 40367 ..."), as friendly labels. */
+export const exchangeCodeLabels = (text?: string | null) =>
+  [...new Set((text ?? "").match(/\b403(66|67|69|74|75)\b/g) ?? [])].map((c) => CONDITION_LABEL[c]);
+/** Exit held because the position's buy is still settling on-chain (Bot 6 reason text or code). */
+export const isExitQueued = (text?: string | null) => /still settling on-chain|settling on-chain|\b(pending_exit|exit_pending)\b|exit (held|queued)/i.test(text ?? "");
+/** In-flight LIVE buy flagged by Bot 6 (Position.pending + client_order_id); tolerate missing fields. */
+export const isPendingPos = (p: object) => (p as { pending?: boolean }).pending === true;
+/** API v0.7: a held exit on a position ({code: 'pending_exit', reason, source}) or null. */
+export const heldExit = (p: object) => (p as { held_exit?: { code?: string; reason?: string; source?: string } | null }).held_exit ?? null;
+/** xStock (…x) on BNB Chain has no liquidity: greyed out in pickers, selectable only in SIM. */
+export const isXStock = (sym: string) => /x$/.test(sym);
 /** Signal.strategy / active_strategy "NONE" means Auto Mode is staying out. */
 export const strategyLabel = (s?: string | null) => (!s ? "—" : s === "NONE" ? "Staying out" : s);

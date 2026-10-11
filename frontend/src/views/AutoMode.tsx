@@ -6,11 +6,14 @@ import { RegimeBadge } from "../components/Badges";
 import { Card, NumberInput, Segmented, Skeleton, Toggle, useToast } from "../components/ui";
 import { PRESET_INFO, REGIME_INFO, STYLE_INFO } from "../lib/auto";
 import type { PresetsTable } from "../api/types";
-import { strategyLabel, TOKENS } from "../lib/strategy";
+import { strategyLabel, TOKENS, isXStock } from "../lib/strategy";
+import { useLive } from "../lib/live";
+import { TokenStatusBadge } from "../components/Live";
 
 interface Props { config: AutoConfig; setConfig: (c: AutoConfig) => void; status: StatusSnapshot | null; onActivated: () => void; tick: number }
 
 export function AutoMode({ config: c, setConfig, status, onActivated, tick }: Props) {
+  const { system } = useLive(); const simOnly = !system || system.trading_mode === "SIM"; // xStock only selectable in SIM
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const style = c.style ?? "BALANCED", enabled = c.enabled_presets ?? [...PresetNameValues];
@@ -50,8 +53,8 @@ export function AutoMode({ config: c, setConfig, status, onActivated, tick }: Pr
         <Card title="Auto agent" extra={isActive && <span className="pill ok"><span className="live-dot" />Active</span>}>
           <div className="stack" style={{ gap: 14 }}>
             <div className="field-grid">
-              <div><span className="lbl">Tokenized stock</span>
-                <select value={c.symbol} onChange={(e) => setConfig({ ...c, symbol: e.target.value })}>{TOKENS.map((t) => <option key={t.symbol} value={t.symbol}>{t.label}</option>)}</select></div>
+              <div><span className="lbl">Tokenized stock<TokenStatusBadge symbol={c.symbol} /></span>
+                <select value={c.symbol} onChange={(e) => setConfig({ ...c, symbol: e.target.value })}>{TOKENS.map((t) => <option key={t.symbol} value={t.symbol} disabled={isXStock(t.symbol) && !simOnly} title={isXStock(t.symbol) ? "No liquidity on BSC" : undefined}>{t.label}{isXStock(t.symbol) ? " · No liquidity on BSC" : ""}</option>)}</select></div>
               <div><span className="lbl">Timeframe</span>
                 <select value={c.timeframe ?? "1h"} onChange={(e) => setConfig({ ...c, timeframe: e.target.value as Timeframe })}>{TimeframeValues.map((t) => <option key={t}>{t}</option>)}</select></div>
               <div><span className="lbl">Capital allocated</span><NumberInput value={c.capital} min={1} step={500} suffix="USDT" onChange={(v) => setConfig({ ...c, capital: v ?? 1 })} /></div>

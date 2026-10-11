@@ -5,9 +5,9 @@ import { defaultStrategy } from "./strategy";
 
 const numAfter = (t: string, re: RegExp) => { const m = t.match(re); const g = m?.slice(1).find((x) => x != null); return g != null ? parseFloat(g.replace(/,/g, "")) : undefined; };
 
-export function parseStrategyText(text: string, defaultSymbol = "NVDAon"): ManualStrategy | AutoConfig {
+export function parseStrategyText(text: string, defaultSymbol = "NVDAB"): ManualStrategy | AutoConfig {
   const t = text.toLowerCase();
-  const symbol = /tsla|tesla/.test(t) ? "TSLAx" : /aapl|apple/.test(t) ? "AAPLB" : /nvda|nvidia/.test(t) ? "NVDAon" : defaultSymbol;
+  const symbol = /tsla|tesla/.test(t) ? "TSLAx" : /aapl|apple/.test(t) ? "AAPLB" : /ondo|nvdaon/.test(t) ? "NVDAon" : /nvda|nvidia/.test(t) ? "NVDAB" : defaultSymbol;
   const capital = numAfter(t, /\$\s?(\d[\d,]*)|(\d[\d,]*)\s*(?:usdt|usd|dollars)/);
 
   // Auto Mode: "auto", "let the agent decide", a style word with no indicator rules
