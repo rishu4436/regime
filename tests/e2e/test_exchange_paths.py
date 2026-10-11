@@ -76,8 +76,14 @@ def test_every_token_executes_on_whatever_path_it_was_quoted(symbol):
     fills = []
     for _ in range(440):
         fills += [d["execution"] for d in c.post("/api/loop/tick").json() if d.get("execution")]
-        if len(fills) >= 2:
+        if len(fills) >= 2 or (not quoted and _ > 30):
             break
+    if symbol.endswith("x") and not quoted:  # Bot 4 d1aeef4: xStock off by default -> a no-trade decision, not a failure
+        ds = [d for d in c.get("/api/decisions?limit=50").json() if d["symbol"] == symbol]
+        assert not fills and ds and all(d["action"] == "STAY_OUT" for d in ds)
+        assert any("no quote" in d["reason"] and "xStock" in d["reason"] for d in ds)
+        assert not [a for a in c.get("/api/alerts").json() if a["code"] == "EXECUTION_FAILED"]
+        return
     assert fills, f"no executions for {symbol}"
     assert len(quoted) >= len(fills)
     for e, q in zip(fills, quoted):

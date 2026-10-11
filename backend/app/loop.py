@@ -708,16 +708,17 @@ class TradingLoop:
         notional = verdict.adjusted_notional or signal.proposed_notional
         if notional <= 0:
             return self._finalize(Decision(id=did, action=Action.STAY_OUT, risk_verdict=verdict, reason="BUY approved with zero size", **base))
-        quote = None
-        if self.live:  # Bot 3 pass 2: quote for the approved notional, re-check with the quote and a fresh `now`
-            try:
-                quote = self.c.exchange.get_quote(signal.symbol, OrderSide.BUY, notional)
-            except Exception as e:  # market closed / no liquidity / below minimum: a normal decision, not a crash
-                if livemod.is_session_expired(e):
-                    self._session_expired(e)
-                note = self._maybe_cooldown(signal.symbol, e)
-                return self._finalize(Decision(id=did, action=Action.STAY_OUT, risk_verdict=verdict,
-                                               reason=f"BUY not executed: no quote ({_quote_error(e)}){note}", **base))
+        # quote first in every mode: market closed / no liquidity / xStock disabled / below minimum is a normal
+        # no-trade decision, never a FAILED execution
+        try:
+            quote = self.c.exchange.get_quote(signal.symbol, OrderSide.BUY, notional)
+        except Exception as e:
+            if livemod.is_session_expired(e):
+                self._session_expired(e)
+            note = self._maybe_cooldown(signal.symbol, e)
+            return self._finalize(Decision(id=did, action=Action.STAY_OUT, risk_verdict=verdict,
+                                           reason=f"BUY not executed: no quote ({_quote_error(e)}){note}", **base))
+        if self.live:  # Bot 3 pass 2: re-check with the quote for the approved notional and a fresh `now`
             v2 = self._risk_check(signal, self.book.portfolio(), self.control(), quote=quote)
             if not v2.approved:
                 return self._finalize(Decision(id=did, action=Action.STAY_OUT, risk_verdict=v2,
