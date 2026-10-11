@@ -17,7 +17,7 @@ Implement `backend.contracts.ExchangeClient`:
 
 ```python
 mode -> TradingMode                                   # property
-get_candles(symbol, timeframe=Timeframe.H1, limit=200) -> list[Candle]   # oldest first
+get_candles(symbol, timeframe=Timeframe.H1, limit=200) -> list[Candle]   # oldest first; LIVE/PAPER page >300 bars
 get_price(symbol) -> float
 search_tokens(query) -> list[TokenInfo]               # RWA / tokenized stock search
 get_quote(symbol, side, notional) -> Quote            # expires_at = created_at + ~30s
@@ -141,3 +141,11 @@ i.e. the wallet the saved LIVE state belongs to), so the app keeps LIVE blocked 
 at a time; a new `start()` cancels the old one. The HTTP endpoints must be localhost-only: anyone who can call them can
 start a sign-in for this machine's wallet.
 
+
+### Candle history paging (LIVE/PAPER)
+
+`GET /api/v1/dex/market/candles` accepts `limit` up to 300 (301+ -> `40001 invalid limit range`, verified
+2026-10-11). `after=<ts ms>` returns bars at or before ts (inclusive, older); `before=<ts ms>` returns newer bars.
+`BinanceWeb3Client.get_candles` therefore makes one request for `limit <= 300` and otherwise pages backwards with
+`after=<oldest ts>`, dedupes by timestamp, stops on a short/empty page, and caps a call at 20 pages with a 0.25 s
+pause between pages (5 RPS per endpoint).
