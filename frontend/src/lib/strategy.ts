@@ -24,9 +24,10 @@ export function defaultStrategy(): FullStrategy {
     timeframe: "1h",
     entry: {
       logic: "AND",
-      rsi_below: { enabled: true, period: 14, threshold: 35 },
-      price_above_sma: { enabled: true, period: 50 },
-      price_above_ema: { enabled: false, period: 20 },
+      rsi_below: { enabled: false, period: 14, threshold: 35 },
+      price_above_sma: { enabled: false, period: 50 },
+      // Default entry = price above EMA(20) alone: Bot 2 backtest on 9 datasets, 195 trades, +1.25% after fees, 3.85% worst DD.
+      price_above_ema: { enabled: true, period: 20 },
       macd_bullish_cross: { enabled: false, params: { fast: 12, slow: 26, signal: 9 } },
       bollinger_lower: { enabled: false, period: 20, std_dev: 2, proximity_pct: 2 },
       volume_above_avg: { enabled: false, period: null as unknown as number, multiplier: 1.1 },
@@ -234,7 +235,7 @@ export const CONDITION_LABEL: Record<string, string> = {
   live_below_min_order: "Below minimum order", order_in_flight: "Earlier swap still settling, waiting", pending_exit: "Exit queued until fill", exit_pending: "Exit queued until fill", session_expired: "Agentic Wallet session expired, re-scan QR on host PC", wallet_not_ready: "Agentic Wallet session expired, re-scan QR on host PC", live_illiquid_family: "xStock excluded (no liquidity on BNB Chain)", live_token_paused: "Token paused", live_price_impact: "Price impact above limit",
   // Binance Web3 exchange quote errors (Bot 4) used as market-state signals: a stay-out, not a failed trade
   // Bot 4 exchange reasons and Bot 3 wallet / live checks
-  market_closed: "Market closed", insufficient_liquidity: "Insufficient liquidity", below_minimum: "Below minimum order",
+  market_closed: "Market closed", insufficient_liquidity: "Insufficient liquidity", below_minimum: "Below minimum order", insufficient_gas: "Not enough BNB for gas, top up ~0.005 BNB",
   above_maximum: "Above maximum order", xstock_disabled: "xStock disabled (no liquidity on BSC)", slippage_exceeded: "Slippage exceeded",
   wallet_limits: "Wallet limits", wallet_allowed_token: "Token allowed by wallet", wallet_per_tx_cap: "Wallet per-trade cap",
   wallet_daily_limit: "Wallet daily limit", wallet_exit_reserve: "Exit reserve (quota to sell all positions)",
@@ -259,4 +260,17 @@ export const heldExit = (p: object) => (p as { held_exit?: { code?: string; reas
 /** xStock (…x) on BNB Chain has no liquidity: greyed out in pickers, selectable only in SIM. */
 export const isXStock = (sym: string) => /x$/.test(sym);
 /** Signal.strategy / active_strategy "NONE" means Auto Mode is staying out. */
-export const strategyLabel = (s?: string | null) => (!s ? "—" : s === "NONE" ? "Staying out" : s);
+const STRATEGY_NAMES: Record<string, string> = { DCA: "DCA", SMART_DCA: "Smart DCA", BUY_THE_DIP: "Buy the Dip", TREND_FOLLOWING: "Trend / Momentum", TREND_MOMENTUM: "Trend / Momentum", GRID: "Grid" };
+const REGIME_NAMES: Record<string, string> = { STRONG_UPTREND: "Strong uptrend", MILD_UPTREND: "Mild uptrend", SIDEWAYS: "Sideways", SIDEWAYS_RANGE: "Sideways", OVERSOLD_PULLBACK: "Oversold pullback", HIGH_VOLATILITY: "High volatility", DOWNTREND: "Downtrend" };
+const STYLE_NAMES: Record<string, string> = { PATIENT: "Patient", BALANCED: "Balanced", ACTIVE: "Active" };
+/** Human strategy name: preset label, "MANUAL:<name>" -> "<name> (manual)", "NONE" -> Staying out. */
+export const strategyLabel = (s?: string | null) => {
+  if (!s) return "—";
+  if (s === "NONE") return "Staying out";
+  if (s.startsWith("MANUAL:")) return `${s.slice(7)} (manual)`;
+  return STRATEGY_NAMES[s] ?? s;
+};
+/** Replace raw engine names (regimes, presets, styles) inside a reason with labels; "->" becomes "picks". */
+export const humanReason = (r?: string | null) => !r ? "" : r
+  .replace(/\s*->\s*/g, " picks ")
+  .replace(/\b[A-Z][A-Z_]{2,}\b/g, (w) => REGIME_NAMES[w] ?? STRATEGY_NAMES[w] ?? STYLE_NAMES[w] ?? w);
