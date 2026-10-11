@@ -18,6 +18,9 @@ import { cleanWatchlist, narrativeOf, NARRATIVES, underlyingOf } from "../lib/wa
 export type MockScenario = "SIM" | "LIVE";
 export const MOCK_SCENARIO: MockScenario = (() => { try { return localStorage.getItem("mock.scenario") === "LIVE" ? "LIVE" : "SIM"; } catch { return "SIM"; } })();
 export function setMockScenario(s: MockScenario) { try { localStorage.setItem("mock.scenario", s); } catch { /* private mode */ } window.location.reload(); }
+/** Mock-only: in the demo LIVE scenario, force every risk warning + an expired wallet session (for screenshots). */
+export const MOCK_WARNINGS: boolean = (() => { try { return localStorage.getItem("mock.warnings") === "1"; } catch { return false; } })();
+export function setMockWarnings(on: boolean) { try { localStorage.setItem("mock.warnings", on ? "1" : "0"); } catch { /* private mode */ } window.location.reload(); }
 const LIVE = MOCK_SCENARIO === "LIVE";
 const MODE = LIVE ? "LIVE" : "SIM";
 // Bot 3 LiveRiskProfile defaults (bot3/live): 25/order, 25 daily loss (auto e-stop), 100/day, 50 open, 1% slippage, 900 s, 0.002 BNB
@@ -99,6 +102,7 @@ export class MockApi implements ApiClient {
   // ------------------------------------------------------------------ live / wallet (requested endpoints, mocked)
   private bnb = 0.0046;          // demo gas balance; each fill burns a little so the low-gas warning shows up
   private dailyNotional = 0;
+  private sessionExpired = LIVE && MOCK_WARNINGS; // demo: the Agentic Wallet sign-in expired until "Reconnect wallet"
   private hb = { started_at: now() as string | null, last_tick_at: null as string | null };
   private liveLimits(): LiveLimits {
     const exposure = (this.portfolio.positions ?? []).reduce((a, p) => a + p.quantity * (p.current_price ?? p.avg_entry_price), 0);
@@ -106,7 +110,10 @@ export class MockApi implements ApiClient {
     return { live_allowed: true, per_order_cap_usdt: LIVE_CAP, daily_loss_cap_usdt: LIVE_DAILY_LOSS, daily_notional_cap_usdt: LIVE_DAILY_NOTIONAL,
       daily_limit_usdt: LIVE_DAILY_NOTIONAL, max_exposure_usdt: LIVE_EXPOSURE, max_slippage_pct: 1, max_favorable_impact_pct: 3, stale_after_s: 900, bnb_gas_reserve: LIVE_GAS_RESERVE,
       fee_buffer_usdt: 1, min_wallet_usdt: 70, min_order_usdt: 10, market_hours_utc: null, daily_used_usdt: this.dailyNotional, daily_loss_usdt: loss, open_exposure_usdt: exposure,
-      daily_remaining_usdt: Math.max(0, LIVE_DAILY_NOTIONAL - this.dailyNotional), warnings: exposure > Math.max(0, LIVE_DAILY_NOTIONAL - this.dailyNotional) ? [{ code: "exit_quota_shortfall", message: `Exit reserve: ${Math.max(0, LIVE_DAILY_NOTIONAL - this.dailyNotional).toFixed(2)} USDT of daily quota left can't cover selling all open positions (${exposure.toFixed(2)} USDT)` }] : [], limit_source: { per_order_cap_usdt: "risk", daily_limit_usdt: "risk" },
+      daily_remaining_usdt: Math.max(0, LIVE_DAILY_NOTIONAL - this.dailyNotional), warnings: [
+        ...(MOCK_WARNINGS || exposure > Math.max(0, LIVE_DAILY_NOTIONAL - this.dailyNotional) ? [{ code: "exit_quota_shortfall", message: `Exit reserve: ${Math.max(0, LIVE_DAILY_NOTIONAL - this.dailyNotional - (MOCK_WARNINGS ? 92 : 0)).toFixed(2)} USDT of daily quota left can't cover selling all open positions (${Math.max(exposure, MOCK_WARNINGS ? 24.5 : 0).toFixed(2)} USDT)` }] : []),
+        ...(MOCK_WARNINGS ? ["wallet_too_small", { code: "wallet_limits_stale", message: "Wallet limits last refreshed 25 min ago" }] : []),
+      ], limit_source: { per_order_cap_usdt: "risk", daily_limit_usdt: "risk" },
       allowed_tokens: "ALL", tradable_tokens: TOKENS.filter((t) => !/x$/.test(t.symbol)).map((t) => t.symbol), wallet: { daily_limit_usdt: 200, per_order_cap_usdt: 50, allowed_tokens: null } };
   }
   /** demo cooldown (API.md v0.7 shape): an Ondo token cooling down after an exchange off-hours error (40367) */
@@ -115,6 +122,7 @@ export class MockApi implements ApiClient {
     const reasons: string[] = [];
     if (this.control.emergency_stopped) reasons.push(onePrefix("Emergency stop", this.control.reason || "active"));
     else if (this.control.paused) reasons.push(onePrefix("Paused", this.control.reason));
+    if (this.sessionExpired) reasons.push("wallet_not_ready: Agentic Wallet session expired, sign in again with the QR code");
     if (this.bnb < LIVE_GAS_RESERVE) reasons.push(`BNB ${this.bnb.toFixed(4)} below the gas reserve ${LIVE_GAS_RESERVE}`);
     if (this.dailyNotional >= LIVE_DAILY_NOTIONAL) reasons.push(`Daily LIVE notional ${this.dailyNotional.toFixed(2)} of ${LIVE_DAILY_NOTIONAL} USDT used`);
     const t = Date.now();
@@ -123,7 +131,7 @@ export class MockApi implements ApiClient {
       const q = p as typeof p & { client_order_id?: string | null; held_exit?: { code?: string } | null };
       return { order_id: null, client_order_id: q.client_order_id ?? null, symbol: p.symbol, notional: p.quantity * p.avg_entry_price, tx_hash: null, since: p.opened_at, held_exit: q.held_exit ?? null };
     });
-    return { live_trading_enabled: true, binance_live_enabled: true, risk_allow_live: true, wallet_connected: true, can_trade: reasons.length === 0, blocked_reasons: reasons, cooldowns, chain_pending };
+    return { live_trading_enabled: true, binance_live_enabled: true, risk_allow_live: true, wallet_connected: !this.sessionExpired, can_trade: reasons.length === 0, blocked_reasons: reasons, cooldowns, chain_pending };
   }
   getLiveGate() { return ok<LiveGate | null>(LIVE ? this.gate() : null); }
   getWallet() {
@@ -131,7 +139,8 @@ export class MockApi implements ApiClient {
     this.markToMarket();
     const held = new Map<string, { q: number; px: number }>();
     for (const p of this.portfolio.positions ?? []) { const h = held.get(p.symbol) ?? { q: 0, px: p.current_price ?? p.avg_entry_price }; h.q += p.quantity; held.set(p.symbol, h); }
-    return ok<WalletInfo | null>({ provider: "baw", address: DEMO_WALLET, chain: "BSC", chain_id: 56, connected: true,
+    return ok<WalletInfo | null>({ provider: "baw", address: DEMO_WALLET, chain: "BSC", chain_id: 56, connected: !this.sessionExpired, session_expired: this.sessionExpired,
+      ...(MOCK_WARNINGS ? { stale: true, age_s: 1500 } : {}),
       balances: [
         { asset: "USDT", amount: this.portfolio.cash, value_usdt: this.portfolio.cash, contract_address: "0x55d398326f99059fF775485246999027B3197955" },
         { asset: "BNB", amount: this.bnb, value_usdt: this.bnb * 590 },
@@ -149,7 +158,7 @@ export class MockApi implements ApiClient {
     const t0 = this.connectSessions.get(session_id);
     if (t0 == null) return fail(404, `unknown session ${session_id}`);
     const age = Date.now() - t0;
-    return ok<WalletConnectStatus>(age > 120_000 ? { status: "expired" } : age > 6000 ? { status: "connected", address: DEMO_WALLET, wallet_changed: false } : { status: "pending" }, 150);
+    return ok<WalletConnectStatus>(age > 120_000 ? { status: "expired" } : age > 6000 ? ((this.sessionExpired = false), { status: "connected", address: DEMO_WALLET, wallet_changed: false }) : { status: "pending" }, 150);
   }
   // Trading limits (mock of Bot 6's GET/PUT /api/settings/limits): saved in localStorage like logs/limits.json
   private limits: TradingLimits = (() => { try { const r = localStorage.getItem("mock.limits"); if (r) return { ...LIMIT_DEFAULTS, ...JSON.parse(r) }; } catch { /* ignore */ } return { ...LIMIT_DEFAULTS }; })();

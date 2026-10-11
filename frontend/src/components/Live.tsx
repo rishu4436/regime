@@ -1,7 +1,8 @@
-// LIVE / 24-7 autonomous monitor: mainnet banner, autonomy + heartbeat, kill switches, caps usage, wallet, live gate,
+// LIVE / 24-7 autonomous monitor: mainnet banner (with blocked reasons), autonomy + heartbeat, kill switches, caps usage, wallet,
 // activity feed with BscScan links.
 import { useEffect, useState } from "react";
 import { RegisterOnChain } from "./AgentStudio";
+import { agentState } from "./StatusBar";
 import type { Decision, ExecutionResult, StatusSnapshot } from "../contracts";
 import { api } from "../api";
 import type { ChainPending, LiveCooldown, LiveExecutionFields } from "../api/types";
@@ -9,8 +10,7 @@ import { cls, time, usd } from "../lib/format";
 import { ago, allowedTokensText, balAmount, balAsset, balValue, bscAddr, bscTx, dur, limitsOf, shortHex, stricter, useLive } from "../lib/live";
 import { conditionLabel, controlReason, exchangeCodeLabels, isExitQueued, strategyLabel, humanReason } from "../lib/strategy";
 import { ActionBadge } from "./Badges";
-import { ConfirmDialog } from "./ConfirmDialog";
-import { Card, Skeleton, useToast } from "./ui";
+import { Card, Skeleton } from "./ui";
 
 const NA = <span className="faint">not available</span>;
 /** token_status on /api/tokens items (requested from Bot 6); hidden when absent. */
@@ -36,7 +36,7 @@ export function TokenStatusBadge({ symbol }: { symbol: string }) {
 /** Token family from the symbol suffix: …B = bStock, …on = Ondo, …x = xStock. */
 export const tokenFamily = (sym: string) => (/on$/.test(sym) ? "Ondo" : /x$/.test(sym) ? "xStock" : /B$/.test(sym) ? "bStock" : null);
 export const FamilyBadge = ({ symbol }: { symbol: string }) => { const f = tokenFamily(symbol); return f ? <span className={`pill fam-${f}`} title={`${f} token`}>{f}</span> : null; };
-const AUTO_STOP = /daily loss|automatic|auto-stop|stopped automatically/i;
+export const AUTO_STOP = /daily loss|automatic|auto-stop|stopped automatically/i;
 
 /** Red, non-dismissible LIVE / MAINNET banner shown (sticky) on every tab whenever the backend runs LIVE. */
 const SESSION = /session|qr|re-?sign|sign ?in|re-?auth|expired/i;
@@ -48,7 +48,7 @@ export function SessionBanner() {
   if (!wallet?.session_expired && !why) return null;
   return (
     <div className="banner red" role="alert">
-      <span className="grow"><b>Agentic Wallet session expired.</b> The agent can't trade until the wallet is signed in again Click <b>Reconnect wallet</b> at the top and scan the QR in the Binance App (or run <code>baw auth signin</code> on the host PC).{why ? <><br /><span className="small">{why}</span></> : null}</span>
+      <span className="grow"><b>Agentic Wallet session expired.</b> The agent can't trade until the wallet is signed in again. Click <b>Reconnect wallet</b> in the bar at the top and scan the QR in the Binance App (or run <code>baw auth signin</code> on the host PC).{why ? <><br /><span className="small">{why.replace(/^\s*(session_expired|wallet_not_ready)\s*:\s*/i, "")}</span></> : null}</span>
     </div>
   );
 }
@@ -76,6 +76,22 @@ export function AgentIdentityCard() {
   );
 }
 
+const GATE_TEXT: [RegExp, string][] = [
+  [/LIVE_TRADING_ENABLED/i, "live trading is switched off in the backend settings"],
+  [/BINANCE_LIVE_ENABLED/i, "live orders are switched off for the exchange"],
+  [/allow_live/i, "the risk layer doesn't allow live trades yet"],
+  [/wallet[ _]not[ _]connected|no wallet|wallet_connected/i, "no wallet is connected"],
+  [/\bsession_expired\b|wallet_not_ready/i, "the wallet sign-in expired"],
+];
+/** One plain-language line for the live gate's blocked_reasons (codes and setting names translated, duplicates dropped). */
+export const plainBlocked = (reasons: string[]) => [...new Set(reasons.map((r) => {
+  const hit = GATE_TEXT.find(([re]) => re.test(r));
+  if (hit) return hit[1];
+  const t = humanReason(controlReason(r.replace(/^Missing:\s*/i, "")));
+  return /^emergency stop/i.test(r) ? `emergency stop is on${controlReason(r.replace(/^Emergency stop:?\s*/i, "")) ? ` (${controlReason(r.replace(/^Emergency stop:?\s*/i, ""))})` : ""}`
+    : /^paused/i.test(r) ? "the agent is paused" : t;
+}).filter(Boolean))].join("; ");
+
 export function LiveBanner() {
   const { isLive, wallet, gate } = useLive();
   if (!isLive) return null;
@@ -88,7 +104,7 @@ export function LiveBanner() {
         {wallet?.address ? <a href={bscAddr(wallet.address)} target="_blank" rel="noreferrer" className="mono">{shortHex(wallet.address)}</a> : "the connected wallet"}
         {wallet?.provider === "baw" ? " (Binance Agentic Wallet)" : ""} without asking, inside hard caps
         {L.per_order_cap_usdt != null ? <> ({usd(stricter(L.per_order_cap_usdt, L.wallet?.per_order_cap_usdt), 0)}/order, {usd(L.daily_loss_cap_usdt, 0)} daily loss stop, {usd(L.max_exposure_usdt, 0)} open)</> : null}.
-        {gate && !gate.can_trade && gate.blocked_reasons.length > 0 && <><br /><b>New trades blocked:</b> {gate.blocked_reasons.join(" · ")}</>}
+        {gate && !gate.can_trade && <><br /><b>New trades blocked:</b> {gate.blocked_reasons.length ? plainBlocked(gate.blocked_reasons) : "the backend didn't say why. Check the backend logs."}</>}
       </span>
       {api.kind === "mock" && <span className="pill warn" title="Mock LIVE scenario: nothing is sent anywhere">demo · no funds</span>}
     </div>
@@ -109,26 +125,12 @@ export function TxLink({ exec }: { exec?: (ExecutionResult & LiveExecutionFields
 }
 
 /** 24/7 monitor: is the agent running on its own, since when, heartbeat, and the kill switches. */
-export function AutonomyMonitor({ status, refresh }: { status: StatusSnapshot | null; refresh: () => void }) {
-  const toast = useToast();
-  const { loop, hb, now, isLive, gate, refresh: refreshLive } = useLive();
-  const [ask, setAsk] = useState<null | "stop" | "reset">(null);
-  const [busy, setBusy] = useState(false);
+export function AutonomyMonitor({ status }: { status: StatusSnapshot | null; refresh?: () => void }) {
+  const { loop, hb, now, isLive, gate } = useLive();
   if (!status || !loop) return <Card><Skeleton h={70} /></Card>;
   const c = status.control;
   const auto = c.emergency_stopped && AUTO_STOP.test(c.reason ?? "");
-  const [label, tone, icon] = c.emergency_stopped ? [auto ? "Auto-stopped: daily loss cap hit" : "Emergency stopped", "bad", "■"]
-    : c.paused ? ["Paused by kill switch", "warn", "❚❚"]
-    : !status.agent_mode ? ["Idle: no agent active", "", "○"]
-    : !loop.running ? ["Agent active, loop stopped", "warn", "○"]
-    : hb.stale ? ["Heartbeat lost: loop not ticking", "bad", "!"]
-    : c.confirmation_mode ? ["Running (confirmation mode on)", "ok", "●"]
-    : ["Agent running autonomously", "ok", "●"];
-  const run = async (fn: () => Promise<unknown>, msg: string) => {
-    setBusy(true);
-    try { await fn(); toast(msg, "success"); refresh(); refreshLive(); } catch (e) { toast(e instanceof Error ? e.message : String(e), "error"); }
-    finally { setBusy(false); setAsk(null); }
-  };
+  const { label, tone, icon } = agentState(status, loop.running, hb.stale);
   const nextIn = hb.nextTick != null ? Math.max(0, Math.round((hb.nextTick - now) / 1000)) : null;
   return (
     <section className={`card autonomy ${tone}`}>
@@ -141,14 +143,6 @@ export function AutonomyMonitor({ status, refresh }: { status: StatusSnapshot | 
             {c.emergency_stopped || c.paused ? <> · {controlReason(c.reason) || "no reason given"}</> : null}
           </div>
         </div>
-        <div className="btn-row">
-          {c.paused
-            ? <button className="btn green" disabled={busy} onClick={() => run(() => api.resume(), "Agent resumed")}>▶ Resume</button>
-            : <button className="btn amber" disabled={busy || c.emergency_stopped} onClick={() => run(() => api.pause("Paused by user (kill switch)"), "Agent paused")}>❚❚ Pause</button>}
-          {c.emergency_stopped
-            ? <button className="btn ghost" disabled={busy} onClick={() => setAsk("reset")}>↺ Reset e-stop</button>
-            : <button className="btn red" disabled={busy} onClick={() => setAsk("stop")}>■ Emergency stop</button>}
-        </div>
       </div>
       <div className="autonomy-stats">
         <div><span className="lbl">Running since</span><b>{loop.running ? dur(hb.runningSince, now) : "stopped"}</b>{hb.runningSince && loop.running ? <span className="faint small">{hb.observed ? "seen by this page" : new Date(hb.runningSince).toLocaleString()}{loop.heartbeat?.autostart ? " · autostart" : ""}</span> : null}</div>
@@ -160,18 +154,6 @@ export function AutonomyMonitor({ status, refresh }: { status: StatusSnapshot | 
       {loop.heartbeat?.last_error && <div className="banner amber" style={{ margin: "12px 0 0" }}><span className="grow small"><b>Last loop error:</b> {loop.heartbeat.last_error}</span></div>}
       {hb.stale && <div className="banner red" style={{ margin: "12px 0 0" }}><span className="grow"><b>No tick for {ago(hb.lastTick, now).replace(" ago", "")}.</b> The loop says it is running but hasn't produced a cycle; check the backend logs.</span></div>}
       {auto && <div className="banner red" style={{ margin: "12px 0 0" }}><span className="grow"><b>Automatic emergency stop:</b> {controlReason(c.reason)}. No new entries until you reset it.</span></div>}
-      {ask === "stop" && (
-        <ConfirmDialog title="Emergency stop?" danger confirmLabel="Stop the agent" busy={busy} onCancel={() => setAsk(null)}
-          onConfirm={() => run(() => api.emergencyStop("Emergency stop by user", false), "Emergency stop engaged")}>
-          The agent stops opening trades immediately. Open positions are closed on the next bar at that bar's close, logged as an emergency stop.
-        </ConfirmDialog>
-      )}
-      {ask === "reset" && (
-        <ConfirmDialog title="Reset the emergency stop?" confirmLabel="Reset and resume trading" busy={busy} onCancel={() => setAsk(null)}
-          onConfirm={() => run(() => api.resetEmergencyStop(), "Emergency stop reset")}>
-          {auto ? "It was triggered by the daily loss cap. " : ""}The agent goes back to trading on its own{isLive ? " with real funds" : ""}.
-        </ConfirmDialog>
-      )}
     </section>
   );
 }
@@ -187,7 +169,7 @@ const Meter = ({ label, used, cap, hint, warnAt = 0.8, children }: { label: Reac
   );
 };
 
-const WARNING_TEXT: Record<string, string> = {
+export const WARNING_TEXT: Record<string, string> = {
   wallet_too_small: "Wallet too small to trade live: top up USDT to at least the minimum wallet size.",
   token_min_above_cap: "This token's minimum order is above the per-order cap, so it can't be bought live.",
   exit_quota_shortfall: "Today's remaining quota can't cover selling every open position.",
@@ -297,32 +279,6 @@ export function WalletPanel() {
   );
 }
 
-const Flag = ({ v, label, hint }: { v: boolean | null | undefined; label: string; hint?: string }) => (
-  <span className={`chip ${v == null ? "unk" : v ? "pass" : "fail"}`} title={hint}>{v == null ? "?" : v ? "✓" : "✕"} {label}</span>
-);
-/** The live gate: the three switches + wallet, can_trade and the backend's blocked_reasons as they come. */
-export function LiveGateCard() {
-  const { gate, gateSource, system } = useLive();
-  if (!system) return <Card title="Live gate"><Skeleton h={70} /></Card>;
-  return (
-    <Card title="Live gate" extra={gate && <span className={`pill ${gate.can_trade ? "ok" : "bad"}`}><span className="dot" />{gate.can_trade ? "can trade" : "blocked"}</span>}>
-      {!gate ? <div className="small muted">{NA}</div> : (
-        <>
-          <div className="chips">
-            <Flag v={gate.live_trading_enabled} label="LIVE_TRADING_ENABLED" hint="Backend setting" />
-            <Flag v={gate.binance_live_enabled} label="BINANCE_LIVE_ENABLED" hint="Exchange setting" />
-            <Flag v={gate.risk_allow_live} label="risk allow_live" hint="Risk setting" />
-            <Flag v={gate.wallet_connected} label="wallet connected" hint="baw wallet status" />
-          </div>
-          {gate.blocked_reasons.length > 0 && <ul className="reasons">{gate.blocked_reasons.map((r) => <li key={r}>{r}</li>)}</ul>}
-          {gateSource === "derived" && <div className="note">No live-gate endpoint yet: inferred from <code>/api/system</code> and control state; “?” = not exposed.</div>}
-        </>
-      )}
-    </Card>
-  );
-}
-
-/** Live activity feed: every decision with its risk checks and execution (route, fill, tx hash + BscScan). */
 export function ActivityFeed({ decisions, confirmMode = false }: { decisions: Decision[]; confirmMode?: boolean }) {
   const [only, setOnly] = useState(false);
   const rows = only ? decisions.filter((d) => d.action !== "STAY_OUT" || (d.risk_verdict && !d.risk_verdict.approved)) : decisions;

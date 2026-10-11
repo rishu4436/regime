@@ -26,7 +26,12 @@ export function StockAgentCard({ symbol, tick }: { symbol: string; tick?: number
     return () => clearInterval(id);
   }, [job, res]);
 
-  if (!price?.enabled) return null;
+  if (price === undefined) return <Card title="Second opinion" extra={<span className="pill">x402 · paid per call</span>}><div className="small faint">Checking…</div></Card>;
+  if (!price?.enabled) return (
+    <Card title="Second opinion" extra={<span className="pill">x402 · paid per call</span>}>
+      <div className="small muted">Paid second opinions from Binance Stock Agent (x402) are <b>off</b> on this backend. Turn x402 on in the backend settings to ask for an analysis of <b>{symbol}</b>. It's advice only and never places a trade.</div>
+    </Card>
+  );
   const cost = price.price_usdt ?? price.cap_usdt ?? 0.1, left = price.calls_left_today;
   const ask = async () => {
     setBusy(true); setErr(null); setRes(null);

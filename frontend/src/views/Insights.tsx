@@ -6,9 +6,9 @@ import { time } from "../lib/format";
 
 const LEVEL: Record<Alert["level"], string> = { INFO: "", WARNING: "warn", CRITICAL: "bad" };
 
-export function AlertsPanel({ version }: { version: number }) {
+export function AlertsPanel({ version, limit = 20, full = false }: { version: number; limit?: number; full?: boolean }) {
   const [alerts, setAlerts] = useState<Alert[] | null>(null);
-  useEffect(() => { api.getAlerts(20).then(setAlerts).catch(() => setAlerts([])); }, [version]);
+  useEffect(() => { api.getAlerts(limit).then(setAlerts).catch(() => setAlerts([])); }, [version, limit]);
   // the same alert repeated every tick (e.g. a risk block) shows once, with a count and the latest time
   const shown = (alerts ?? []).reduce<(Alert & { n: number })[]>((out, a) => {
     const prev = out.find((x) => x.code === a.code && x.message === a.message && x.symbol === a.symbol);
@@ -18,7 +18,7 @@ export function AlertsPanel({ version }: { version: number }) {
   return (
     <Card title={<>Alerts {alerts?.length ? <span className="muted small" style={{ fontWeight: 400 }}>{alerts.length}</span> : null}</>}>
       {!alerts ? <Skeleton h={60} /> : alerts.length ? (
-        <div className="stack" style={{ gap: 8, maxHeight: 220, overflow: "auto" }}>
+        <div className="stack" style={{ gap: full ? 10 : 8, maxHeight: full ? "calc(100vh - 240px)" : 220, overflow: "auto" }}>
           {shown.map((a, i) => (
             <div key={a.id ?? i} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
               <span className={`pill ${LEVEL[a.level]}`} style={{ flex: "none" }}>{a.code.replace(/_/g, " ")}</span>
@@ -32,7 +32,7 @@ export function AlertsPanel({ version }: { version: number }) {
 }
 
 /** Small Q&A with the agent (POST /api/llm/ask) plus a one-line state summary (GET /api/llm/summary). */
-export function AskAgent({ tick }: { tick: number }) {
+export function AskAgent({ tick, full = false }: { tick: number; full?: boolean }) {
   const toast = useToast();
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
@@ -48,7 +48,7 @@ export function AskAgent({ tick }: { tick: number }) {
   return (
     <Card title="✨ Ask the agent">
       {summary ? <div className="summary-box small" style={{ marginBottom: 10 }}>{summary}</div> : summary == null ? <Skeleton h={40} style={{ marginBottom: 10 }} /> : null}
-      <div className="stack" style={{ gap: 8, marginBottom: chat.length ? 10 : 0, maxHeight: 240, overflow: "auto" }}>
+      <div className="stack" style={{ gap: 8, marginBottom: chat.length ? 10 : 0, maxHeight: full ? "calc(100vh - 360px)" : 240, overflow: "auto" }}>
         {chat.map((m, i) => (
           <div key={i} className="small">
             <div className="muted">You: {m.q}</div>
