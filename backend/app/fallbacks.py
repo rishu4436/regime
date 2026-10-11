@@ -326,7 +326,8 @@ class FallbackRiskManager:
     def __init__(self, control: Optional[ControlState] = None, live_allowed: Optional[bool] = None) -> None:
         self._control = control or ControlState()
         self._max_loss_pct: dict[str, Optional[float]] = {}
-        self._live_allowed = live_allowed if live_allowed is not None else os.getenv("LIVE_TRADING_ENABLED", "").lower() == "true"
+        self._live_allowed = live_allowed if live_allowed is not None else all(
+            os.getenv(k, "").lower() == "true" for k in ("LIVE_TRADING_ENABLED", "BINANCE_LIVE_ENABLED"))
 
     def _set(self, **kw) -> ControlState:
         self._control = self._control.model_copy(update={**kw, "updated_at": utc_now()})
@@ -339,7 +340,7 @@ class FallbackRiskManager:
             checks.append(RiskCheck(name=name, passed=ok, detail=detail))
 
         live_ok = control.trading_mode != TradingMode.LIVE or self._live_allowed
-        chk("live_mode_allowed", live_ok, "LIVE requires LIVE_TRADING_ENABLED=true" if not live_ok else "")
+        chk("live_mode_allowed", live_ok, "LIVE requires LIVE_TRADING_ENABLED=true and BINANCE_LIVE_ENABLED=true" if not live_ok else "")
         if signal.action == Action.STAY_OUT:
             chk("actionable", False, "signal is STAY_OUT")
         elif signal.action == Action.SELL:

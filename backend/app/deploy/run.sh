@@ -3,7 +3,8 @@
 #   backend/app/deploy/run.sh                 # SIM mode, both services
 #   backend/app/deploy/run.sh --backend-only  # API only (http://localhost:8000/docs)
 # Mode/secrets come from the environment or a git-ignored .env at the repo root (TRADING_MODE=SIM by default).
-# LIVE additionally needs LIVE_TRADING_ENABLED=true and BINANCE_API_KEY/BINANCE_API_SECRET (refused otherwise).
+# LIVE additionally needs LIVE_TRADING_ENABLED=true, BINANCE_LIVE_ENABLED=true and BINANCE_API_KEY/BINANCE_API_SECRET
+# (refused at startup otherwise, naming what is missing).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$ROOT"
