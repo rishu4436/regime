@@ -311,7 +311,11 @@ def dry_run(args: argparse.Namespace, net: NetworkInfo, out=print) -> int:
 # ── Real registration ─────────────────────────────────────────────────────────
 
 
-def register(args: argparse.Namespace, net: NetworkInfo, out=print) -> int:
+def register(
+    args: argparse.Namespace, net: NetworkInfo, out=print, key: str | None = None
+) -> int:
+    """Register on ``net``. ``key`` lets the localhost dashboard API pass the key from
+    its key file; by default it is read from ``$AGENT_STUDIO_PRIVATE_KEY``."""
     path = Path(args.identity_file)
     if net.cli_name == "mainnet" and not args.confirm_mainnet:
         raise RegistrationError(
@@ -323,7 +327,7 @@ def register(args: argparse.Namespace, net: NetworkInfo, out=print) -> int:
             f"Already registered on {net.cli_name}: erc8004_id={existing['erc8004_id']} ({path}). Use --force to register again."
         )
         return EXIT_OK
-    key = _read_key()
+    key = key or _read_key()
     if not key:
         raise RegistrationError(
             f"Set ${PRIVATE_KEY_ENV} (a separate small EVM key) in the environment"

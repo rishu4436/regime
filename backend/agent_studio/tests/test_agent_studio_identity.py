@@ -117,4 +117,4 @@ def test_agent_card_is_named_regime():
     assert card["name"] == card["display_name"] == "Regime"
     assert card["description"] == "Autonomous tokenized-stock trading agent on BNB Chain"
     assert "Agentic Wallet" in card["summary"] and "Grok" in card["summary"]
-    assert card["endpoints"]["repo"] == "https://github.com/rishu4436/teamwork"
+    assert card["endpoints"]["repo"] == "https://github.com/rishu4436/regime"

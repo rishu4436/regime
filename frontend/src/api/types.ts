@@ -129,6 +129,8 @@ export interface TradingLimits {
   max_total_usdt: number;
   max_per_token_usdt: number;
   daily_loss_usdt: number;
+  /** optional: most Regime may buy in one day (backend sends it when set) */
+  daily_buy_usdt?: number | null;
 }
 /** GET /api/settings/limits: current limits + the wallet's own daily limit (final cap) + the safe defaults. */
 export interface TradingLimitsResponse extends TradingLimits {

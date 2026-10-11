@@ -20,4 +20,6 @@ frontend/dist/
 .DS_Store
 *.log
 logs/
+# Agent Studio identity key created from the dashboard (never commit)
+logs/agent_studio_identity.key
 *.tsbuildinfo

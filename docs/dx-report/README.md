@@ -1,6 +1,6 @@
 # Developer Experience Report: Regime
 
-*BNB Hack: Tokenized Stocks Edition. Repo: [rishu4436/teamwork](https://github.com/rishu4436/teamwork). Written 11 Oct 2026.*
+*BNB Hack: Tokenized Stocks Edition. Repo: [rishu4436/regime](https://github.com/rishu4436/regime). Written 11 Oct 2026.*
 
 ## Summary
 

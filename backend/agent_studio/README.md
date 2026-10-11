@@ -1,11 +1,11 @@
-# backend/agent_studio: BNB Agent Studio / ERC-8004 identity (Bot 5)
+# backend/agent_studio: BNB Agent Studio / ERC-8004 identity
 
 This gives **Regime**, our trading agent, an **on-chain ERC-8004 identity** on BNB Smart Chain using the
 BNB Agent Studio Python SDK **`bnbagent` 0.5.0** (PyPI, verified against the installed source).
 It also lets the API show that identity (`/api/system` → `agent_identity`).
 
 Why it's done this way: Studio's TypeScript `bag` CLI 0.0.14 scaffolds a *seller* agent, and its managed runtime is
-**testnet-only with no Agentic Wallet kind**. Our mainnet trading loop therefore stays on Rishu's PC, and we use the
+**testnet-only with no Agentic Wallet kind**. Our mainnet trading loop therefore stays on your own PC, and we use the
 SDK only to register the identity. The identity owner is a **separate small EVM key**. It never holds or moves
 trading funds, and the trading wallet stays the Binance Agentic Wallet (MPC).
 
@@ -14,16 +14,17 @@ trading funds, and the trading wallet stays the Binance Agentic Wallet (MPC).
 | `identity.py` | `get_agent_identity()` → `{erc8004_id, registry, studio_version, network, explorer_url}` or `None`. Read-only, no SDK, no RPC, never raises. |
 | `agent_card.py` | Name, description, capabilities, endpoints and on-chain metadata (`build_registration_file`, `build_metadata`, `build_agent_card`). |
 | `register.py` | One-off registration CLI (`python -m backend.agent_studio.register`). |
+| `api.py` | Localhost-only dashboard API (`/api/agent-studio/status`, `create-key`, `register`) that runs the same registration. |
 | `config.py` | Networks, registry addresses (same as the SDK presets), env var names, identity file path. |
 | `X402_NOTES.md` | Notes on paying the Stock Analyze Agent with `baw x402-payment`. Notes only, no code. |
 | `agent_identity.json` | **Output**, written by `register.py`. Gitignored (`backend/agent_studio/.gitignore`). |
 
-## For Bot 6 (API wiring)
+## API wiring
 
 ```python
 from backend.agent_studio import get_agent_identity, build_agent_card
 
-ident = get_agent_identity()  # None until Rishu registers
+ident = get_agent_identity()  # None until the agent is registered
 system["agent_identity"] = (
     {
         k: ident[k]
@@ -37,7 +38,41 @@ system["agent_identity"] = (
 
 It needs no extra dependencies. The `bnbagent` package is only needed to run `register.py`.
 
-## What Rishu needs
+## Register from the dashboard (easiest)
+
+On the PC running Regime, open the dashboard at `http://localhost` and find the **Agent identity** card.
+It walks you through three steps:
+
+1. **Create the identity wallet.** Regime makes a new, separate EVM key on this PC and saves it to
+   `logs/agent_studio_identity.key` in the Regime folder (gitignored, readable only by your user).
+   The key never leaves the PC: no screen, API response or log line shows it, and there is no download button.
+2. **Fund it.** Send about **0.002 BNB** on BNB Smart Chain to the address shown (QR code and copy button).
+   The card shows the live balance.
+3. **Register.** Tick the mainnet confirmation box and press Register. Regime sends the two registration
+   transactions and saves the result to `backend/agent_studio/agent_identity.json`. The card then shows the ERC-8004 id
+   and its 8004scan link.
+
+**Back up the key:** copy `logs/agent_studio_identity.key` somewhere safe (a password manager or an encrypted USB stick).
+Whoever has this file controls the agent's on-chain identity. If you lose it, the identity can't be updated later.
+It never holds trading funds; only the ~0.002 BNB for gas.
+
+Details:
+- The API answers only requests from this PC (localhost); anything else gets 403.
+- If `AGENT_STUDIO_PRIVATE_KEY` is set (the command-line flow), Regime uses that key and won't create a new one.
+- Regime never overwrites an existing key file and won't register twice: a second Register press while one is running,
+  or after the agent is registered, is refused.
+- Register refuses unless the identity wallet holds at least 0.002 BNB, and tells you the address and amount.
+- The network is BSC mainnet by default. Set `AGENT_STUDIO_NETWORK=testnet` for a testnet rehearsal.
+  The balance is read with a read-only `eth_getBalance` from a public BSC RPC (`RPC_URL_BSC_MAINNET` /
+  `RPC_URL_BSC_TESTNET` / `RPC_URL` override it, the same variables the SDK reads).
+- Creating the key needs `eth-account`; registering needs `bnbagent` 0.5.0
+  (`pip install -r backend/agent_studio/requirements.txt`). Without them the card shows what to install.
+- The key file location can be changed with `AGENT_STUDIO_KEY_FILE`.
+
+To mount the API in the app: `app.include_router(agent_studio_router)` after
+`from backend.agent_studio.api import router as agent_studio_router`.
+
+## Command-line flow: what you need
 
 - **Key:** a **new, separate** EVM private key used only for the identity. Don't use the trading wallet (it has no exportable key anyway),
   and don't use a wallet holding real funds. It is read **only** from the env var `AGENT_STUDIO_PRIVATE_KEY`. The script
@@ -57,7 +92,7 @@ It needs no extra dependencies. The `bnbagent` package is only needed to run `re
   - `RPC_URL_BSC_TESTNET` / `RPC_URL_BSC_MAINNET` override the SDK's RPC. The SDK's default testnet RPC
     (`data-seed-prebsc-2-s2.binance.org:8545`) timed out from our box. `https://bsc-testnet-rpc.publicnode.com` worked.
 
-## Exact steps (Windows PowerShell on Rishu's PC, from the repo root)
+## Exact steps (Windows PowerShell on the PC running Regime, from the repo root)
 
 ```powershell
 py -3.12 -m venv .venv-studio          # Python >= 3.10

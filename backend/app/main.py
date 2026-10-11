@@ -18,6 +18,7 @@ from fastapi import Body, FastAPI, HTTPException, Request, WebSocket, WebSocketD
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 
+from backend.agent_studio.api import router as agent_studio_router
 from backend.contracts import (
     ActivationMode, utc_now, CONTRACTS_VERSION, Alert, AlertLevel, AutoConfig, BacktestRequest, BacktestResult, Candle, ControlState, Decision, Event, EventType, ManualStrategy,
     LoopState, PerformanceSummary, Portfolio, RegimeAnalysis, SystemInfo, StatusSnapshot, StrategySelection, Timeframe, TokenInfo, TraderStyle, PresetName,
@@ -119,6 +120,9 @@ def create_app(settings: Optional[Settings] = None, components: Optional[Compone
     app = FastAPI(title="Regime - Autonomous On-Chain Stock Trading Agent", version=CONTRACTS_VERSION, lifespan=lifespan)
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
     app.state.st = st
+    # Agent Studio (ERC-8004 identity): localhost-only /api/agent-studio/*. Mounted before any other route;
+    # bnbagent/eth_account are imported lazily, so status works without them.
+    app.include_router(agent_studio_router)
     L = st.loop
 
     def guard(fn, *a, **kw):
