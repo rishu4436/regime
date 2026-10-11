@@ -5,7 +5,8 @@ Pure: no I/O, no execution, no risk decisions.
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from datetime import datetime
+from typing import Any, Callable, Mapping, Optional, Sequence
 
 from backend.contracts import (
     SIM_WARMUP_BARS,
@@ -24,10 +25,20 @@ from backend.contracts import (
     Signal,
     StrategySelection,
     TraderStyle,
+    utc_now,
 )
 
 from . import exits, presets
 from .backtest import BacktestRun, run_backtest
+from .data import TIMEFRAME_SECONDS, DataReport, sanitize_candles
+from .live import (
+    LiveSafetyConfig,
+    entry_blockers,
+    live_size,
+    market_blockers,
+    normalize_market_context,
+    volume_applicable,
+)
 from .manual import ManualIndicators, check_filters, evaluate_entry, indicator_exit
 from .regime import detect_regime as _detect_regime
 
@@ -40,7 +51,9 @@ class DefaultStrategyEngine:
     """Stateless strategy & regime engine.
 
     ``fee_pct`` / ``slippage_bps`` are the defaults used by ``backtest_manual`` (0 = simulator parity);
-    ``warmup_bars`` is the first bar index the backtest trades on (simulator: 60).
+    ``warmup_bars`` is the first bar index the backtest trades on (simulator: 60); live evaluation also needs at
+    least ``warmup_bars + 1`` valid candles before it will propose an entry.
+    ``live_safe=True`` (PAPER / LIVE) adds the live-safety layer of ``live.py``; ``clock`` gives 'now' (injectable).
     """
 
     def __init__(
@@ -49,6 +62,10 @@ class DefaultStrategyEngine:
         slippage_bps: float = 0.0,
         warmup_bars: int = SIM_WARMUP_BARS,
         manual_price_exits: bool = False,
+        live_safe: bool = False,
+        live_config: Optional[LiveSafetyConfig] = None,
+        clock: Callable[[], datetime] = utc_now,
+        market_context: Optional[Mapping[str, Mapping[str, Any]]] = None,
     ) -> None:
         if fee_pct < 0 or slippage_bps < 0 or warmup_bars < 0:
             raise ValueError("fee_pct, slippage_bps and warmup_bars must be >= 0")
@@ -59,6 +76,73 @@ class DefaultStrategyEngine:
         # and after which the app raises Position.highest_price with the current bar's high. Re-checking price exits
         # here would duplicate them and use a stale (already raised) high-water mark, so they are off by default.
         self.manual_price_exits = manual_price_exits
+        # Live / mainnet: extra BUY gates + smaller sizes (see live.py). Off by default (SIM/backtests unchanged).
+        self.live_safe = live_safe
+        self.live_config = live_config or LiveSafetyConfig()
+        self.clock = clock
+        # Optional per-symbol market context from the loop (no contract change): see set_market_context.
+        self._market: dict[str, dict] = {}
+        for sym, ctx in (market_context or {}).items():
+            self.set_market_context(sym, ctx)
+
+    def set_market_context(self, symbol: str, ctx: Optional[Mapping[str, Any]]) -> None:
+        """Latest market info for ``symbol`` (``None`` clears it). Keys: ``status`` ('trading'|'open'|'off-hours'|
+        'closed'|'no liquidity'|'paused'; Binance ``statusInfo`` marketStatus/openState/reasonCode also accepted),
+        ``reference_price_only``, ``price_impact_pct`` or ``priceImpactPercent`` (percent units, from a quote),
+        ``reference_price``, ``equity`` (USDT hint). Applies to BUYs only: off-hours / closed / no liquidity /
+        paused / reference_price_only -> STAY_OUT 'live_token_paused'; impact > max_price_impact_pct (1%) ->
+        STAY_OUT 'live_price_impact' (impact None / unparseable = unknown: no block). SELLs are never blocked.
+        """
+        norm = normalize_market_context(ctx)
+        if norm is None:
+            self._market.pop(symbol, None)
+        else:
+            self._market[symbol] = norm
+
+    def market_context(self, symbol: str) -> Optional[dict]:
+        return self._market.get(symbol)
+
+    # ------------------------------------------------------------------ live helpers
+    def _live_block(
+        self, symbol: str, cs: Sequence[Candle], bar_seconds: int, base: dict, met: Sequence[str] = ()
+    ) -> Optional[Signal]:
+        # Token status gates whenever a context is set; the price-impact gate is part of live_safe.
+        blocks = market_blockers(symbol, self._market.get(symbol), self.live_config, check_impact=self.live_safe)
+        if self.live_safe:
+            blocks = entry_blockers(symbol, cs, bar_seconds, self.clock(), self.live_config) + blocks
+        if not blocks:
+            return None
+        return Signal(
+            action=Action.STAY_OUT,
+            conditions_met=list(met),
+            conditions_failed=[n for n, _ in blocks],
+            reason="Live safety blocked entry: " + "; ".join(r for _, r in blocks),
+            **base,
+        )
+
+    def _size(
+        self, symbol: str, pct: float, equity: float, cs: Sequence[Candle], base: dict, met: Sequence[str] = ()
+    ) -> tuple[float, float, str, Optional[Signal]]:
+        """(size %, notional, reason note, blocking STAY_OUT or None) for a BUY."""
+        ctx = self._market.get(symbol)
+        if not self.live_safe:
+            return pct, equity * pct / 100, "", None
+        d = live_size(symbol, pct, equity, cs, self.live_config, ctx)
+        if d.blocker is not None:
+            name, why = d.blocker
+            blocked = Signal(
+                action=Action.STAY_OUT,
+                conditions_met=list(met),
+                conditions_failed=[name],
+                reason=f"Live safety blocked entry: {why}",
+                **base,
+            )
+            return 0.0, 0.0, "", blocked
+        return d.pct, d.notional, d.note, None
+
+    @staticmethod
+    def _data_note(rep: DataReport) -> str:
+        return f" [data: {'; '.join(rep.issues)}]" if rep.issues else ""
 
     # ------------------------------------------------------------------ regime / selection
     def detect_regime(self, candles: Sequence[Candle]) -> RegimeAnalysis:
@@ -78,9 +162,16 @@ class DefaultStrategyEngine:
         names. SELLs carry exit_reason, position_id and price = intended fill (contracts v0.2)."""
         label = manual_strategy_label(strategy)
         base = dict(symbol=strategy.symbol, source=AgentMode.MANUAL, strategy=label)
-        if not candles:
-            return Signal(action=Action.STAY_OUT, reason="No candles available", **base)
-        cs = sorted(candles, key=lambda c: c.timestamp)
+        cs, rep = sanitize_candles(candles)
+        if not cs:
+            return Signal(
+                action=Action.STAY_OUT,
+                conditions_failed=["insufficient_data"],
+                reason="No valid candles available" + self._data_note(rep),
+                **base,
+            )
+        note = self._data_note(rep)
+        bar_s = TIMEFRAME_SECONDS[strategy.timeframe]
         i = len(cs) - 1
         c = cs[i]
         base["price"] = c.close
@@ -107,7 +198,19 @@ class DefaultStrategyEngine:
                 reason=f"Cooldown: {since} bars since last exit (need > {r.cooldown_bars})",
                 **base,
             )
-        f_ok, f_fails = check_filters(strategy, mi, cs, i)
+        if len(cs) < self.warmup_bars + 1:
+            return Signal(
+                action=Action.STAY_OUT,
+                conditions_failed=["insufficient_data"],
+                reason=f"Insufficient data: {len(cs)} valid candles, need at least {self.warmup_bars + 1} "
+                "before entering (indicator warm-up)" + note,
+                **base,
+            )
+        blocked = self._live_block(strategy.symbol, cs, bar_s, base)
+        if blocked is not None:
+            return blocked
+        vol_ok = not self.live_safe or volume_applicable(strategy.symbol, self.live_config)
+        f_ok, f_fails = check_filters(strategy, mi, cs, i, volume_applicable=vol_ok)
         if not f_ok:
             names = (["market_hours"] if any("market hours" in f for f in f_fails) else []) + (
                 ["min_volume"] if any("min-volume" in f for f in f_fails) else []
@@ -115,34 +218,46 @@ class DefaultStrategyEngine:
             return Signal(
                 action=Action.STAY_OUT,
                 conditions_failed=names,
-                reason="Filter blocked entry: " + "; ".join(f_fails),
+                reason="Filter blocked entry: " + "; ".join(f_fails) + note,
                 **base,
             )
-        ev = evaluate_entry(strategy, mi, cs, i)
+        ev = evaluate_entry(strategy, mi, cs, i, volume_applicable=vol_ok)
         if not ev.met and not ev.failed:
             why = (
                 "no entry conditions enabled"
                 if not ev.skipped
                 else "indicators still warming up: " + ", ".join(ev.skipped)
             )
-            return Signal(action=Action.STAY_OUT, reason=f"No entry: {why}", **base)
+            return Signal(action=Action.STAY_OUT, reason=f"No entry: {why}" + note, **base)
         logic = strategy.entry.logic.value
         detail = "; ".join(ev.detail)
+        if self.live_safe and self.live_config.require_all_conditions_ready and ev.skipped:
+            return Signal(
+                action=Action.STAY_OUT,
+                conditions_met=ev.met,
+                conditions_failed=ev.failed + ["insufficient_data"],
+                reason="Live safety: indicators still warming up for " + ", ".join(ev.skipped) + note,
+                **base,
+            )
         if not ev.ok:
             return Signal(
                 action=Action.STAY_OUT,
                 conditions_met=ev.met,
                 conditions_failed=ev.failed,
-                reason=f"Entry conditions not met ({logic}): {detail}",
+                reason=f"Entry conditions not met ({logic}): {detail}" + note,
                 **base,
             )
-        notional = portfolio.equity * r.position_size_pct / 100
+        size_pct, notional, size_note, blocked = self._size(
+            strategy.symbol, r.position_size_pct, portfolio.equity, cs, base, ev.met
+        )
+        if blocked is not None:
+            return blocked
         return Signal(
             action=Action.BUY,
             conditions_met=ev.met,
             conditions_failed=ev.failed,
-            reason=f"Entry conditions met ({logic}): {detail}",
-            proposed_size_pct=r.position_size_pct,
+            reason=f"Entry conditions met ({logic}): {detail}" + size_note + note,
+            proposed_size_pct=size_pct,
             proposed_notional=notional,
             **base,
         )
@@ -200,23 +315,62 @@ class DefaultStrategyEngine:
     def evaluate_auto(self, config: AutoConfig, candles: Sequence[Candle], portfolio: Portfolio) -> Signal:
         """detect_regime -> select_strategy -> evaluate ONLY the selected preset."""
         base = dict(symbol=config.symbol, source=AgentMode.AUTO)
-        if not candles:
-            return Signal(action=Action.STAY_OUT, strategy="NONE", reason="No candles available", **base)
-        cs = sorted(candles, key=lambda c: c.timestamp)
-        ra = self.detect_regime(cs)
-        sel = self.select_strategy(ra.regime, config.style, config.enabled_presets)
+        cs, rep = sanitize_candles(candles)
+        if not cs:
+            return Signal(
+                action=Action.STAY_OUT,
+                strategy="NONE",
+                conditions_failed=["insufficient_data"],
+                reason="No valid candles available" + self._data_note(rep),
+                **base,
+            )
+        bar_s = TIMEFRAME_SECONDS[config.timeframe]
+        ra = _detect_regime(cs, config.timeframe)
         base.update(regime=ra.regime, price=cs[-1].close)
+        held = [p for p in portfolio.positions if p.symbol == config.symbol]
+        if ra.features.get("insufficient_data") and not held:
+            return Signal(
+                action=Action.STAY_OUT,
+                strategy="NONE",
+                conditions_failed=["insufficient_data"],
+                reason=f"Regime unknown, staying out: {ra.reason}",
+                **base,
+            )
+        sel = self.select_strategy(ra.regime, config.style, config.enabled_presets)
         prefix = f"Regime {ra.regime.value} ({ra.reason}); {sel.reason}"
         if sel.preset is None:
             return Signal(action=Action.STAY_OUT, strategy="NONE", reason=prefix, **base)
-        held = [p for p in portfolio.positions if p.symbol == config.symbol]
-        d = presets.evaluate_preset(sel.preset, config.style, cs, holding=bool(held))
+        d = presets.evaluate_preset(sel.preset, config.style, cs, holding=bool(held), bar_seconds=bar_s)
+        if d.action == Action.BUY and ra.features.get("insufficient_data"):
+            return Signal(
+                action=Action.STAY_OUT,
+                strategy=sel.preset.value,
+                preset=sel.preset,
+                conditions_failed=["insufficient_data"],
+                reason=f"Regime unknown, no new entries (exits only): {ra.reason}",
+                **base,
+            )
+        if d.action == Action.BUY:
+            blocked = self._live_block(
+                config.symbol, cs, bar_s, {**base, "strategy": sel.preset.value, "preset": sel.preset}, d.met
+            )
+            if blocked is not None:
+                return blocked
         size_pct = 0.0
         notional = 0.0
         extra: dict = {}
+        size_note = ""
         if d.action == Action.BUY:
-            size_pct = presets.BASE_SIZE_PCT[config.style] * sel.size_multiplier
-            notional = config.capital * size_pct / 100
+            size_pct, notional, size_note, blocked = self._size(
+                config.symbol,
+                presets.BASE_SIZE_PCT[config.style] * sel.size_multiplier,
+                config.capital,
+                cs,
+                {**base, "strategy": sel.preset.value, "preset": sel.preset},
+                d.met,
+            )
+            if blocked is not None:
+                return blocked
         elif d.action == Action.SELL:
             target = min(held, key=lambda p: p.opened_at)  # oldest position, keyed by id (one SELL per Signal)
             size_pct = 100.0
@@ -227,7 +381,7 @@ class DefaultStrategyEngine:
             action=d.action,
             strategy=sel.preset.value,
             preset=sel.preset,
-            reason=f"{prefix}. {d.reason}",
+            reason=f"{prefix}. {d.reason}{size_note}",
             conditions_met=d.met,
             conditions_failed=d.failed,
             proposed_size_pct=size_pct,
