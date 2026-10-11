@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, time, timedelta, timezone
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -51,6 +51,136 @@ class LiveRiskProfile(BaseModel):
     gas_asset: str = "BNB"
     min_gas_reserve: float = Field(default=0.002, ge=0, description="Native BNB that must remain for gas (in BNB)")
 
+    blocked_symbol_suffixes: list[str] = Field(
+        default_factory=lambda: ["x"], description="Case-sensitive symbol suffixes never bought in LIVE (xStocks on BSC: no liquidity)")
+    require_wallet_limits: bool = Field(
+        default=False, description="True = LIVE BUY blocked unless LiveContext.wallet_limits (the wallet's own caps) is supplied")
+
+
+# Key names accepted by WalletLimits.from_baw. DOCUMENTED = in the official `baw wallet settings --json` reference
+# (binance-skills-hub skills/binance-web3/binance-agentic-wallet/references/wallet-setting.md). Everything else is a
+# PROVISIONAL alias: tolerated in case a CLI version / wrapper returns it, not backed by any doc.
+_BAW_KEYS: dict[str, tuple[str, ...]] = {
+    # documented: dailyLimit, quotaUsed, quotaLeft, quotaDate, tradeAllTokens
+    "daily_limit_usdt": ("dailyLimit", "daily_limit_usdt", "daily_limit", "dailyLimitUsd", "dailyQuota"),
+    "daily_used_usdt": ("quotaUsed", "daily_used_usdt", "dailyUsed", "daily_used", "usedQuota"),
+    "daily_left_usdt": ("quotaLeft", "daily_left_usdt", "leftQuota", "left_quota", "remainingQuota", "dailyLeft"),
+    "quota_date": ("quotaDate", "quota_date"),
+    "trade_all_tokens": ("tradeAllTokens", "trade_all_tokens"),
+    # provisional: baw documents NO per-transaction limit and NO allow-list in `wallet settings`
+    "per_tx_limit_usdt": ("perTxLimit", "per_tx_limit_usdt", "perTransactionLimit", "singleTxLimit", "maxPerTx",
+                          "singleTransactionLimit", "per_tx_limit"),
+    "allowed_tokens": ("allowedTokens", "allowed_tokens", "tokenWhitelist", "whitelistTokens", "tradableTokens"),
+    "allowed_contracts": ("allowedContracts", "allowed_contracts", "contractWhitelist", "whitelistContracts"),
+}
+
+
+class TokenStatus(BaseModel):
+    """Per-token tradability (e.g. from Bot 4's RWA asset-status endpoint). LIVE BUY needs trading_status == 'trading'
+    and reference_price_only == False."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    trading_status: str = Field(default="trading", description="'trading', 'offhours', 'closed', 'no_liquidity', ...")
+    min_order_usdt: Optional[float] = Field(default=None, ge=0, description="Token minimum order (Ondo: 20 USD)")
+    reference_price_only: bool = Field(default=False, description="True = price shown is a reference, not executable")
+
+    def is_trading(self) -> bool:
+        return self.trading_status.strip().lower() == "trading" and not self.reference_price_only
+
+
+class WalletLimits(BaseModel):
+    """The Agentic Wallet's OWN spending controls (set in the Binance App; ``baw`` can only read them). Risk applies
+    whichever is stricter, these or LiveRiskProfile, so a BUY is shrunk/blocked before the wallet would reject it.
+    Every field is optional; ``None`` = unknown / no restriction from the wallet side. Amounts in USDT (baw reports USD;
+    treated 1:1)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    per_tx_limit_usdt: Optional[float] = Field(default=None, ge=0, description="Max value of a single transaction")
+    daily_limit_usdt: Optional[float] = Field(default=None, ge=0, description="baw `dailyLimit`: max total tx value per day")
+    daily_used_usdt: Optional[float] = Field(default=None, ge=0, description="baw `quotaUsed`: consumed today")
+    daily_left_usdt: Optional[float] = Field(default=None, ge=0, description="baw `quotaLeft`: remaining today")
+    quota_date: Optional[str] = Field(default=None, description="baw `quotaDate` the quota figures apply to")
+    trade_all_tokens: Optional[bool] = Field(
+        default=None, description="baw `tradeAllTokens`; False = only an App-side allow-list (not returned by baw)")
+    allowed_tokens: Optional[list[str]] = Field(
+        default=None, description="Symbols or contract addresses (case-insensitive). None = no restriction known")
+    allowed_contracts: Optional[list[str]] = Field(default=None, description="Informational only")
+    source: Optional[str] = Field(default=None, description="e.g. 'baw'")
+    fetched_at: Optional[datetime] = None
+
+    def daily_remaining_usdt(self) -> Optional[float]:
+        """Wallet daily headroom: min(dailyLimit - quotaUsed, quotaLeft) over the values present, floored at 0."""
+        vals = []
+        if self.daily_limit_usdt is not None:
+            vals.append(self.daily_limit_usdt - (self.daily_used_usdt or 0.0))
+        if self.daily_left_usdt is not None:
+            vals.append(self.daily_left_usdt)
+        return max(0.0, min(vals)) if vals else None
+
+    def allows(self, *identifiers: Optional[str]) -> bool:
+        """True if no allow-list is set, or any non-empty identifier (symbol / address) is in it (case-insensitive)."""
+        if self.allowed_tokens is None:
+            return True
+        allowed = {t.strip().lower() for t in self.allowed_tokens}
+        return any(i and i.strip().lower() in allowed for i in identifiers)
+
+    @classmethod
+    def from_baw(cls, payload: Mapping[str, Any], *, source: str = "baw", fetched_at: Optional[datetime] = None,
+                 allowed_tokens: Optional[list[str]] = None) -> "WalletLimits":
+        """Map ``baw wallet settings --json`` output (the full ``{"success", "data": {...}}`` envelope or just ``data``).
+
+        Documented keys: dailyLimit, quotaUsed, quotaLeft, quotaDate, tradeAllTokens. baw does NOT document a
+        per-transaction limit or return the token allow-list, so those are read only from PROVISIONAL aliases (see
+        ``_BAW_KEYS``) or passed explicitly via ``allowed_tokens`` (e.g. from config). Unknown keys are ignored; numbers
+        given as strings are parsed; unparsable numbers become None."""
+        data: Mapping[str, Any] = payload or {}
+        if isinstance(data.get("data"), Mapping):
+            data = data["data"]
+
+        def pick(field: str) -> Any:
+            for k in _BAW_KEYS[field]:
+                if k in data and data[k] is not None:
+                    return data[k]
+            return None
+
+        def num(field: str) -> Optional[float]:
+            v = pick(field)
+            if isinstance(v, bool):
+                return None
+            try:
+                f = float(v) if v is not None else None
+            except (TypeError, ValueError):
+                return None
+            return f if f is not None and f >= 0 else None
+
+        def strs(v: Any) -> Optional[list[str]]:
+            if v is None:
+                return None
+            if isinstance(v, str):
+                v = [x for x in v.replace(";", ",").split(",")]
+            out = []
+            for x in v:
+                if isinstance(x, Mapping):  # e.g. {"symbol": .., "contractAddress": ..}
+                    out += [str(x[k]) for k in ("symbol", "contractAddress", "address", "tokenAddress") if x.get(k)]
+                elif x is not None and str(x).strip():
+                    out.append(str(x).strip())
+            return out
+
+        tat = pick("trade_all_tokens")
+        if isinstance(tat, str):
+            tat = {"true": True, "false": False}.get(tat.strip().lower())
+        tokens = allowed_tokens if allowed_tokens is not None else strs(pick("allowed_tokens"))
+        if tat is True and allowed_tokens is None:
+            tokens = None  # wallet may trade any token
+        qd = pick("quota_date")
+        return cls(per_tx_limit_usdt=num("per_tx_limit_usdt"), daily_limit_usdt=num("daily_limit_usdt"),
+                   daily_used_usdt=num("daily_used_usdt"), daily_left_usdt=num("daily_left_usdt"),
+                   quota_date=str(qd) if qd is not None else None,
+                   trade_all_tokens=tat if isinstance(tat, bool) else None, allowed_tokens=tokens,
+                   allowed_contracts=strs(pick("allowed_contracts")), source=source, fetched_at=fetched_at)
+
 
 class LiveContext(BaseModel):
     """Optional facts only the trading loop knows; pass as ``check(..., context=LiveContext(...))``. Used in LIVE;
@@ -68,6 +198,10 @@ class LiveContext(BaseModel):
     balances: Optional[dict[str, float]] = Field(default=None, description="Wallet balances by asset, e.g. {'USDT': 40, 'BNB': 0.01}")
     daily_live_notional_usdt: Optional[float] = Field(
         default=None, ge=0, description="LIVE BUY notional already filled today (UTC), if the app tracks it (survives restarts)")
+    token_status: Optional[TokenStatus] = Field(
+        default=None, description="Token tradability; a dict like {'trading_status': 'trading', 'min_order_usdt': 20} also works")
+    wallet_limits: Optional[WalletLimits] = Field(
+        default=None, description="Agentic Wallet's own caps, e.g. WalletLimits.from_baw(<baw wallet settings --json>)")
 
     def resolved_now(self, fallback: datetime) -> datetime:
         return as_utc(self.now or fallback)

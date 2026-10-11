@@ -227,3 +227,58 @@ risk.live_limits(portfolio, ctx)                             # -> dict for GET /
 `live_limits()` returns `live_allowed, per_order_cap_usdt, daily_loss_cap_usdt, daily_notional_cap_usdt,
 max_exposure_usdt, max_slippage_pct, stale_after_s, bnb_gas_reserve, fee_buffer_usdt, market_hours_utc,
 daily_used_usdt, daily_loss_usdt, open_exposure_usdt`. The last two are `None` without a portfolio.
+
+### Wallet limits, token status, token minimums, blocked symbols (LIVE BUYs only)
+
+SELLs (protective exits and strategy sells) and `check_exits` are **never** affected by anything in this section.
+
+**Wallet limits — `LiveContext.wallet_limits: WalletLimits`.** The Agentic Wallet enforces its own spending controls
+(set in the Binance App, read-only from `baw`). Risk applies whichever is **stricter**, ours (`LiveRiskProfile`) or the
+wallet's, so a BUY is shrunk/blocked before the wallet would reject it.
+
+| Check | Effect |
+|---|---|
+| `wallet_limits` | informational pass "Wallet limits not supplied - only our own LIVE limits apply"; **blocks** if `LiveRiskProfile.require_wallet_limits=True` (default False) |
+| `wallet_allowed_token` | blocks when `allowed_tokens` is set and the symbol (or `token_address` on the signal/quote, if present) is not in it; case-insensitive |
+| `wallet_per_tx_cap` | reduces size to `per_tx_limit_usdt` |
+| `wallet_daily_limit` | reduces size to `min(daily_limit - daily_used, daily_left)`, floored at 0 |
+| `live_quote_notional` | quote notional must be ≤ approved size and ≤ the **effective** per-order cap |
+
+`min_order_notional` still runs afterwards, so a wallet-shrunk order under the minimum is blocked.
+
+Fill it from `baw wallet settings --json` (envelope or `data`):
+```python
+wl = WalletLimits.from_baw(json.loads(out), fetched_at=utc_now(), allowed_tokens=cfg_allow_list_or_None)
+ctx = LiveContext(..., wallet_limits=wl)
+```
+Mapping (source: official `wallet settings` reference,
+<https://github.com/binance/binance-skills-hub/blob/main/skills/binance-web3/binance-agentic-wallet/references/wallet-setting.md>,
+also listed in Bot 4's `binance-research.md` §3):
+
+| baw key (documented) | WalletLimits field |
+|---|---|
+| `dailyLimit` | `daily_limit_usdt` (baw reports USD; treated as USDT 1:1) |
+| `quotaUsed` / `quotaLeft` / `quotaDate` | `daily_used_usdt` / `daily_left_usdt` / `quota_date` |
+| `tradeAllTokens` | `trade_all_tokens` (True → `allowed_tokens=None`) |
+
+**Provisional (NOT backed by any doc):** `baw` documents **no per-transaction limit** and does **not return the token
+allow-list** (only `tradeAllTokens: false`). `from_baw` tolerates aliases such as `perTxLimit`, `perTransactionLimit`,
+`singleTxLimit`, `allowedTokens`, `tokenWhitelist`, `allowedContracts` in case a CLI version or wrapper returns them; otherwise
+pass `allowed_tokens=` explicitly. With `tradeAllTokens=false` and no list, `wallet_allowed_token` passes with a "not
+verified" note (the wallet itself will still reject). Prediction/DeFi/x402/dev-mode quotas are separate and ignored.
+Bot 4's dedicated `agentic-wallet-deep-research.md` did not exist yet when this was written.
+
+`live_limits(portfolio, ctx)` reports **effective** values: `per_order_cap_usdt`, `daily_notional_cap_usdt` and
+`daily_limit_usdt` (same value), `daily_used_usdt` (from the side that binds), `daily_remaining_usdt`, plus
+`limit_source: {per_order_cap_usdt, daily_limit_usdt}` = `"risk"` or `"wallet"`, `allowed_tokens`, `risk_limits` (ours,
+raw) and `wallet_limits` (raw wallet values, or None).
+
+**Token status — `LiveContext.token_status: TokenStatus`** (`trading_status`, `min_order_usdt`, `reference_price_only`;
+a plain dict works). Check `live_token_status` blocks unless `trading_status == "trading"` and `reference_price_only` is
+False, e.g. "NVDAon is off-hours - price is reference only - no LIVE BUY". Missing → informational pass.
+
+**Token minimum order:** in LIVE the minimum is `max(min_order_notional (10), token_status.min_order_usdt)` (Ondo: 20 USD).
+Below it, `min_order_notional` fails with "below token minimum order".
+
+**Blocked symbols:** `LiveRiskProfile.blocked_symbol_suffixes = ["x"]` (case-sensitive `endswith`). Check
+`live_symbol_allowed` blocks e.g. `TSLAx` (xStocks have no liquidity on BNB Chain); `NVDAX`/`NVDAon` pass. Set `[]` to disable.

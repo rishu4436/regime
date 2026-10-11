@@ -244,11 +244,27 @@ class DefaultRiskManager:
     def live_limits(self, portfolio: Optional[Portfolio] = None, context: Optional[LiveContext] = None) -> dict:
         """Active LIVE limits for the UI (/api/wallet). Usage fields are None when the inputs are not supplied."""
         lp = self._config.live
+        eff = self._effective_caps(context)
+        wl = context.wallet_limits if context else None
         return {
             "live_allowed": self._config.allow_live,
-            "per_order_cap_usdt": lp.max_order_notional_usdt,
+            "per_order_cap_usdt": eff["per_order"],
             "daily_loss_cap_usdt": lp.max_daily_loss_usdt,
-            "daily_notional_cap_usdt": lp.max_daily_notional_usdt,
+            "daily_notional_cap_usdt": eff["daily_cap"],
+            "daily_limit_usdt": eff["daily_cap"],
+            "daily_remaining_usdt": eff["daily_left"],
+            "allowed_tokens": wl.allowed_tokens if wl else None,
+            "blocked_symbol_suffixes": list(lp.blocked_symbol_suffixes),
+            "limit_source": {"per_order_cap_usdt": eff["per_order_src"], "daily_limit_usdt": eff["daily_src"]},
+            "risk_limits": {"per_order_cap_usdt": lp.max_order_notional_usdt,
+                            "daily_notional_cap_usdt": lp.max_daily_notional_usdt,
+                            "daily_used_usdt": self.daily_live_notional_used(context)},
+            "wallet_limits": None if wl is None else {
+                "per_tx_limit_usdt": wl.per_tx_limit_usdt, "daily_limit_usdt": wl.daily_limit_usdt,
+                "daily_used_usdt": wl.daily_used_usdt, "daily_left_usdt": wl.daily_remaining_usdt(),
+                "quota_date": wl.quota_date, "trade_all_tokens": wl.trade_all_tokens,
+                "allowed_tokens": wl.allowed_tokens, "allowed_contracts": wl.allowed_contracts,
+                "source": wl.source, "fetched_at": wl.fetched_at.isoformat() if wl.fetched_at else None},
             "max_exposure_usdt": lp.max_open_exposure_usdt,
             "max_slippage_pct": lp.max_slippage_pct,
             "stale_after_s": lp.max_data_age_seconds,
@@ -256,7 +272,7 @@ class DefaultRiskManager:
             "fee_buffer_usdt": lp.fee_buffer_usdt,
             "market_hours_utc": (f"{lp.market_open_utc:%H:%M}-{lp.market_close_utc:%H:%M}"
                                  + (" Mon-Fri" if lp.market_weekdays_only else "")) if lp.market_hours_enabled else None,
-            "daily_used_usdt": self.daily_live_notional_used(context),
+            "daily_used_usdt": eff["daily_used"],
             "daily_loss_usdt": self.daily_loss_usdt(portfolio) if portfolio is not None else None,
             "open_exposure_usdt": sum(self._position_value(p) for p in portfolio.positions) if portfolio is not None else None,
         }
@@ -293,6 +309,50 @@ class DefaultRiskManager:
             ok, why = in_market_hours(now, lp)
             checks.append(RiskCheck(name="live_market_hours", passed=ok, detail=why + ("" if ok else " - no new LIVE entries")))
 
+        sym = signal.symbol
+        bad = next((x for x in lp.blocked_symbol_suffixes if x and sym.endswith(x)), None)
+        checks.append(RiskCheck(name="live_symbol_allowed", passed=bad is None, detail=(
+            f"{sym} ends with blocked suffix '{bad}' (e.g. xStocks: no liquidity on BNB Chain) - not bought in LIVE"
+            if bad else f"{sym} is not on a blocked suffix list {lp.blocked_symbol_suffixes}")))
+
+        ts = ctx.token_status
+        if ts is None:
+            checks.append(RiskCheck(name="live_token_status", passed=True,
+                                    detail=f"No token status supplied for {sym} - tradability not verified"))
+        else:
+            st = ts.trading_status.strip().lower()
+            if st != "trading":
+                why = {"offhours": "is off-hours", "closed": "market is closed", "no_liquidity": "has no liquidity"}.get(
+                    st, f"status is '{ts.trading_status}'")
+                det = f"{sym} {why}" + (" - price is reference only" if ts.reference_price_only else "") + " - no LIVE BUY"
+            elif ts.reference_price_only:
+                det = f"{sym} price is reference only - not executable, no LIVE BUY"
+            else:
+                det = f"{sym} is trading"
+            checks.append(RiskCheck(name="live_token_status", passed=ts.is_trading(), detail=det))
+
+        wl = ctx.wallet_limits
+        if wl is None:
+            checks.append(RiskCheck(name="wallet_limits", passed=not lp.require_wallet_limits, detail=(
+                "No wallet limits supplied - require_wallet_limits is on, LIVE BUY blocked" if lp.require_wallet_limits
+                else "Wallet limits not supplied - only our own LIVE limits apply")))
+        else:
+            checks.append(RiskCheck(name="wallet_limits", passed=True, detail=(
+                f"Wallet limits from {wl.source or 'wallet'}: per-tx {self._opt(wl.per_tx_limit_usdt)}, daily "
+                f"{self._opt(wl.daily_limit_usdt)} (used {self._opt(wl.daily_used_usdt)}) - stricter of wallet and ours applies")))
+            q = ctx.quote
+            ids = (sym, getattr(signal, "token_address", None), getattr(q, "token_address", None),
+                   getattr(q, "contract_address", None))
+            if wl.allowed_tokens is None:
+                checks.append(RiskCheck(name="wallet_allowed_token", passed=True, detail=(
+                    "Wallet trades only an App-side allow-list that baw does not return - not verified here"
+                    if wl.trade_all_tokens is False else "Wallet has no token allow-list")))
+            else:
+                ok = wl.allows(*ids)
+                checks.append(RiskCheck(name="wallet_allowed_token", passed=ok, detail=(
+                    f"{sym} is on the wallet's allowed tokens" if ok
+                    else f"{sym} is not on the wallet's allowed tokens - the wallet would reject it")))
+
         if ctx.balances is None:
             checks.append(RiskCheck(name="live_gas_reserve", passed=not lp.require_wallet_balances, detail=(
                 "No wallet balances supplied - cannot verify stablecoin and BNB gas" if lp.require_wallet_balances
@@ -302,6 +362,28 @@ class DefaultRiskManager:
             ok = bnb >= lp.min_gas_reserve
             checks.append(RiskCheck(name="live_gas_reserve", passed=ok, detail=(
                 f"{lp.gas_asset} balance {bnb:g}, reserve for gas {lp.min_gas_reserve:g}" + ("" if ok else " - not enough gas"))))
+
+    @staticmethod
+    def _opt(x: Optional[float]) -> str:
+        return "n/a" if x is None else f"{_fmt(x)} USDT"
+
+    def _effective_caps(self, ctx: Optional[LiveContext]) -> dict:
+        """Stricter of LiveRiskProfile and wallet limits: per-order cap and daily headroom (+ which side set each)."""
+        lp = self._config.live
+        wl = ctx.wallet_limits if ctx else None
+        used = self.daily_live_notional_used(ctx)
+        per, per_src = lp.max_order_notional_usdt, "risk"
+        if wl and wl.per_tx_limit_usdt is not None and wl.per_tx_limit_usdt < per:
+            per, per_src = wl.per_tx_limit_usdt, "wallet"
+        ours_left = max(0.0, lp.max_daily_notional_usdt - used)
+        d = dict(per_order=per, per_order_src=per_src, daily_cap=lp.max_daily_notional_usdt, daily_used=used,
+                 daily_left=ours_left, daily_src="risk")
+        wleft = wl.daily_remaining_usdt() if wl else None
+        if wleft is not None and wleft < ours_left:
+            cap = wl.daily_limit_usdt if wl.daily_limit_usdt is not None else (wl.daily_used_usdt or 0.0) + wleft
+            d.update(daily_cap=cap, daily_used=wl.daily_used_usdt if wl.daily_used_usdt is not None else cap - wleft,
+                     daily_left=wleft, daily_src="wallet")
+        return d
 
     @staticmethod
     def _balance(ctx: LiveContext, asset: str) -> float:
@@ -340,11 +422,13 @@ class DefaultRiskManager:
                 f"Quote price {q.price:.4f} vs reference {ref:.4f}: impact {impact:.2f}%, slippage tolerance {tol:.2f}%; "
                 f"max {lp.max_slippage_pct}%" + ("" if ok else " - too much slippage"))))
 
-        lim = min(notional, lp.max_order_notional_usdt) * (1 + 1e-9) + 1e-9
+        per = self._effective_caps(ctx)
+        lim = min(notional, per["per_order"]) * (1 + 1e-9) + 1e-9
         ok = q.notional <= lim
         checks.append(RiskCheck(name="live_quote_notional", passed=ok, detail=(
             f"Quote notional {_fmt(q.notional)} USDT vs approved size {_fmt(notional)} USDT "
-            f"(per-order cap {_fmt(lp.max_order_notional_usdt)})" + ("" if ok else " - re-quote for the approved size"))))
+            f"(per-order cap {_fmt(per['per_order'])}, set by {per['per_order_src']})"
+            + ("" if ok else " - re-quote for the approved size"))))
 
     def _check_buy(self, signal: Signal, portfolio: Portfolio, ctl: ControlState, ctx: LiveContext) -> RiskVerdict:
         cfg = self._config
@@ -449,14 +533,29 @@ class DefaultRiskManager:
                 used = self.daily_live_notional_used(ctx)
                 cap("live_daily_notional", lp.max_daily_notional_usdt - used,
                     f"LIVE bought today {_fmt(used)} USDT, daily cap {_fmt(lp.max_daily_notional_usdt)} USDT")
+                wl = ctx.wallet_limits
+                if wl is not None:
+                    if wl.per_tx_limit_usdt is not None:
+                        cap("wallet_per_tx_cap", wl.per_tx_limit_usdt,
+                            f"Wallet per-transaction limit {_fmt(wl.per_tx_limit_usdt)} USDT")
+                    wleft = wl.daily_remaining_usdt()
+                    if wleft is not None:
+                        cap("wallet_daily_limit", wleft,
+                            f"Wallet daily limit {self._opt(wl.daily_limit_usdt)}, used {self._opt(wl.daily_used_usdt)}, "
+                            f"left {_fmt(wleft)} USDT")
                 if ctx.balances is not None:
                     stable = self._balance(ctx, lp.quote_asset)
                     cap("live_wallet_balance", stable - lp.fee_buffer_usdt,
                         f"Wallet {lp.quote_asset} {_fmt(stable)} minus fee buffer {_fmt(lp.fee_buffer_usdt)}")
 
-            ok = notional >= max(cfg.min_order_notional, 1e-9)
+            tmin = ctx.token_status.min_order_usdt if (live and ctx.token_status) else None
+            min_n = max(cfg.min_order_notional, tmin or 0.0)
+            ok = notional >= max(min_n, 1e-9)
+            token_bound = tmin is not None and tmin > cfg.min_order_notional
             checks.append(RiskCheck(name="min_order_notional", passed=ok, detail=(
-                f"Order {_fmt(notional)} USDT, minimum {_fmt(cfg.min_order_notional)} USDT" + ("" if ok else " - too small"))))
+                f"Order {_fmt(notional)} USDT, minimum {_fmt(min_n)} USDT"
+                + (f" ({signal.symbol} token minimum)" if token_bound else "")
+                + ("" if ok else (" - below token minimum order" if token_bound else " - too small")))))
             if live:
                 self._live_quote_checks(signal, ctx, notional, checks)
                 if ctx.quote is not None and ctx.balances is not None:
