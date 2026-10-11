@@ -141,3 +141,49 @@ i.e. the wallet the saved LIVE state belongs to), so the app keeps LIVE blocked 
 at a time; a new `start()` cancels the old one. The HTTP endpoints must be localhost-only: anyone who can call them can
 start a sign-in for this machine's wallet.
 
+
+## Paid second opinion over x402 (`x402.py`, bot4/x402)
+
+`StockAgentX402` pays BNB Chain's Stock Analyze Agent (`https://stock-agent.bnbchain.org`) about 0.1 U per report
+with the Agentic Wallet (`baw x402-payment preview` / `sign`) and polls the async job. **It never trades**: its `BawCli`
+is allow-listed to `wallet status`, `wallet settings` and `x402-payment preview|sign`. Reports take 2–5 min, so never
+call it from the trading loop's hot path.
+
+**Env:** `STOCK_AGENT_X402_ENABLED` (default `false`), `STOCK_AGENT_X402_MAX_PRICE` (0.1, per call), `STOCK_AGENT_X402_DAILY_CALLS`
+(5 per UTC day, counted in `$STATE_DIR/x402_state.json`, else `LOG_DIR`, else `~/.teamwork`), `STOCK_AGENT_X402_USDT_RESERVE`
+(0: USDT kept for exits/fees if the payment would be in USDT), `STOCK_AGENT_X402_PAY_TO` (pinned payee, default the one the
+service returned on 2026-10-11), `STOCK_AGENT_X402_URL`.
+
+**Flow of `analyze(symbol, guard=, emergency_stop=, wallet_blocked=, usdt_reserve=)`:** enabled -> `wallet status` CONNECTED ->
+guard -> daily cap -> unpaid `POST /x402/analyze/async {"symbols":["NVDA"],"analysis_type":"comprehensive"}` = 402 ->
+`baw x402-payment preview --paymentRequirements <base64 PAYMENT-REQUIRED header> --json` -> pick a READY_TO_SIGN option
+(prefers U, USD1, then USDC/USDT; refuses Permit2 options that need an approve tx, and any payee other than the pinned one)
+-> amount (highest of preview amount, amountUsd and the 402's wei amount) <= cap -> `x402QuotaLeft` >= amount -> balance /
+USDT reserve -> guard again with the price -> `baw x402-payment sign --paymentId <id> --selectedIndex <n> --json` (the only
+spend) -> replay with `PAYMENT-SIGNATURE` (503 settlement_pending replays the **same** proof) -> `jobId` + `jobToken` written
+to the state file at once (if that write fails the error message carries both values). Symbols are mapped to the
+underlying ticker (NVDAB/NVDAon -> NVDA, TSLAx -> TSLA).
+
+The x402 quota (`x402DailyLimit` $20/day) is **separate** from the trading `dailyLimit`: `baw wallet settings` reads them
+from separate fields (`x402QuotaUsed` vs `quotaUsed`), so a paid call doesn't eat into the quota exits need. It does
+spend a token balance, which is why U/USD1 are preferred and USDT payments respect `usdt_reserve`.
+
+**Refusal reasons** (`X402Error.reason`; all raised before signing unless noted): `x402_disabled`, `session_expired`,
+`guard_blocked`, `daily_cap_reached`, `price_over_cap`, `x402_quota_exceeded`, `exit_reserve`, `insufficient_balance`,
+`no_signable_option`, `approve_required`, `pay_to_mismatch`, `bad_symbol`, `rate_limited`, `unexpected_response`,
+`service_unavailable`; after signing: `payment_failed` (proof kept as `pending`; `resume_pending()` replays it, never
+re-signs), `state_write_failed`.
+
+After a paid call, `client.limits_dirty` is `True` and the `on_paid(result)` hook fires: re-read wallet limits/balances,
+then `clear_limits_dirty()`.
+
+**API for Bot 6 to wire (Bot 1's contract):**
+
+| Endpoint | Client call | Returns |
+|---|---|---|
+| `GET /api/x402/price?symbol=` | `client.price(symbol)` | `{enabled, price_usdt, cap_usdt, calls_left_today, quota_usdt_left \| null}` (never raises; nulls when the service or wallet can't be read) |
+| `GET /api/x402/status` (optional) | `client.status()` | the above + `{cap, calls_today, limits_dirty}` |
+| `POST /api/x402/analyze {symbol}` | `client.analyze(symbol, guard=..., emergency_stop=..., wallet_blocked=...)` | `{job_id, paid_usdt, tx_hash \| null}`; `X402Error` -> 4xx with `err.to_dict()` (`{reason, message, data?}`) |
+| `GET /api/x402/jobs/{id}` | `client.job(id)` | `{status: "pending" \| "done" \| "failed", report: markdown \| null, error \| null}`; unknown id -> `job_not_found` (404) |
+
+Keep these endpoints localhost-only like the wallet ones: `analyze` spends wallet money.

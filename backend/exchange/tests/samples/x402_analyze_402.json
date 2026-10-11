@@ -1,0 +1,80 @@
+{
+  "_captured": "2026-10-11T06:10Z, unpaid POST https://stock-agent.bnbchain.org/x402/analyze/async body {\"symbols\":[\"NVDA\"],\"analysis_type\":\"comprehensive\"} (no payment header; nothing spent)",
+  "status": 402,
+  "headers": {
+    "payment-required": "eyJ4NDAyVmVyc2lvbiI6MiwiYWNjZXB0cyI6W3sic2NoZW1lIjoiZXhhY3QiLCJuZXR3b3JrIjoiZWlwMTU1OjU2IiwiYW1vdW50IjoiMTAwMDAwMDAwMDAwMDAwMDAwIiwiYXNzZXQiOiIweGNFMjQ0MzlGMkQ5QzZhMjI4OUY3NDExMjBGRTIwMjI0OEI2NjY2NjYiLCJwYXlUbyI6IjB4ZDEwYmRkYzIwZTRkYzQyYTFhMTlhOTY1M2U5OTQ5OTFlMjViODE1MyIsIm1heFRpbWVvdXRTZWNvbmRzIjo2MDAsImV4dHJhIjp7Im5hbWUiOiJVbml0ZWQgU3RhYmxlcyIsInZlcnNpb24iOiIxIiwiYXNzZXRUcmFuc2Zlck1ldGhvZCI6ImVpcDMwMDkiLCJzaWduZXJBZGRyZXNzIjoiMHgzNEY3YTY2MTE2MDc4MENlMTM0NmU2RDdCOTZEMmJFMjQ0NTkwODk5In19LHsic2NoZW1lIjoiZXhhY3QiLCJuZXR3b3JrIjoiZWlwMTU1OjU2IiwiYW1vdW50IjoiMTAwMDAwMDAwMDAwMDAwMDAwIiwiYXNzZXQiOiIweDhkMEQwMDBFZTQ0OTQ4RkM5OGM5Qjk4QTRGQTQ5MjE0NzZmMDhCMGQiLCJwYXlUbyI6IjB4ZDEwYmRkYzIwZTRkYzQyYTFhMTlhOTY1M2U5OTQ5OTFlMjViODE1MyIsIm1heFRpbWVvdXRTZWNvbmRzIjo2MDAsImV4dHJhIjp7Im5hbWUiOiJXb3JsZCBMaWJlcnR5IEZpbmFuY2lhbCBVU0QiLCJ2ZXJzaW9uIjoiMSIsImFzc2V0VHJhbnNmZXJNZXRob2QiOiJlaXAzMDA5Iiwic2lnbmVyQWRkcmVzcyI6IjB4MzRGN2E2NjExNjA3ODBDZTEzNDZlNkQ3Qjk2RDJiRTI0NDU5MDg5OSJ9fSx7InNjaGVtZSI6ImV4YWN0IiwibmV0d29yayI6ImVpcDE1NTo1NiIsImFtb3VudCI6IjEwMDAwMDAwMDAwMDAwMDAwMCIsImFzc2V0IjoiMHg4QUM3NmE1MWNjOTUwZDk4MjJENjhiODNmRTFBZDk3QjMyQ2Q1ODBkIiwicGF5VG8iOiIweGQxMGJkZGMyMGU0ZGM0MmExYTE5YTk2NTNlOTk0OTkxZTI1YjgxNTMiLCJtYXhUaW1lb3V0U2Vjb25kcyI6NjAwLCJleHRyYSI6eyJuYW1lIjoiVVNEIENvaW4iLCJ2ZXJzaW9uIjoiMSIsImFzc2V0VHJhbnNmZXJNZXRob2QiOiJwZXJtaXQyLWV4YWN0Iiwic2lnbmVyQWRkcmVzcyI6IjB4MzRGN2E2NjExNjA3ODBDZTEzNDZlNkQ3Qjk2RDJiRTI0NDU5MDg5OSIsInNwZW5kZXJBZGRyZXNzIjoiMHgzMDM4ZjdhYzNiNEQxYTNmZTg4NkJkQ0I1Y0QwMWU5ZjZCRGQ4NjMzIn19LHsic2NoZW1lIjoiZXhhY3QiLCJuZXR3b3JrIjoiZWlwMTU1OjU2IiwiYW1vdW50IjoiMTAwMDAwMDAwMDAwMDAwMDAwIiwiYXNzZXQiOiIweDU1ZDM5ODMyNmY5OTA1OWZGNzc1NDg1MjQ2OTk5MDI3QjMxOTc5NTUiLCJwYXlUbyI6IjB4ZDEwYmRkYzIwZTRkYzQyYTFhMTlhOTY1M2U5OTQ5OTFlMjViODE1MyIsIm1heFRpbWVvdXRTZWNvbmRzIjo2MDAsImV4dHJhIjp7Im5hbWUiOiJUZXRoZXIgVVNEIiwidmVyc2lvbiI6IjEiLCJhc3NldFRyYW5zZmVyTWV0aG9kIjoicGVybWl0Mi1leGFjdCIsInNpZ25lckFkZHJlc3MiOiIweDM0RjdhNjYxMTYwNzgwQ2UxMzQ2ZTZEN0I5NkQyYkUyNDQ1OTA4OTkiLCJzcGVuZGVyQWRkcmVzcyI6IjB4MzAzOGY3YWMzYjREMWEzZmU4ODZCZENCNWNEMDFlOWY2QkRkODYzMyJ9fV0sImVycm9yIjoiUGF5bWVudCBSZXF1aXJlZCIsInJlc291cmNlIjp7InVybCI6Imh0dHBzOi8vc3RvY2stYWdlbnQuYm5iY2hhaW4ub3JnL3g0MDIvYW5hbHl6ZS9hc3luYyIsImRlc2NyaXB0aW9uIjoiU3RvY2sgYW5hbHlzaXMgZm9yIE5WREEiLCJtaW1lVHlwZSI6ImFwcGxpY2F0aW9uL2pzb24ifX0="
+  },
+  "body": {
+    "error": "Payment Required",
+    "description": "Retry this request with a valid Payment-Signature header.",
+    "paymentRequired": {
+      "x402Version": 2,
+      "accepts": [
+        {
+          "scheme": "exact",
+          "network": "eip155:56",
+          "amount": "100000000000000000",
+          "asset": "0xcE24439F2D9C6a2289F741120FE202248B666666",
+          "payTo": "0xd10bddc20e4dc42a1a19a9653e994991e25b8153",
+          "maxTimeoutSeconds": 600,
+          "extra": {
+            "name": "United Stables",
+            "version": "1",
+            "assetTransferMethod": "eip3009",
+            "signerAddress": "0x34F7a661160780Ce1346e6D7B96D2bE244590899"
+          }
+        },
+        {
+          "scheme": "exact",
+          "network": "eip155:56",
+          "amount": "100000000000000000",
+          "asset": "0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d",
+          "payTo": "0xd10bddc20e4dc42a1a19a9653e994991e25b8153",
+          "maxTimeoutSeconds": 600,
+          "extra": {
+            "name": "World Liberty Financial USD",
+            "version": "1",
+            "assetTransferMethod": "eip3009",
+            "signerAddress": "0x34F7a661160780Ce1346e6D7B96D2bE244590899"
+          }
+        },
+        {
+          "scheme": "exact",
+          "network": "eip155:56",
+          "amount": "100000000000000000",
+          "asset": "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",
+          "payTo": "0xd10bddc20e4dc42a1a19a9653e994991e25b8153",
+          "maxTimeoutSeconds": 600,
+          "extra": {
+            "name": "USD Coin",
+            "version": "1",
+            "assetTransferMethod": "permit2-exact",
+            "signerAddress": "0x34F7a661160780Ce1346e6D7B96D2bE244590899",
+            "spenderAddress": "0x3038f7ac3b4D1a3fe886BdCB5cD01e9f6BDd8633"
+          }
+        },
+        {
+          "scheme": "exact",
+          "network": "eip155:56",
+          "amount": "100000000000000000",
+          "asset": "0x55d398326f99059fF775485246999027B3197955",
+          "payTo": "0xd10bddc20e4dc42a1a19a9653e994991e25b8153",
+          "maxTimeoutSeconds": 600,
+          "extra": {
+            "name": "Tether USD",
+            "version": "1",
+            "assetTransferMethod": "permit2-exact",
+            "signerAddress": "0x34F7a661160780Ce1346e6D7B96D2bE244590899",
+            "spenderAddress": "0x3038f7ac3b4D1a3fe886BdCB5cD01e9f6BDd8633"
+          }
+        }
+      ],
+      "error": "Payment Required",
+      "resource": {
+        "url": "https://stock-agent.bnbchain.org/x402/analyze/async",
+        "description": "Stock analysis for NVDA",
+        "mimeType": "application/json"
+      }
+    }
+  }
+}

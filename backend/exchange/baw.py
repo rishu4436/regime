@@ -10,6 +10,7 @@ Read commands only, plus `market-order swap` (used solely by BawExecutor behind 
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shutil
@@ -244,8 +245,9 @@ class BawCli:
 
     def __init__(self, runner: Optional[Runner] = None, cmd: Optional[Sequence[str]] = None,
                  read_timeout_s: float = READ_TIMEOUT_S, swap_timeout_s: float = SWAP_TIMEOUT_S,
-                 read_only: bool = False) -> None:
+                 read_only: bool = False, allowed: Optional[set[tuple[str, ...]]] = None) -> None:
         self.runner = runner or subprocess_runner()
+        self.allowed = set(allowed) if allowed is not None else None  # allow-list of (group, cmd); None = any
         self._cmd = list(cmd) if cmd else None
         self.read_timeout_s, self.swap_timeout_s = read_timeout_s, swap_timeout_s
         self.read_only = read_only
@@ -261,6 +263,9 @@ class BawCli:
         key = tuple(a for a in args[:2] if not a.startswith("-"))
         if self.read_only and key not in READ_COMMANDS and key[:1] not in READ_COMMANDS:
             raise BawError(f"read-only baw client refuses `{' '.join(key)}`", reason=BAW_ERROR)
+        if self.allowed is not None and key not in self.allowed:
+            raise BawError(f"this baw client is limited to {sorted(' '.join(k) for k in self.allowed)}; "
+                           f"refused `{' '.join(key)}`", reason=BAW_ERROR)
         argv = [*self.cmd, *args, "--json"]
         try:
             res = self.runner(argv, timeout_s or self.read_timeout_s)
@@ -371,6 +376,27 @@ class BawCli:
             if start_ms:
                 args += ["--startTime", str(int(start_ms))]
         return list((self.call(*args) or {}).get("list") or [])
+
+    # ------------------------------------------------------------------ x402 (B402) pay-per-call
+    def x402_preview(self, requirements: str | dict) -> dict:
+        """`baw x402-payment preview --paymentRequirements <value> --json`. No spend.
+
+        `requirements` is the 402's base64 `PAYMENT-REQUIRED` header value (passed as is) or the decoded PaymentRequired
+        dict (sent base64-encoded: baw auto-detects base64 vs JSON, and base64 avoids Windows quoting problems).
+        Returns {paymentId, options: [{index, status: READY_TO_SIGN|ACTION_REQUIRED|NOT_SIGNABLE, reasons[], scheme,
+        assetTransferMethod, binanceChainId, amount (display units), tokenSymbol, tokenAddress, amountUsd, payTo,
+        currentBalance, currentBalanceUsd, userWalletAddress, needApproveFirst}]} (dist/index.js 1.10.0)."""
+        if isinstance(requirements, dict):
+            requirements = base64.b64encode(json.dumps(requirements, separators=(",", ":")).encode()).decode()
+        return dict(self.call("x402-payment", "preview", "--paymentRequirements", str(requirements)) or {})
+
+    def x402_sign(self, payment_id: str, selected_index: int) -> dict:
+        """`baw x402-payment sign --paymentId <id> --selectedIndex <n> --json`. SPENDS (authorises the payment).
+
+        Returns {paymentHeaderName, paymentHeaderValue, signatureExpiresAt (unix s), approveTxHash?, binanceChainId?};
+        approveTxHash is set when baw had to dispatch a Permit2 approve tx first."""
+        return dict(self.call("x402-payment", "sign", "--paymentId", str(payment_id),
+                              "--selectedIndex", str(int(selected_index)), timeout_s=self.swap_timeout_s) or {})
 
     # ------------------------------------------------------------------ the one write
     def swap(self, from_token: str, to_token: str, from_qty: float | str, slippage_pct: float,
