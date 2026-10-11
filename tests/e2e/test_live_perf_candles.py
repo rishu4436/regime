@@ -79,3 +79,43 @@ def test_backtest_candle_error_is_a_plain_502():
     assert r.status_code == 502 and "candles" in r.json()["detail"]
     r = c.post("/api/backtest", json={"strategy": buy_strategy(), "limit": 200})
     assert r.status_code == 200
+
+
+def test_candles_500_history_pages_through_a_client_capped_at_300(monkeypatch):
+    """App level, with the exchange layer's real paging (BinanceWeb3Client.get_candles) on a fake /market/candles
+    that rejects limit > 300 (40001) like Binance: limit=500&history=true returns 500 rows, not a 500."""
+    from fastapi.testclient import TestClient
+
+    from backend.app.main import create_app
+    from backend.app.settings import Settings
+    from backend.app.wiring import build_components
+    from backend.contracts import TradingMode
+    from backend.exchange.live import BinanceWeb3Client
+    from backend.exchange.tests.test_candle_paging import FakeCandleApi
+
+    class Api(FakeCandleApi):
+        def get_rwa_price(self, *a, **k):
+            return []
+
+        def search_rwa(self, *a, **k):
+            return []
+
+        def __getattr__(self, name):  # any other Web3 call: unavailable (no network)
+            raise Web3ApiError(50000, f"fake api has no {name}")
+
+    import subprocess
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("subprocess in test")))
+    api = Api(n_bars=2000, cap=300)
+    ex = BinanceWeb3Client(api, mode=TradingMode.PAPER, public=None)
+    ex._candle_sleep = lambda s: None
+    s = Settings(trading_mode=TradingMode.PAPER, has_binance_keys=True, use_fallbacks_only=True)
+    c = TestClient(create_app(s, build_components(s, exchange=ex)))
+    r = c.get("/api/candles/NVDAB", params={"timeframe": "1h", "limit": 500, "history": True})
+    assert r.status_code == 200, r.text
+    rows = r.json()
+    assert len(rows) == 500
+    ts = [x["timestamp"] for x in rows]
+    assert ts == sorted(ts) and len(set(ts)) == 500
+    assert all(call["limit"] <= 300 for call in api.calls)
+    r = c.get("/api/candles/NVDAB", params={"timeframe": "1h", "history": True})  # default 500 too
+    assert r.status_code == 200 and len(r.json()) == 500
