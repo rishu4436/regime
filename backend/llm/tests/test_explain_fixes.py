@@ -229,7 +229,7 @@ def test_summary_and_answer_map_status_and_alert_codes():
     for txt in (templates.summarize_state(st, None, alerts), templates.answer("why did you buy?", st),
                 templates.answer("any alerts?", st, None, alerts)):
         assert "PENDING_CONFIRMATION" not in txt and "RISK_BLOCKED" not in txt and "SMART_DCA" not in txt
-    assert "[WARNING] risk blocked a trade (NVDAB)" in templates.answer("any alerts?", st, None, alerts)
+    assert "Warning: risk blocked a trade (NVDAB)" in templates.answer("any alerts?", st, None, alerts)
     assert "Active strategy: Smart DCA" in templates.summarize_state(st)
 
 

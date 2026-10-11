@@ -8,8 +8,8 @@
 Chain mainnet, built to run 24/7 without asking before each trade. It reads market data, quotes and token status from
 the **Binance Web3 API**, and it executes trades through the **Binance Agentic Wallet** (`baw` CLI). A deterministic
 strategy/regime engine proposes every trade, and a deterministic risk layer can block or shrink it. **The LLM (xAI
-Grok) only explains decisions in plain language; it never places trades.** Regime also has an on-chain **ERC-8004
-identity** built with the BNB Agent Studio SDK (`bnbagent` 0.5.0).
+Grok) only explains decisions in plain language; it never places trades.** Regime's **ERC-8004 identity** is prepared
+with the BNB Agent Studio SDK (`bnbagent` 0.5.0) but not registered on-chain yet.
 
 **Status at the time of writing:** the full loop has run end to end in simulation and against fake exchanges, and
 **Regime made its first real-funds trade on BNB Chain mainnet on its own** on 11 Oct 2026 at 09:25 IST: Auto mode
@@ -36,7 +36,7 @@ The required **AI stack** section is [ai-stack.md](ai-stack.md). In short:
 - Grok (`XAI_API_KEY`) explains, with an offline template fallback.
 - In LIVE, explanations must not use approval wording and must carry a BscScan tx link.
 - The Agentic Wallet executes under both its own limits and ours.
-- Agent Studio provides Regime's ERC-8004 identity (agent name `Regime`).
+- Agent Studio is used for Regime's ERC-8004 identity (agent name `Regime`); registration is prepared, not done yet.
 
 ## Top pain points
 

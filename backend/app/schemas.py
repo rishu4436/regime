@@ -123,6 +123,8 @@ class LiveStatus(_M):
     chain_pending: list[dict] = Field(default_factory=list, description="BUYs submitted and waiting on chain")
     wallet_block: Optional[dict] = Field(default=None, description="v0.8 {address, expected, since}: a different wallet signed "
                                          "in; no orders until POST /api/wallet/reconcile")
+    session_expired: bool = Field(default=False, description="LIVE wallet session expired (latest wallet read): can_trade false, "
+                                  "exits held until the wallet is signed in again (Reconnect wallet)")
 
 
 class WalletConnectStart(_M):
@@ -171,6 +173,8 @@ class WalletInfo(_M):
     bnb_gas_reserve: Optional[float] = None
     limits: dict
     updated_at: datetime
+    session_expired: bool = Field(default=False, description="Agentic Wallet session expired (e.g. `baw wallet status` -> "
+                                  "'illegal parameter'): the dashboard shows the red banner and Reconnect wallet")
 
 
 class Heartbeat(_M):

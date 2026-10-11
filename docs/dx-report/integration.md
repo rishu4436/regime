@@ -1,7 +1,7 @@
 # Integration and monitoring
 
 *Part of the Developer Experience Report for Regime by team `teamwork` (BNB Hack: Tokenized Stocks). Written 11 Oct 2026 by
-Bot 6 (Integration & QA). Every claim points at code on `main` after PR #11 (`backend/app`, `backend/monitoring`,
+the App/Integration owner. Every claim points at code on `main` after PR #11 (`backend/app`, `backend/monitoring`,
 `tests/e2e`). Nothing in this section has been run with real funds; all numbers come from SIM runs with no keys and
 no LIVE switches set.*
 

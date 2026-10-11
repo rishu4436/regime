@@ -613,15 +613,25 @@ def performance_summary_line(perf: PerformanceSummary) -> str:
 _LEVEL_RANK = {AlertLevel.CRITICAL: 0, AlertLevel.WARNING: 1, AlertLevel.INFO: 2}
 
 
+_LEVEL_WORD = {AlertLevel.CRITICAL: "Critical: ", AlertLevel.WARNING: "Warning: ", AlertLevel.INFO: ""}
+
+
 def alerts_line(alerts: Optional[Sequence[Alert]]) -> str:
     if not alerts:
         return "No recent alerts."
     # most recent first; ties broken by severity, then input order
-    order = sorted(enumerate(alerts), key=lambda ia: (-ia[1].timestamp.timestamp(), _LEVEL_RANK[ia[1].level], -ia[0]))
-    shown = [a for _, a in order[:MAX_ALERTS]]
-    items = [f"[{a.level.value}] {ALERT_TEXT.get(a.code, _human(a.code))}" + (f" ({a.symbol})" if a.symbol else "")
-             + f": {humanize_reason(a.message.strip())}" for a in shown]
-    more = f" (+{len(alerts) - len(shown)} more)" if len(alerts) > len(shown) else ""
+    order = [a for _, a in sorted(enumerate(alerts), key=lambda ia: (-ia[1].timestamp.timestamp(),
+                                                                    _LEVEL_RANK[ia[1].level], -ia[0]))]
+    # an alert repeated every tick is listed once, at its most recent position, with a count
+    groups: dict[tuple, list] = {}
+    for a in order:
+        key = (a.level, a.code, a.symbol, " ".join(a.message.split()))
+        groups.setdefault(key, [a, 0])[1] += 1
+    distinct = list(groups.values())
+    shown = distinct[:MAX_ALERTS]
+    items = [f"{_LEVEL_WORD[a.level]}{ALERT_TEXT.get(a.code, _human(a.code))}" + (f" ({a.symbol})" if a.symbol else "")
+             + f": {humanize_reason(a.message.strip())}" + (f" ({n} times)" if n > 1 else "") for a, n in shown]
+    more = f" (+{len(distinct) - len(shown)} more)" if len(distinct) > len(shown) else ""
     return f"Recent alerts{more}: " + "; ".join(items) + "."
 
 

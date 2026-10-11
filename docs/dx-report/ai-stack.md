@@ -82,7 +82,7 @@ flight at a time. It reads real fills from `wallet tx-history`, and it passes ri
 risk caps. The agent trades under the **lower** of the wallet's `dailyLimit`/`quotaLeft` and its own `RISK_LIVE_*` caps
 (defaults: 25 USDT per order, 100 USDT per day, 50 USDT exposure, 1 % slippage). A second, independent executor cap
 (`BINANCE_LIVE_MAX_ORDER_USDT=25`) applies as well. Risk keeps part of the daily quota in reserve so every open position
-can still be sold (`backend/app/GO_LIVE.md`; Bot 4 research §§2–3).
+can still be sold (`backend/app/GO_LIVE.md`; exchange/wallet research §§2–3).
 
 ## 4. BNB Agent Studio: on-chain identity
 

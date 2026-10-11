@@ -47,4 +47,4 @@ autonomous mainnet trade (10 USDT into NVDAB on 11 Oct 2026, 09:25 IST) is [0x22
 
 Code: `backend/exchange/` on `bot4/main` (Web3 layer), `bot4/token-status` (`status.py`, reasons, minimums, price
 impact) and `bot4/baw-live` (`baw.py`, `baw_executor.py`, `wallet.py`, `baw_smoke.py`). The live read-only checks and
-CLI-source findings are recorded in the team's Bot 4 research notes (`binance-research.md`, `agentic-wallet-deep-research.md`).
+CLI-source findings are recorded in the team's exchange/wallet research notes (`binance-research.md`, `agentic-wallet-deep-research.md`).

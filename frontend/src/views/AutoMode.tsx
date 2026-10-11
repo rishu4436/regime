@@ -95,14 +95,14 @@ export function AutoMode({ config: c, setConfig, status, onActivated, tick }: Pr
             <div><div className="lbl">With {STYLE_INFO[style].label}</div><div className="stat-value" style={{ marginTop: 0 }}>{pick ? (pickOn ? PRESET_INFO[pick].label : `${PRESET_INFO[pick].label} (disabled)`) : "Staying out"}</div></div>
             {pick && mult !== 1 && <span className="pill warn">size × {mult}</span>}
           </div>
-          {ra && <div className="small muted" style={{ marginTop: 12 }}>{ra.reason} · confidence {Math.round(ra.confidence * 100)}%</div>}
-          {sel && <div className="small muted" style={{ marginTop: 4 }}>{sel.reason}</div>}
+          {ra && <div className="small muted" style={{ marginTop: 12 }}>{humanReason(ra.reason)} · confidence {Math.round(ra.confidence * 100)}%</div>}
+          {sel && <div className="small muted" style={{ marginTop: 4 }}>{humanReason(sel.reason)}</div>}
           {isActive && <div className="summary-box" style={{ marginTop: 14 }}>
             <b>Live:</b> {strategyLabel(status?.active_strategy)} · {status?.last_decision?.reason ? humanReason(status.last_decision.reason) : "waiting for the next bar"}
           </div>}
         </Card>
         <Card title="Regime × style → preset"
-          extra={table && <span className={`pill ${table.source.startsWith("engine:") ? "ok" : "warn"}`} title="Where the table comes from">{table.source}</span>} pad={false}>
+          extra={table && <span className={`pill ${table.source.startsWith("engine:") ? "ok" : "warn"}`} title="Where the table comes from">{table.source.startsWith("engine:") ? "live from engine" : "built-in copy"}</span>} pad={false}>
           <div className="table-wrap" style={{ padding: "4px 8px 8px", maxHeight: "none" }}>
             {tableErr ? <div className="empty">Couldn't load the presets table: {tableErr}</div> : !table ? <Skeleton h={260} /> : (
               <table className="map-table">
@@ -117,7 +117,7 @@ export function AutoMode({ config: c, setConfig, status, onActivated, tick }: Pr
                           <td key={s} className={`wrap${hl ? " hl" : ""}`} style={{ minWidth: 170, opacity: p && !enabled.includes(p) ? 0.45 : 1, verticalAlign: "top" }}>
                             <div>{!e ? <span className="faint">—</span> : p ? <b>{PRESET_INFO[p].label}</b> : <span className="neg">Stay out</span>}
                               {e && p && <span className={`small ${e.size_multiplier !== 1 ? "pos" : "faint"}`}> ×{e.size_multiplier}</span>}</div>
-                            {e?.reason && <div className="faint small" style={{ marginTop: 3, whiteSpace: "normal" }}>{e.reason}</div>}
+                            {e?.reason && <div className="faint small" style={{ marginTop: 3, whiteSpace: "normal" }}>{humanReason(e.reason)}</div>}
                           </td>
                         );
                       })}

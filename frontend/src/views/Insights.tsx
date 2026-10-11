@@ -9,14 +9,20 @@ const LEVEL: Record<Alert["level"], string> = { INFO: "", WARNING: "warn", CRITI
 export function AlertsPanel({ version }: { version: number }) {
   const [alerts, setAlerts] = useState<Alert[] | null>(null);
   useEffect(() => { api.getAlerts(20).then(setAlerts).catch(() => setAlerts([])); }, [version]);
+  // the same alert repeated every tick (e.g. a risk block) shows once, with a count and the latest time
+  const shown = (alerts ?? []).reduce<(Alert & { n: number })[]>((out, a) => {
+    const prev = out.find((x) => x.code === a.code && x.message === a.message && x.symbol === a.symbol);
+    if (prev) { prev.n += 1; if (String(a.timestamp) > String(prev.timestamp)) prev.timestamp = a.timestamp; } else out.push({ ...a, n: 1 });
+    return out;
+  }, []);
   return (
     <Card title={<>Alerts {alerts?.length ? <span className="muted small" style={{ fontWeight: 400 }}>{alerts.length}</span> : null}</>}>
       {!alerts ? <Skeleton h={60} /> : alerts.length ? (
         <div className="stack" style={{ gap: 8, maxHeight: 220, overflow: "auto" }}>
-          {alerts.map((a, i) => (
+          {shown.map((a, i) => (
             <div key={a.id ?? i} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
               <span className={`pill ${LEVEL[a.level]}`} style={{ flex: "none" }}>{a.code.replace(/_/g, " ")}</span>
-              <div className="small"><div>{a.message}</div><div className="faint">{time(a.timestamp)}{a.symbol ? ` · ${a.symbol}` : ""}</div></div>
+              <div className="small"><div>{a.message}{a.n > 1 ? <span className="faint"> ×{a.n}</span> : null}</div><div className="faint">{time(a.timestamp)}{a.symbol ? ` · ${a.symbol}` : ""}</div></div>
             </div>
           ))}
         </div>
