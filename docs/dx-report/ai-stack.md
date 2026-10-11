@@ -98,19 +98,23 @@ it would never be on the trading hot path. `X402_NOTES.md` documents the flow. N
 
 ## 5. Developer-experience friction (and what would help)
 
+Binance Web3 API and `baw` issues are written up in full in [exchange.md](exchange.md). Rows 1–7 and 11 just point
+there. The numbers stay fixed because other sections cite them.
+
 | # | Friction we hit | Impact | Suggestion |
 |---|---|---|---|
-| 1 | **Geo-blocking.** Every Binance Web3 API call from our US-hosted build box returned **40304** "Service not available due to compliance restriction" (with HTTP 200). `baw` is blocked the same way. | All live checks and the agent itself had to run on the team lead's PC in India. Cloud CI cannot do live smoke tests. | A sandbox/testnet endpoint without a region gate, or a clear HTTP 451 status. |
-| 2 | **`baw` sign-in is a QR scan, and the session can end silently** (max 48 h, plus sign-out after inactivity). | A "24/7 autonomous" agent needs a human to re-scan. We added auto-pause, a `WALLET_SESSION_EXPIRED` alert and plain-language explanations. | A long-lived, revocable agent credential scoped by the app's spend limits, plus an expiry warning before the session ends. |
-| 3 | **`abnormalTxnHandling` must be changed by hand to `AutoReject`.** The docs recommend app confirmation for high-risk trades (`NeedConfirmation`). | A flagged trade waits up to 5 min for a tap and **tx-locks the wallet**, which blocks stop-loss sells too. Our setup guide makes AutoReject a required step. | Default to AutoReject for agent wallets, or don't lock exits behind a pending review. |
-| 4 | **No per-transaction limit, and the allowed-token list can't be read back.** Only the `tradeAllTokens` boolean is exposed. | The agent can't check a token before quoting it; out-of-scope tokens fail only at submit. We enforce our own per-order cap. | Expose a per-tx cap and the allowlist in `baw wallet settings`. |
-| 5 | **`baw market-order quote` JSON has no quoteId, fee, gas or price impact**, and `market-order list` has no received amount. | Price impact comes from a second API (Web3 `/aggregator/quote`), and the real fill comes from `tx-history`. | Return price impact, a reference price and fill amounts in the CLI JSON. |
-| 6 | **Unclear whether sells consume `dailyLimit`.** The docs don't say. | We reserve quota for exits. A stop-loss could otherwise be refused. | Document it, or exempt exits. |
-| 7 | **The CLI has no HTTP timeout**, and errors go to stdout with exit code 1. On Windows, `baw.cmd` doesn't resolve without a shell. | The caller must add timeouts and parse stdout first. `run.ps1` invokes `node …/dist/index.js` directly. | A `--timeout` flag; errors on stderr. |
-| 8 | **Agent Studio's managed runtime is testnet-only** (48 h trial), has **no Agentic Wallet wallet kind**, and the `bag` scaffold is a TypeScript *seller* agent. | Our mainnet trading loop can't run in Studio's cloud. We use the Python SDK only for identity. | A `baw` wallet kind and a mainnet runtime; a Python trading-agent template. |
-| 9 | **The SDK's default testnet RPC** (`data-seed-prebsc-2-s2.binance.org:8545`) timed out from our box. | We had to override the RPC (`bsc-testnet-rpc.publicnode.com` worked). | Default to a more reliable RPC, or try several. |
-| 10 | **`stock-agent.bnbchain.org` is slow.** Our check of `GET /x402/price` at 07:44 IST took 15.4 s (HTTP 200). | Too slow for a live loop. It is only usable as an async second opinion. | Publish latency expectations and a cached price endpoint. |
-| 11 | **xStock "TRADING" status is not the same as liquid.** A TSLAx quote returned 40374 on Sunday. Off-hours candles are sparse. | xStock is off by default in LIVE. NVDAB (bStock) is the 24/7 demo token. | Add a liquidity flag to the market-status endpoint. |
+| 1 | Region block: Web3 API calls from the US build box return **40304** with HTTP 200. | See [exchange.md](exchange.md) #1. | |
+| 2 | `baw` QR-only sign-in, and the session can end silently (up to 48 h). | See [exchange.md](exchange.md) #9. The explainer turns `session_expired` / `wallet_not_ready` into "paused until Rishu re-scans the QR code". | |
+| 3 | `abnormalTxnHandling` must be set to `AutoReject` by hand, or a flagged trade tx-locks the wallet. | See [exchange.md](exchange.md) #11. | |
+| 4 | No per-transaction limit; the allowed-token list can't be read back. | See [exchange.md](exchange.md) #10. The explainer still says whether a cap was set by the agent or by the wallet. | |
+| 5 | The `baw` quote JSON has no price impact or quoteId, and the order list has no fill amount. | See [exchange.md](exchange.md) #8 and #13. The explainer says "Price impact unknown" rather than guessing. | |
+| 6 | Unclear whether sells count against `dailyLimit`. | See [exchange.md](exchange.md) #10 and [risk.md](risk.md) #2. | |
+| 7 | CLI ergonomics: no HTTP timeout, errors on stdout, no idempotency key, `baw.cmd` on Windows. | See [exchange.md](exchange.md) #14. | |
+| 8 | **Agent Studio's managed runtime is testnet-only** (48 h trial). It has **no Agentic Wallet wallet kind**, and the `bag` scaffold is a TypeScript *seller* agent. | Our mainnet trading loop can't run in Studio's cloud, so we use the Python SDK only for the identity. | A `baw` wallet kind and a mainnet runtime; a Python trading-agent template. |
+| 9 | **The `bnbagent` SDK's default testnet RPC** (`data-seed-prebsc-2-s2.binance.org:8545`) timed out from our box. | We had to override the RPC (`bsc-testnet-rpc.publicnode.com` worked). `register.py` reads `RPC_URL_BSC_TESTNET` / `RPC_URL_BSC_MAINNET`. | Default to a more reliable RPC, or try several. |
+| 10 | **`stock-agent.bnbchain.org` (x402 Stock Analyze Agent) is slow.** Our check of `GET /x402/price` at 07:44 IST took 15.4 s (HTTP 200), and the docs say a report takes 2–5 min. | Too slow for a live loop. It is only usable as an async "second opinion", so we left it as notes (`X402_NOTES.md`). | Publish latency expectations and a cached price endpoint. |
+| 11 | xStock shows "TRADING" but isn't liquid (TSLAx quote → 40374). | See [exchange.md](exchange.md) #4. Mapped to "the agent skips this token for a short cooldown". | |
+| 12 | **No shared reason vocabulary.** The engine emits codes (`live_*`), risk emits `"Blocked (<check>): <detail>"` strings, and the exchange emits Binance numeric codes (40367, 40374, …) with no message. | Plain-language explanations need a hand-maintained table in `live.py` (74 reason codes plus 17 Binance error codes), kept in sync with three other modules. `handled_codes()` lets tests check coverage. | For Binance: a human `message` and `retryable` flag on every code. For starter kits: a shared reason-code enum in the contracts from day one. |
 
 What worked well: the Skills Hub's wallet skill gave us clear, safe execution rules. The keyless RWA market-status
 endpoints made "is this token tradable right now?" cheap to check. `bnbagent` was small and easy to read, and its
