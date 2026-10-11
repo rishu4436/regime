@@ -36,7 +36,8 @@ def test_quote_above_wallet_per_tx_blocked(clock):
 
 
 def test_wallet_daily_remainder_shrinks(clock):
-    v = check(live_rm(clock), wallet_limits=wl(daily_limit_usdt=100.0, daily_used_usdt=88.0), quote=quote(notional=12.0))
+    v = check(live_rm(clock, reserve_wallet_quota_for_exits=False),
+              wallet_limits=wl(daily_limit_usdt=100.0, daily_used_usdt=88.0), quote=quote(notional=12.0))
     assert v.approved and v.adjusted_notional == 12.0
     assert "reduced from 25.00 to 12.00" in names(v)["wallet_daily_limit"].detail
 
@@ -44,7 +45,7 @@ def test_wallet_daily_remainder_shrinks(clock):
 def test_wallet_daily_quota_left_used_when_smaller(clock):
     w = wl(daily_limit_usdt=1000.0, daily_used_usdt=0.0, daily_left_usdt=11.0)
     assert w.daily_remaining_usdt() == 11.0
-    v = check(live_rm(clock), wallet_limits=w, quote=quote(notional=11.0))
+    v = check(live_rm(clock, reserve_wallet_quota_for_exits=False), wallet_limits=w, quote=quote(notional=11.0))
     assert v.approved and v.adjusted_notional == 11.0
 
 
@@ -239,3 +240,106 @@ def test_suffix_case_sensitive(clock):
 def test_suffixes_configurable(clock):
     assert check(live_rm(clock, blocked_symbol_suffixes=[]), sig=lbuy("TSLAx"), quote=quote(symbol="TSLAx")).approved
     assert not check(live_rm(clock, blocked_symbol_suffixes=["on"])).approved
+
+
+# ------------------------------------------------------------------ exit-quota reserve (wallet dailyLimit counts SELLs)
+def multi_rm(clock, **profile):
+    rm = live_rm(clock, **profile)
+    cfg = rm.config
+    rm.set_config(cfg.model_copy(update={"position_rules": cfg.position_rules.model_copy(update={"max_open_positions": 5})}))
+    return rm
+
+
+def test_exit_reserve_shrinks_buy(clock):
+    # quota left 60, open exposure 20 -> N <= (60 - 20) / 2 = 20
+    pf = lpf(cash=200.0, positions=[pos(symbol="AAPLon", qty=0.2, entry=100.0)])
+    v = check(multi_rm(clock), pf=pf, wallet_limits=wl(daily_limit_usdt=100.0, daily_used_usdt=40.0), quote=quote(notional=20.0))
+    c = names(v)["wallet_exit_reserve"]
+    assert v.approved and v.adjusted_notional == 20.0
+    assert "reduced from 25.00 to 20.00" in c.detail and "keeping 20.00 USDT of it to sell open positions" in c.detail
+
+
+def test_exit_reserve_then_min_order_blocks(clock):
+    # quota left 30, exposure 20 -> N <= 5 -> below 10 minimum
+    pf = lpf(cash=200.0, positions=[pos(symbol="AAPLon", qty=0.2, entry=100.0)])
+    v = check(multi_rm(clock), pf=pf, wallet_limits=wl(daily_left_usdt=30.0))
+    assert not v.approved and "reduced from" in names(v)["wallet_exit_reserve"].detail
+    assert not names(v)["min_order_notional"].passed
+
+
+def test_exit_reserve_floors_at_zero_when_exposure_exceeds_quota(clock):
+    pf = lpf(cash=200.0, positions=[pos(symbol="AAPLon", qty=0.4, entry=100.0)])
+    v = check(multi_rm(clock), pf=pf, wallet_limits=wl(daily_left_usdt=30.0))
+    assert not v.approved and "to 0.00 USDT" in names(v)["wallet_exit_reserve"].detail
+
+
+def test_exit_reserve_fits_and_can_be_disabled(clock):
+    v = check(live_rm(clock), wallet_limits=wl(daily_limit_usdt=1000.0))
+    assert v.approved and "fits" in names(v)["wallet_exit_reserve"].detail
+    v = check(live_rm(clock, reserve_wallet_quota_for_exits=False), wallet_limits=wl(daily_limit_usdt=1000.0))
+    assert "wallet_exit_reserve" not in names(v)
+    assert "wallet_exit_reserve" not in names(check(live_rm(clock), wallet_limits=wl(per_tx_limit_usdt=100.0)))
+
+
+def test_exit_reserve_never_touches_sells(clock):
+    pf = lpf(cash=100.0, positions=[pos(symbol="NVDAon", qty=0.5, entry=100.0)])
+    c = LiveContext(wallet_limits=wl(daily_left_usdt=1.0))
+    for s in (sell(), sell(reason=None)):
+        v = live_rm(clock).check(s, pf, lctl(), context=c)
+        assert v.approved and "wallet_exit_reserve" not in names(v)
+
+
+def test_exit_quota_shortfall_in_live_limits(clock):
+    rm = live_rm(clock)
+    pf = lpf(positions=[pos(symbol="AAPLon", qty=0.5, entry=100.0)])  # exposure 50
+    assert rm.live_limits(pf, LiveContext(wallet_limits=wl(daily_left_usdt=30.0)))["exit_quota_shortfall_usdt"] == 20.0
+    assert rm.live_limits(pf, LiveContext(wallet_limits=wl(daily_left_usdt=80.0)))["exit_quota_shortfall_usdt"] == 0.0
+    assert rm.live_limits(pf)["exit_quota_shortfall_usdt"] is None
+    assert rm.live_limits(None, LiveContext(wallet_limits=wl(daily_left_usdt=1.0)))["exit_quota_shortfall_usdt"] is None
+
+
+# ------------------------------------------------------------------ exchange price impact
+def test_price_impact_from_context_overrides_reference(clock):
+    # reference comparison alone would be 5% (blocked); exchange says 0.3%
+    v = check(live_rm(clock), price_impact_pct=0.3, quote=quote(price=105.0, notional=25.0))
+    c = names(v)["live_slippage"]
+    assert v.approved and c.passed and "Exchange-reported price impact 0.30%" in c.detail
+
+
+def test_price_impact_from_context_blocks(clock):
+    v = check(live_rm(clock), price_impact_pct=-2.5)
+    c = names(v)["live_slippage"]
+    assert not v.approved and "Exchange-reported price impact 2.50%" in c.detail and "too much slippage" in c.detail
+
+
+def test_price_impact_works_without_reference(clock):
+    v = check(live_rm(clock), price_impact_pct=0.2, reference_price=None, sig=lbuy(price=None))
+    assert v.approved and "Exchange-reported" in names(v)["live_slippage"].detail
+
+
+def test_price_impact_absent_uses_reference_fallback(clock):
+    v = check(live_rm(clock))
+    assert v.approved and "vs reference" in names(v)["live_slippage"].detail
+
+
+# ------------------------------------------------------------------ live_limits warnings
+def test_live_limits_warnings_empty_by_default(clock):
+    assert live_rm(clock).live_limits()["warnings"] == []
+    assert live_rm(clock).live_limits(lpf(), LiveContext(wallet_limits=wl(daily_left_usdt=80.0), now=T0))["warnings"] == []
+
+
+def test_live_limits_warning_exit_quota_shortfall(clock):
+    pf = lpf(positions=[pos(symbol="AAPLon", qty=0.5, entry=100.0)])  # exposure 50
+    w = live_rm(clock).live_limits(pf, LiveContext(wallet_limits=wl(daily_left_usdt=30.0)))["warnings"]
+    assert w == [{"code": "exit_quota_shortfall", "message": (
+        "Wallet daily quota left (30.00 USDT) is below open positions (50.00 USDT) - not every position can be sold today")}]
+
+
+def test_live_limits_warning_wallet_limits_stale(clock):
+    from datetime import timedelta
+    rm = live_rm(clock)
+    old = LiveContext(now=T0, wallet_limits=wl(daily_limit_usdt=500.0, fetched_at=T0 - timedelta(minutes=20)))
+    fresh = LiveContext(now=T0, wallet_limits=wl(daily_limit_usdt=500.0, fetched_at=T0 - timedelta(minutes=5)))
+    w = rm.live_limits(None, old)["warnings"]
+    assert [x["code"] for x in w] == ["wallet_limits_stale"] and "20 min ago" in w[0]["message"]
+    assert rm.live_limits(None, fresh)["warnings"] == []

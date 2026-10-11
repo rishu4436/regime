@@ -273,9 +273,40 @@ class DefaultRiskManager:
             "market_hours_utc": (f"{lp.market_open_utc:%H:%M}-{lp.market_close_utc:%H:%M}"
                                  + (" Mon-Fri" if lp.market_weekdays_only else "")) if lp.market_hours_enabled else None,
             "daily_used_usdt": eff["daily_used"],
+            "exit_quota_shortfall_usdt": self.exit_quota_shortfall_usdt(portfolio, context),
+            "warnings": self._limit_warnings(portfolio, context),
             "daily_loss_usdt": self.daily_loss_usdt(portfolio) if portfolio is not None else None,
             "open_exposure_usdt": sum(self._position_value(p) for p in portfolio.positions) if portfolio is not None else None,
         }
+
+    def exit_quota_shortfall_usdt(self, portfolio: Optional[Portfolio], context: Optional[LiveContext]) -> Optional[float]:
+        """How much of the open exposure the wallet could NOT sell today: max(0, open exposure - wallet quota left).
+        None when the portfolio or the wallet's daily quota is unknown."""
+        wl = context.wallet_limits if context else None
+        left = wl.daily_remaining_usdt() if wl else None
+        if portfolio is None or left is None:
+            return None
+        return max(0.0, sum(self._position_value(p) for p in portfolio.positions) - left)
+
+    WALLET_LIMITS_STALE_S = 900.0
+
+    def _limit_warnings(self, portfolio: Optional[Portfolio], context: Optional[LiveContext]) -> list[dict]:
+        """UI warnings for live_limits(): [{"code", "message"}]; empty list = nothing to warn about."""
+        out: list[dict] = []
+        wl = context.wallet_limits if context else None
+        short = self.exit_quota_shortfall_usdt(portfolio, context)
+        if short and short > 0:
+            left = wl.daily_remaining_usdt() or 0.0
+            out.append({"code": "exit_quota_shortfall", "message": (
+                f"Wallet daily quota left ({_fmt(left)} USDT) is below open positions ({_fmt(left + short)} USDT) - "
+                "not every position can be sold today")})
+        if wl is not None and wl.fetched_at is not None:
+            age = (self._now(context) - as_utc(wl.fetched_at)).total_seconds()
+            if age > self.WALLET_LIMITS_STALE_S:
+                out.append({"code": "wallet_limits_stale", "message": (
+                    f"Wallet limits were last read {age / 60:.0f} min ago (over {self.WALLET_LIMITS_STALE_S / 60:.0f} min) - "
+                    "re-read them from the wallet")})
+        return out
 
     def _live_buy_gates(self, signal: Signal, portfolio: Portfolio, ctx: LiveContext, checks: list[RiskCheck]) -> None:
         """LIVE-only hard gates that do not depend on the order size."""
@@ -364,6 +395,20 @@ class DefaultRiskManager:
                 f"{lp.gas_asset} balance {bnb:g}, reserve for gas {lp.min_gas_reserve:g}" + ("" if ok else " - not enough gas"))))
 
     @staticmethod
+    def _exchange_impact(ctx: LiveContext) -> Optional[float]:
+        """Price impact % from LiveContext.price_impact_pct, else from the Quote if it ever carries such a field."""
+        if ctx.price_impact_pct is not None:
+            return float(ctx.price_impact_pct)
+        for attr in ("price_impact_pct", "price_impact_percent", "priceImpactPercent"):
+            v = getattr(ctx.quote, attr, None) if ctx.quote is not None else None
+            if v is not None:
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    return None
+        return None
+
+    @staticmethod
     def _opt(x: Optional[float]) -> str:
         return "n/a" if x is None else f"{_fmt(x)} USDT"
 
@@ -411,12 +456,19 @@ class DefaultRiskManager:
             "; ".join(problems).capitalize() if problems else f"Quote {q.quote_id[:8]} valid, {max(age, 0):.0f}s old")))
 
         ref = ctx.reference_price or signal.price or (ctx.bar.close if ctx.bar else None)
-        if ref is None:
+        ex_impact = self._exchange_impact(ctx)
+        tol = q.slippage_bps / 100.0
+        if ex_impact is not None:
+            impact = abs(ex_impact)
+            ok = impact <= lp.max_slippage_pct and tol <= lp.max_slippage_pct
+            checks.append(RiskCheck(name="live_slippage", passed=ok, detail=(
+                f"Exchange-reported price impact {impact:.2f}%, slippage tolerance {tol:.2f}%; max {lp.max_slippage_pct}%"
+                + ("" if ok else " - too much slippage"))))
+        elif ref is None:
             checks.append(RiskCheck(name="live_slippage", passed=False,
                                     detail="No reference price to measure the quote's price impact against"))
         else:
             impact = abs(q.price - ref) / ref * 100.0
-            tol = q.slippage_bps / 100.0
             ok = impact <= lp.max_slippage_pct and tol <= lp.max_slippage_pct
             checks.append(RiskCheck(name="live_slippage", passed=ok, detail=(
                 f"Quote price {q.price:.4f} vs reference {ref:.4f}: impact {impact:.2f}%, slippage tolerance {tol:.2f}%; "
@@ -543,6 +595,12 @@ class DefaultRiskManager:
                         cap("wallet_daily_limit", wleft,
                             f"Wallet daily limit {self._opt(wl.daily_limit_usdt)}, used {self._opt(wl.daily_used_usdt)}, "
                             f"left {_fmt(wleft)} USDT")
+                        if lp.reserve_wallet_quota_for_exits:
+                            cap("wallet_exit_reserve", (wleft - total_exp) / 2.0, (
+                                f"Wallet daily quota left {_fmt(wleft)} USDT also pays for SELLs: keeping "
+                                f"{_fmt(total_exp)} USDT of it to sell open positions plus the same amount as this buy to "
+                                f"sell it later, so the buy is at most (left - open exposure) / 2"
+                                f" = {_fmt(max((wleft - total_exp) / 2.0, 0.0))} USDT"))
                 if ctx.balances is not None:
                     stable = self._balance(ctx, lp.quote_asset)
                     cap("live_wallet_balance", stable - lp.fee_buffer_usdt,

@@ -53,6 +53,8 @@ class LiveRiskProfile(BaseModel):
 
     blocked_symbol_suffixes: list[str] = Field(
         default_factory=lambda: ["x"], description="Case-sensitive symbol suffixes never bought in LIVE (xStocks on BSC: no liquidity)")
+    reserve_wallet_quota_for_exits: bool = Field(
+        default=True, description="Shrink LIVE BUYs so the wallet's daily quota (which counts SELLs) can still sell everything")
     require_wallet_limits: bool = Field(
         default=False, description="True = LIVE BUY blocked unless LiveContext.wallet_limits (the wallet's own caps) is supplied")
 
@@ -200,6 +202,8 @@ class LiveContext(BaseModel):
         default=None, ge=0, description="LIVE BUY notional already filled today (UTC), if the app tracks it (survives restarts)")
     token_status: Optional[TokenStatus] = Field(
         default=None, description="Token tradability; a dict like {'trading_status': 'trading', 'min_order_usdt': 20} also works")
+    price_impact_pct: Optional[float] = Field(
+        default=None, description="Exchange-reported price impact in % (Web3 quote `priceImpactPercent`); used by live_slippage")
     wallet_limits: Optional[WalletLimits] = Field(
         default=None, description="Agentic Wallet's own caps, e.g. WalletLimits.from_baw(<baw wallet settings --json>)")
 

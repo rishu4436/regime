@@ -282,3 +282,16 @@ Below it, `min_order_notional` fails with "below token minimum order".
 
 **Blocked symbols:** `LiveRiskProfile.blocked_symbol_suffixes = ["x"]` (case-sensitive `endswith`). Check
 `live_symbol_allowed` blocks e.g. `TSLAx` (xStocks have no liquidity on BNB Chain); `NVDAX`/`NVDAon` pass. Set `[]` to disable.
+
+**Exit-quota reserve (wallet `dailyLimit` counts SELLs too, per Bot 4).** With a wallet daily limit/quota known and
+`LiveRiskProfile.reserve_wallet_quota_for_exits=True` (default), check `wallet_exit_reserve` shrinks a LIVE BUY to
+`N <= (quota_left - open_exposure) / 2`, so after buying, the remaining quota can still sell every open position including
+this one ("keeping X USDT of it to sell open positions ..."). Then `min_order_notional` blocks if too small. SELLs untouched.
+`live_limits()` adds `exit_quota_shortfall_usdt` = `max(0, open_exposure - quota_left)` (None if portfolio or wallet quota
+unknown) and `warnings: [{code, message}]` (always present, `[]` = none): `exit_quota_shortfall`, and
+`wallet_limits_stale` when `wallet_limits.fetched_at` is older than 15 min (vs `context.now` or the clock).
+
+**Exchange price impact.** `LiveContext.price_impact_pct` (Web3 quote `priceImpactPercent`, in %, sign ignored) — or a
+price-impact attribute on `Quote` if the contract ever adds one — replaces the quote-vs-reference comparison in
+`live_slippage` ("Exchange-reported price impact ..."). Without it the old reference-price fallback runs. The quote's
+`slippage_bps` tolerance is checked either way.
