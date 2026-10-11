@@ -6,8 +6,7 @@ Binance Agentic Wallet, with hard safety limits and a plain-English reason for e
 Built for BNB Hack: Tokenized Stocks Edition. Tokens: **NVDAB** (default) and other bStocks, Ondo tokens (`…on`) during
 US market hours; xStocks (`…x`) are off by default.
 
-<!-- TODO(screenshot): add the hero image once docs/screenshots/ lands on main (branch bot1/readme-shots, d023a09):
-![Regime dashboard](docs/screenshots/dashboard.png) -->
+![Regime dashboard: Auto mode on NVDAB with the market regime, active strategy and the reason for the last decision](docs/screenshots/dashboard.png)
 
 **Live on mainnet:** Regime's first autonomous trade bought 10 USDT of NVDAB on 11 Oct 2026 at 09:25 IST.
 [View it on BscScan](https://bscscan.com/tx/0x228c02688cd2a8170b38dba6abfdb4f95fca9e9e22ae6bed6a191d0b88a19f22).
@@ -122,6 +121,14 @@ Every rule above is covered by tests in [`backend/risk/tests/`](backend/risk/tes
 - **No double orders:** every live swap is written to a local order journal before it's sent. If the result is unclear, Regime checks the wallet's orders on its next tick and never retries blindly. A swap that's still settling counts as an open position.
 - **Tokens:** bStocks (`…B`, such as NVDAB) trade 24/7. Ondo tokens (`…on`) only fill during US market hours. xStocks (`…x`) are off by default because they have no BSC liquidity.
 - **Proof:** Regime's first autonomous mainnet trade bought 10 USDT of NVDAB on 11 Oct 2026. [View it on BscScan](https://bscscan.com/tx/0x228c02688cd2a8170b38dba6abfdb4f95fca9e9e22ae6bed6a191d0b88a19f22).
+
+### More screenshots
+
+| Trade explanation | Auto mode |
+|---|---|
+| ![Trade explanation](docs/screenshots/trade-explanation.png) | ![Auto mode](docs/screenshots/auto-mode.png) |
+| **Manual strategy builder** | **Backtest** |
+| ![Manual strategy builder](docs/screenshots/manual-builder.png) | ![Backtest](docs/screenshots/backtest.png) |
 
 ## Architecture
 
