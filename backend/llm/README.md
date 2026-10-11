@@ -77,4 +77,7 @@ template is used instead).
 - Engine STAY_OUT codes (Bot 2 `live_*`, `insufficient_data`) and Binance Web3 error codes in `ExecutionResult.error`
   (40367/40369 market closed, 40374 liquidity, 40375 Ondo 20 USD minimum, 40401 quote expired, ...) are mapped.
   Unknown reasons pass through cleaned; reserve/quota/allowance wording maps to the exit-quota reserve.
+- Execution status `PENDING_CONFIRMATION` = submitted on-chain, waiting to settle (no approval wording). Price impact
+  is a percent (`0.35` = 0.35%); `None` is shown as "Price impact unknown". Bot 3 warnings `exit_quota_shortfall`,
+  `wallet_limits_stale` and wallet session expiry ("paused until Rishu re-scans the QR code") are mapped.
 - `live.handled_codes()` lists every mapped code.

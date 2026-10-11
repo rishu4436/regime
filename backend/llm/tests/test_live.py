@@ -86,7 +86,7 @@ def test_real_funds_flag_marks_live_and_price_impact_is_shown():
     d = _decision(ex=_ex(), mode=TradingMode.LIVE)
     assert live.is_live(d) and live.is_live({"execution": {"real_funds": "true"}}) and not live.is_live({"mode": "SIM"})
     txt = templates.live_execution_sentence(d)
-    assert "Price impact" not in txt
+    assert "Price impact unknown." in txt
 
 
 def test_failed_live_execution_maps_exchange_error_and_keeps_tx():
@@ -263,3 +263,36 @@ def test_no_key_uses_template_offline():
     d = _decision(ex=_ex())
     exp = DefaultExplainer()
     assert exp.explain_decision(d) == templates.explain_decision(d) and exp.last_source == "template"
+
+
+# ------------------------------------------------------------------ v2: pending tx, impact unknown, warnings, session
+def test_pending_on_chain_has_no_approval_wording():
+    ex = _ex(status=OrderStatus("PENDING_CONFIRMATION")) if "PENDING_CONFIRMATION" in OrderStatus.__members__ else None
+    f = {"status": "PENDING_CONFIRMATION", "side": "BUY", "symbol": "NVDAB", "route": "SWAP", "amount_usdt": 20.0,
+         "tx_hash": TX, "mode": "LIVE"}
+    d = _decision(ex=ex) if ex is not None else _decision()
+    if ex is None:  # contract has no PENDING_CONFIRMATION yet: exercise the sentence with a dict execution
+        d = d.model_copy(update={"execution": f})
+    txt = templates.live_execution_sentence(d)
+    assert "waiting to settle on BNB Chain" in txt and f"https://bscscan.com/tx/{TX}" in txt
+    assert not APPROVAL.search(txt)
+
+
+def test_price_impact_percent_and_unknown():
+    assert "Price impact unknown." in templates.explain_decision(_decision(ex=_ex()))
+    d = _decision().model_copy(update={"execution": {"status": "FILLED", "side": "BUY", "symbol": "NVDAB", "route": "SWAP",
+                                                     "notional": 20.0, "filled_quantity": 0.1, "avg_price": 200.0,
+                                                     "price_impact_pct": 0.35, "tx_hash": TX, "mode": "LIVE"}})
+    assert "Price impact 0.35%." in templates.live_execution_sentence(d)
+
+
+@pytest.mark.parametrize("raw,phrase", [
+    ("exit_quota_shortfall", "cannot cover selling all open positions"),
+    ("wallet_limits_stale", "more than 15 minutes ago"),
+    ("Blocked (wallet_exit_reserve): Keep wallet quota for exits: reduced from 20.00 to 5.00 USDT", "kept in reserve"),
+    ("Agentic Wallet not connected: run `baw auth signin` and confirm in the Binance App", "re-scans the QR code"),
+    ("wallet session expired", "paused until Rishu re-scans"),
+    ("40367", "cooldown"), ("40369 market closed for NVDAB", "cooldown"), ("40374 insufficient liquidity", "cooldown"),
+])
+def test_v2_codes(raw, phrase):
+    assert phrase in live.plain_reason(raw)

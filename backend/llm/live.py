@@ -182,6 +182,13 @@ REASON_TEXT: dict[str, str] = {
     "price_impact": "the quote's price impact is over the cap",
     "exit_quota_reserve": ("part of the Agentic Wallet's daily allowance is kept in reserve so the agent can still sell "
                            "all open positions today"),
+    "wallet_exit_reserve": ("part of the Agentic Wallet's daily allowance is kept in reserve so the agent can still sell "
+                            "all open positions today"),
+    "exit_quota_shortfall": ("warning: the Agentic Wallet's remaining daily allowance cannot cover selling all open "
+                             "positions today"),
+    "wallet_limits_stale": "warning: the Agentic Wallet's limits were last read more than 15 minutes ago",
+    "wallet_session_expired": ("the Agentic Wallet session expired, so live trading is paused until Rishu re-scans the "
+                               "QR code in the Binance App"),
     "stale_price": "the latest price data is stale (too old), so the agent will not trade on it",
 }
 
@@ -197,11 +204,11 @@ EXCHANGE_CODE_TEXT: dict[int, str] = {
     40401: "the price quote expired before execution (quotes are valid for about 30 seconds)",
     40462: "the swap no longer matched its quote",
     40366: "the order is over the Ondo maximum single order size",
-    40367: "the token's market is closed (Ondo market state not tradable)",
+    40367: "the token's market is closed (Ondo market state not tradable) - the agent skips this token for a short cooldown",
     40368: "the Ondo stablecoin pair is not valid",
-    40369: "the token's market is closed (outside its trading time)",
+    40369: "the token's market is closed (outside its trading time) - the agent skips this token for a short cooldown",
     40370: "the trading pair is not valid for this token",
-    40374: "there is not enough liquidity for this order",
+    40374: "there is not enough liquidity for this order - the agent skips this token for a short cooldown",
     40375: "the order is below the token's minimum order size (Ondo minimum is 20 USD)",
     42901: "a previous order is still being submitted",
 }
@@ -219,6 +226,7 @@ _KEYWORDS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"market (is )?closed|not tradable|invalid trading time", re.I), "market_closed"),
     (re.compile(r"(no|insufficient|thin) liquidity", re.I), "insufficient_liquidity"),
     (re.compile(r"below (the )?(token )?min|minimum order|too small", re.I), "below_min_order"),
+    (re.compile(r"session (has )?expired|wallet not connected|baw auth|re-?scan|sign ?in again", re.I), "wallet_session_expired"),
     (re.compile(r"\bgas\b", re.I), "insufficient_gas"),
     (re.compile(r"reserve|quota|allowance", re.I), "exit_quota_reserve"),
     (re.compile(r"insufficient (usdt )?balance|not enough (usdt|cash|balance)", re.I), "insufficient_balance"),

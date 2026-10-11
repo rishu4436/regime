@@ -147,8 +147,12 @@ def live_execution_sentence(d: Decision) -> Optional[str]:
         if status == "PARTIALLY_FILLED":
             txt += ", partially filled"
         txt += "."
-        if f["price_impact_pct"] is not None:
-            txt += f" Price impact {f['price_impact_pct']:.2f}%."
+        txt += (f" Price impact {f['price_impact_pct']:.2f}%." if f["price_impact_pct"] is not None
+                else " Price impact unknown.")
+    elif status == "PENDING_CONFIRMATION":
+        amt = f" for {f['amount_usdt']:,.2f} USDT" if f["amount_usdt"] is not None else ""
+        txt = (f"The agent submitted a {side} of {sym}{amt}{route} on its own with real funds; the transaction is "
+               f"waiting to settle on BNB Chain (not filled yet).")
     else:
         why = f": {live_facts.plain_reason(f['error'])}" if f["error"] else ""
         txt = f"The live {side} order for {sym}{route} was not filled ({status or 'unknown status'}){why}."
