@@ -623,7 +623,11 @@ class TradingLoop:
         confirm = self.__dict__.setdefault("_exit_confirm", {})
         if ref is None or abs(price / ref - 1.0) > EXIT_JUMP_PCT:
             prev = confirm.get(sym)
-            if prev is None or abs(price / prev - 1.0) > EXIT_CONFIRM_PCT:
+            # confirmed when the 2nd reading agrees with the 1st (within 1%), or is still past 3% on the same side of the
+            # last close - so a fast real crash (each reading lower than the last) is not held until the next candle
+            same_side = (ref is not None and prev is not None and (price - ref) * (prev - ref) > 0
+                         and abs(price / ref - 1.0) > EXIT_JUMP_PCT)
+            if prev is None or (abs(price / prev - 1.0) > EXIT_CONFIRM_PCT and not same_side):
                 confirm[sym] = price
                 log.warning("exit deferred: price jump needs confirmation (%s %.6g vs last candle close %s)", sym, price,
                             f"{ref:.6g}" if ref else "n/a")

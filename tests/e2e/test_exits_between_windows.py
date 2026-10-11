@@ -64,3 +64,19 @@ def test_single_bad_print_does_not_sell(monkeypatch):
     ex._price_override.pop("NVDAB")  # back to normal on the next reading
     assert not [d for d in c.post("/api/loop/tick").json() if d["action"] == "SELL"]
     assert c.app.state.st.loop.book.lots_for("NVDAB")
+
+
+def test_fast_crash_confirms_on_second_lower_reading(monkeypatch):
+    import pytest
+    from . import test_small_wallet_live as sw
+    if sw.SimClient is None:
+        pytest.skip("real engine/risk not importable")
+    c, ex = sw._client(500.0, sw.WEEKDAY, monkeypatch)
+    ds = sw._run(c, ex, "NVDAB", ticks=3)
+    assert any(d["action"] == "BUY" for d in ds)
+    c.post("/api/loop/tick")
+    entry = c.app.state.st.loop.book.lots_for("NVDAB")[0].position.avg_entry_price
+    ex._price_override["NVDAB"] = entry * 0.85
+    assert not [d for d in c.post("/api/loop/tick").json() if d["action"] == "SELL"]  # 1st reading deferred
+    ex._price_override["NVDAB"] = entry * 0.75  # still falling: >1% below the 1st reading, same side
+    assert [d for d in c.post("/api/loop/tick").json() if d["action"] == "SELL"]
