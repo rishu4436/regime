@@ -324,7 +324,28 @@ Same localhost check as wallet sign-in (403 for a LAN client, a forwarded non-lo
   `LIMITS_CHANGED` alert (a line in `events.jsonl`). Never clears pause or an emergency stop. Fixed / % sizes apply to
   LIVE orders (SIM keeps the strategy's size).
 
+## Watchlist + Auto-pick (v0.10, contracts 0.3 fields)
+`ManualStrategy` and `AutoConfig` gain `watchlist: string[]` (1-5 symbols, `symbol` = the first entry; omitted/empty =
+just `symbol`) and `auto_pick: {enabled, max_tokens (1-5, default 3), narrative}` (`AI_CHIPS` | `EV_ENERGY` |
+`BIG_TECH` | `CRYPTO` | `ANY`; default off). Out-of-range values or unknown narratives = 422 on activate.
+
+| Method | Path | Response |
+|---|---|---|
+| GET | `/api/watchlist` | `{watchlist, configured_watchlist, auto_pick, picks, skipped, explanations, per_token:[{symbol, watched, regime, signal, action, reason, held, position, position_usdt}], updated_at}` |
+| GET | `/api/autopick?narrative=ANY&max_tokens=3` | preview, changes nothing: `{picks:[{symbol, narrative, score, reason}], skipped, explanations}`; 422 on a bad narrative / max_tokens |
+| GET | `/api/tokens?all=1&q=` | every exchange token (`list_tokens()`), each row with `status`, `tradable`, `min_order_usdt` at the top level and `narrative` (code or `"other"`) |
+
+- Each tick runs every watched token (plus held tokens dropped from the watchlist, which only run exits: a BUY becomes
+  STAY_OUT "no longer on the watchlist"). One decision line per token per tick. Caps (per order, per token, total,
+  daily) apply across all tokens.
+- Auto-pick: `list_tokens()` -> `candidate_tokens(narrative, limit 20, per-order cap)` -> candles for those only (cached)
+  -> `rank_tokens`; re-ranked at most every 10 min (PAPER/LIVE) or every 24 bars (SIM), never every tick. Each new pick
+  set is an `AUTO_PICK` alert. Single-token configs behave exactly as before.
+- `/api/tokens` (default path) rows also carry top-level `type`, `status`, `tradable`, `min_order_usdt`,
+  `max_order_usdt`, `narrative`.
+
 ## Changelog
+- v0.10: multi-token `watchlist` + `auto_pick` (contracts 0.3 fields), `GET /api/watchlist`, `GET /api/autopick`, `/api/tokens?all=1` + `narrative`.
 - v0.9: LIVE wallet cache: `/api/wallet` + `/api/live/status` never call baw (`read_at`/`age_s`/`stale`); `WALLET_REFRESH_SEC` (300 s) + a fresh read before every order; network failures keep the last read, block BUYs, allow exits, back off 60/120/300 s.
 - v0.9: Trading limits `GET/PUT /api/settings/limits`, `POST /api/settings/limits/reset` (Trading limits panel, localhost only; order_mode strategy|fixed|pct).
 - v0.9: `/api/agent-studio/{status,create-key,register}` mounted (localhost only); `eth-account` main dependency, `bnbagent` optional `studio` extra.

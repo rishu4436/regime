@@ -289,6 +289,13 @@ export interface StrategyFilters {
   min_volume?: MinVolumeFilter;
 }
 
+/** Watchlist Auto-pick (v0.3): pick up to ``max_tokens`` tradable tokens of one narrative by momentum/trend/liquidity. */
+export interface AutoPickConfig {
+  enabled?: boolean;
+  max_tokens?: number;
+  narrative?: "AI_CHIPS" | "EV_ENERGY" | "BIG_TECH" | "CRYPTO" | "ANY";
+}
+
 /** A user-built rule set (spec 2.1/2.2). Saved and exchanged as JSON. Defaults == simulator defaults. */
 export interface ManualStrategy {
   id?: string;
@@ -303,6 +310,10 @@ export interface ManualStrategy {
   activation?: ActivationMode;
   created_at?: string;
   version?: number;
+  /** v0.3: up to 5 tokens traded with these rules; empty = [symbol]. `symbol` stays the first entry */
+  watchlist?: string[];
+  /** v0.3: pick the watchlist automatically (off by default) */
+  auto_pick?: AutoPickConfig;
 }
 
 export interface AutoConfig {
@@ -313,6 +324,10 @@ export interface AutoConfig {
   capital: number;
   timeframe?: Timeframe;
   activation?: ActivationMode;
+  /** v0.3: up to 5 tokens for the auto agent; empty = [symbol]. `symbol` stays the first entry */
+  watchlist?: string[];
+  /** v0.3: pick the watchlist automatically (off by default) */
+  auto_pick?: AutoPickConfig;
 }
 
 export interface RegimeAnalysis {

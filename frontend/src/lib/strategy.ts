@@ -16,7 +16,7 @@ export const TOKENS = [
 
 type DeepRequired<T> = { [K in keyof T]-?: T[K] extends object | undefined ? DeepRequired<NonNullable<T[K]>> : T[K] };
 /** ManualStrategy with every nested field present (what the builder edits). */
-export type FullStrategy = DeepRequired<Omit<ManualStrategy, "id" | "created_at">> & { id?: string; created_at?: string } & WatchlistFields;
+export type FullStrategy = DeepRequired<Omit<ManualStrategy, "id" | "created_at" | "watchlist" | "auto_pick">> & { id?: string; created_at?: string } & WatchlistFields;
 
 export function defaultStrategy(): FullStrategy {
   return {

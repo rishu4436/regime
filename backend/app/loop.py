@@ -19,7 +19,7 @@ from backend.contracts import (
     ExitReason, ExitRules, ManualStrategy, OrderRequest, OrderSide, OrderStatus, Regime, RiskVerdict, Signal,
     Portfolio, Position, Quote, RiskCheck, StatusSnapshot, Timeframe, TradingMode, utc_now,
 )
-from backend.contracts import AlertLevel
+from backend.contracts import SIM_WARMUP_BARS, AlertLevel
 from backend.monitoring import AlertManager, EventLog, PerformanceTracker, one_prefix
 
 from .events import EventBus
@@ -141,6 +141,12 @@ class TradingLoop:
                 self._alert(AlertLevel.WARNING, "LIVE_MODE", "LIVE risk switch is off (allow_live=False, set RISK_ALLOW_LIVE=true): "
                             "every BUY will be blocked")
         self._init_limits()
+        self.picks: list[dict] = []
+        self.picks_skipped: list[dict] = []
+        self.picks_explanations: list[str] = []
+        self.picks_at, self.picks_tick, self.picks_updated = 0.0, 0, None
+        self._last_by_symbol: dict[str, Any] = {}
+        self._pick_candle_cache: dict = {}
         self._restore()
         if not self.sim:  # the curve starts at the SAME baseline as /api/portfolio (restored state / wallet USDT)
             self._rebase_performance()
@@ -197,32 +203,215 @@ class TradingLoop:
     def control(self) -> ControlState:
         return self.c.risk.get_control_state()
 
+    # ------------------------------------------------------------------ watchlist + Auto-pick (v0.3)
+    PICK_REFRESH_S = 600.0     # PAPER/LIVE: re-rank at most every 10 minutes (keeps Web3 API load low)
+    PICK_REFRESH_TICKS = 24    # SIM: re-rank every 24 replay bars
+    PICK_CANDIDATES = 20       # candles are fetched for at most this many pre-filtered tokens
+
+    def _agent_cfg(self) -> Any:
+        return self.manual or self.auto
+
+    def _auto_pick_cfg(self) -> Any:
+        ap = getattr(self._agent_cfg(), "auto_pick", None)
+        return ap if ap is not None and ap.enabled else None
+
+    def configured_watchlist(self) -> list[str]:
+        cfg = self._agent_cfg()
+        if cfg is None:
+            return []
+        wl = [s for s in dict.fromkeys([cfg.symbol] + list(getattr(cfg, "watchlist", None) or [])) if s]
+        return wl[:5]
+
+    def watch_symbols(self) -> list[str]:
+        """Tokens that may get new BUYs this tick: the Auto-pick picks when Auto-pick is on and has picks, else the
+        configured watchlist (symbol first). Always at least the agent's symbol."""
+        if self._auto_pick_cfg() is not None and self.picks:
+            return [p["symbol"] for p in self.picks][:5]
+        return self.configured_watchlist()
+
+    def _sync_replay_clock(self, sym: str) -> None:
+        """SIM: a token joining mid-replay starts at the same replay time as the agent's symbol (one shared clock)."""
+        clock = getattr(self.feed, "_clock", None)
+        if isinstance(clock, dict) and sym not in clock and self.symbol in clock:
+            clock[sym] = clock[self.symbol]
+
+    def _narrative_of(self) -> Any:
+        fn = getattr(getattr(self.c.explainer, "_primary", None), "narrative_of", None)
+        if callable(fn):
+            try:
+                f = fn()
+                if callable(f):
+                    return f
+            except Exception:
+                pass
+        try:
+            from backend.llm.narratives import narrative_of
+            return narrative_of
+        except Exception:
+            return None
+
+    def token_rows(self, all_tokens: bool = False) -> list[dict]:
+        """Bot 4 list_tokens() rows (full universe, cached by the client) or search_tokens('') as rows."""
+        fn = getattr(self.c.exchange, "list_tokens", None)
+        if all_tokens and callable(fn):
+            try:
+                return [dict(r) for r in fn()]
+            except Exception as e:
+                log.warning("list_tokens failed: %s", e)
+        rows = []
+        for t in self.c.exchange.search_tokens(""):
+            d = t.model_dump(mode="json")
+            st = self.token_status(t.symbol) or {}
+            rows.append({**d, "type": d.get("token_type"), "status": st.get("trading_status"), "tradable": st.get("tradable"),
+                         "min_order_usdt": st.get("min_order_usdt"), "max_order_usdt": st.get("max_order_usdt")})
+        return rows
+
+    def compute_picks(self, narrative: str = "ANY", max_tokens: int = 3) -> dict:
+        """Bot 2's Auto-pick: list_tokens -> candidate_tokens (<= 20, no candles yet) -> candles for those only ->
+        rank_tokens. Returns {picks:[{symbol, narrative, score, reason}], skipped:[{symbol, reason}], explanations}."""
+        from backend.engine.autopick import AutoPickConfig as EngineAutoPick, candidate_tokens, rank_tokens
+        nar = self._narrative_of()
+        cap = float((self.user_limits or {}).get("max_order_usdt") or self.s.live_max_order_usdt)
+        cfg = EngineAutoPick(max_order_usdt=cap)
+        rows = self.token_rows(all_tokens=True)
+        cands = candidate_tokens(rows, narrative, narrative_of=nar, limit=self.PICK_CANDIDATES, cfg=cfg)
+        candles: dict[str, list] = {}
+        for t in cands:
+            sym = t["symbol"]
+            try:
+                candles[sym] = self._pick_candles(sym)
+            except Exception as e:
+                log.info("auto-pick: no candles for %s: %s", sym, e)
+        res = rank_tokens(cands, candles, narrative, max_tokens, narrative_of=nar, cfg=cfg)
+        d = res.to_dict()
+        out = {"picks": d["picks"], "skipped": d["skipped"], "explanations": self._explain_picks(d["picks"], d["skipped"])}
+        return out
+
+    def _pick_candles(self, sym: str) -> list:
+        """Candles for ranking, cached per bar: SIM up to the replay clock (never the future), else the exchange's."""
+        key = (sym, self.timeframe)
+        hit = self._pick_candle_cache.get(key)
+        if hit and (time.monotonic() - hit[0]) < (self.PICK_REFRESH_S if not self.sim else 1e9) and (not self.sim or hit[2] == self.ticks):
+            return hit[1]
+        if self.sim and hasattr(self.feed, "series"):
+            self._sync_replay_clock(sym)
+            s = self.feed.series(sym, self.timeframe)
+            clock = getattr(self.feed, "_clock", {}).get(self.symbol)
+            cs = [c for c in s if clock is None or c.timestamp <= clock] or s[:SIM_WARMUP_BARS]
+            cs = cs[-self.s.window_bars:]
+        else:
+            cs = list(self.c.exchange.get_candles(sym, self.timeframe, limit=self.s.window_bars))
+        self._pick_candle_cache[key] = (time.monotonic(), cs, self.ticks)
+        return cs
+
+    def _explain_picks(self, picks: list, skipped: list) -> list[str]:
+        for impl in (getattr(self.c.explainer, "_primary", None), self.c.explainer):
+            fn = getattr(impl, "explain_picks", None)
+            if callable(fn):
+                try:
+                    return [str(x) for x in fn(picks, skipped)]
+                except Exception:
+                    pass
+        try:
+            from backend.llm.narratives import explain_picks
+            return list(explain_picks(picks, skipped))
+        except Exception:
+            return [p.get("reason") or p["symbol"] for p in picks]
+
+    def refresh_picks(self, force: bool = False) -> None:
+        ap = self._auto_pick_cfg()
+        if ap is None:
+            return
+        now = time.monotonic()
+        due = force or not self.picks_at or (self.ticks - self.picks_tick >= self.PICK_REFRESH_TICKS if self.sim
+                                             else now - self.picks_at >= self.PICK_REFRESH_S)
+        if not due:
+            return
+        try:
+            r = self.compute_picks(ap.narrative, ap.max_tokens)
+        except Exception as e:
+            self._alert(AlertLevel.WARNING, "AUTO_PICK", f"Auto-pick failed ({type(e).__name__}: {e}); keeping the current watchlist")
+            self.picks_at, self.picks_tick = now, self.ticks
+            return
+        before = [p["symbol"] for p in self.picks]
+        self.picks, self.picks_skipped, self.picks_explanations = r["picks"], r["skipped"], r["explanations"]
+        self.picks_at, self.picks_tick, self.picks_updated = now, self.ticks, utc_now()
+        after = [p["symbol"] for p in self.picks]
+        if after != before:
+            self._alert(AlertLevel.INFO, "AUTO_PICK", ("Auto-pick: " + ", ".join(after)) if after else
+                        "Auto-pick found no tradable token for this narrative; using the watchlist")
+
+    def watchlist_view(self) -> dict:
+        with self.lock:
+            ap = getattr(self._agent_cfg(), "auto_pick", None)
+            pf = self.book.portfolio()
+            held = {p.symbol: p for p in pf.positions}
+            per = []
+            syms = self.watch_symbols() if self._agent_cfg() is not None else []
+            for sym in syms + [s for s in held if s not in syms]:
+                d = self._last_by_symbol.get(sym)
+                p = held.get(sym)
+                sig = getattr(d, "signal", None) if d else None
+                per.append({"symbol": sym, "watched": sym in syms,
+                            "regime": (d.regime.value if d and d.regime else None),
+                            "signal": (sig.action.value if sig else None), "action": d.action.value if d else None,
+                            "reason": d.reason if d else None, "held": p is not None,
+                            "position": None if p is None else {"quantity": p.quantity, "avg_entry_price": p.avg_entry_price,
+                                                                "value_usdt": p.quantity * (p.current_price or p.avg_entry_price)},
+                            "position_usdt": None if p is None else p.quantity * (p.current_price or p.avg_entry_price)})
+            return {"watchlist": syms, "configured_watchlist": self.configured_watchlist(),
+                    "auto_pick": ap.model_dump(mode="json") if ap is not None else None,
+                    "picks": list(self.picks), "skipped": list(self.picks_skipped),
+                    "explanations": list(self.picks_explanations), "per_token": per,
+                    "updated_at": self.picks_updated}
+
     # ------------------------------------------------------------------ activation
-    def _check_switch(self, symbol: str) -> None:
+    def _check_switch(self, symbol: str, watchlist: Optional[list] = None) -> None:
+        if watchlist is not None:  # watchlist agents keep other holdings: their exits keep running every tick
+            return
         others = {l.position.symbol for l in self.book.lots if l.position.symbol != symbol}
         if others:
             raise AgentStateError(f"close open positions in {', '.join(sorted(others))} before switching symbol")
 
     def activate_manual(self, strategy: ManualStrategy) -> StatusSnapshot:
         with self.lock:
-            self._check_switch(strategy.symbol)
+            self._check_switch(strategy.symbol, self._multi(strategy))
             self.manual, self.auto = strategy, None
             self.active_strategy = f"MANUAL:{strategy.name}"
             hook = getattr(self.c.risk, "apply_manual_strategy", None)  # optional (Bot 3): per-symbol risk/exit rules
             if callable(hook):
                 hook(strategy)
+                for sym in (strategy.watchlist or [])[:5]:  # same rules for every watched token
+                    if sym != strategy.symbol:
+                        hook(strategy.model_copy(update={"symbol": sym}))
+            self._reset_picks()
             self._on_activate(strategy.symbol, strategy.timeframe, strategy.activation)
             self.state.update(agent={"kind": "manual", "strategy": strategy.model_dump(mode="json")})
             return self.status()
 
     def activate_auto(self, config: AutoConfig) -> StatusSnapshot:
         with self.lock:
-            self._check_switch(config.symbol)
+            self._check_switch(config.symbol, self._multi(config))
             self.manual, self.auto = None, config
             self.active_strategy = None
+            self._reset_picks()
             self._on_activate(config.symbol, config.timeframe, config.activation)
             self.state.update(agent={"kind": "auto", "config": config.model_dump(mode="json")})
             return self.status()
+
+    @staticmethod
+    def _multi(cfg: Any) -> Optional[list]:
+        """The watchlist when the config uses one (2+ tokens or Auto-pick on), else None (single-token behaviour)."""
+        wl = [s for s in dict.fromkeys([cfg.symbol] + list(getattr(cfg, "watchlist", None) or [])) if s]
+        ap = getattr(cfg, "auto_pick", None)
+        return wl if len(wl) > 1 or (ap is not None and ap.enabled) else None
+
+    def _reset_picks(self) -> None:
+        self.picks, self.picks_skipped, self.picks_explanations = [], [], []
+        self.picks_at, self.picks_tick, self.picks_updated = 0.0, 0, None
+        self._last_by_symbol = {}
+        if self._auto_pick_cfg() is not None:
+            self.refresh_picks(force=True)
 
     def _on_activate(self, symbol: str, tf: Timeframe, activation: ActivationMode) -> None:
         self._reject_all_pending("agent switched")
@@ -244,22 +433,45 @@ class TradingLoop:
 
     # ------------------------------------------------------------------ the cycle
     def tick(self) -> list[Decision]:
+        """One cycle over every watched token (watchlist / Auto-pick picks, max 5) plus every held token that left
+        the watchlist (exits only). A single-symbol agent runs exactly as before."""
         with self.lock:
-            sym = self.symbol
-            if sym is None:
+            if self.symbol is None:
                 raise AgentStateError("no active agent: activate a manual strategy or auto config first")
             self.last_tick_at = utc_now()  # heartbeat: every cycle counts, even without a new bar
             if self.live:
                 self.wallet_refresh_if_due()  # slow schedule (WALLET_REFRESH_SEC); orders re-read right before they go out
-            window = self.feed.next_window(sym, self.timeframe)
-            if window is None:
-                if self.sim and not self.finished:
-                    self.finished = True
-                    self._alert(AlertLevel.INFO, "REPLAY_FINISHED", f"SIM replay of {sym} reached the last bar", sym)
+            if self._auto_pick_cfg() is not None:
+                self.refresh_picks()  # at most every PICK_REFRESH_S / PICK_REFRESH_TICKS, never every tick
+            watched = self.watch_symbols()
+            held = [s for s in dict.fromkeys(l.position.symbol for l in self.book.lots) if s not in watched]
+            out: list[Decision] = []
+            progressed = False
+            self._sync_explainer_limits()
+            for sym in watched + held:
+                res = self._tick_symbol(sym, entries=sym in watched, primary=sym == watched[0])
+                if res is not None:
+                    progressed = True
+                    out.extend(res)
+                    self._last_by_symbol[sym] = res[-1] if res else None
+            if not progressed:
                 return []
             self.ticks += 1
+            return self._end_tick(out)
+
+    def _tick_symbol(self, sym: str, entries: bool = True, primary: bool = True) -> Optional[list[Decision]]:
+        """The single-token cycle for `sym` (None = no new bar). entries=False: a held token no longer watched -
+        protective exits and the engine's SELL only, never a new BUY."""
+        if True:
+            if self.sim and not primary:
+                self._sync_replay_clock(sym)
+            window = self.feed.next_window(sym, self.timeframe)
+            if window is None:
+                if self.sim and primary and not self.finished:
+                    self.finished = True
+                    self._alert(AlertLevel.INFO, "REPLAY_FINISHED", f"SIM replay of {sym} reached the last bar", sym)
+                return None
             bar = self._bar = window[-1]
-            self._sync_explainer_limits()
             now = self._now()
             self._set_sim_price(sym, bar.close)
             self.book.on_bar(sym, bar, now)
@@ -273,7 +485,7 @@ class TradingLoop:
                     reason=(f"Paused: a different wallet is connected ({_short_addr(b.get('address'))}, expected "
                             f"{_short_addr(b.get('expected'))}). Regime places no orders, and stop-loss and take-profit are "
                             "paused, until you click Check positions on the dashboard."))))
-                return self._end_tick(out)
+                return out
 
             # 0) in-flight LIVE buys: reconcile first, so a fill confirmed now is a real lot for the exits below
             if not self.sim:
@@ -303,28 +515,33 @@ class TradingLoop:
                     mode=self.s.trading_mode, agent_mode=self.agent_mode, symbol=sym, regime=regime, timestamp=now,
                     strategy=self.active_strategy or "NONE", action=Action.STAY_OUT,
                     reason=one_prefix("Emergency stop", control.reason, "active") + "; staying out")))
-                return self._end_tick(out)
+                return out
 
             # 3) strategy (engine) -> 4) risk -> 5) execute / confirm
             pf = self._pf()  # + in-flight buys as synthetic positions (engine and risk both see them)
             if not self.sim:
                 self._update_market_context(sym, pf)
             if self.manual:
-                signal = self.c.engine.evaluate_manual(self.manual, window, pf)
+                strat = self.manual if self.manual.symbol == sym else self.manual.model_copy(update={"symbol": sym})
+                signal = self.c.engine.evaluate_manual(strat, window, pf)
             else:
-                signal = self.c.engine.evaluate_auto(self.auto, window, pf)
+                cfg = self.auto if self.auto.symbol == sym else self.auto.model_copy(update={"symbol": sym})
+                signal = self.c.engine.evaluate_auto(cfg, window, pf)
                 self.active_strategy = signal.strategy if signal.preset else "NONE"
                 if signal.regime is not None:
                     regime = self.current_regime = signal.regime
             base = dict(mode=self.s.trading_mode, agent_mode=self.agent_mode, symbol=sym, regime=regime, timestamp=now,
                         strategy=signal.strategy, signal=signal)
+            if signal.action == Action.BUY and not entries:  # a dropped token: exits only, never a new BUY
+                signal = signal.model_copy(update={"action": Action.STAY_OUT, "reason": (
+                    f"{sym} is no longer on the watchlist: holding for exits only (stop-loss / take-profit / sell signal)")})
             if signal.action == Action.STAY_OUT:  # incl. Bot 2's live_* / insufficient_data: a logged no-trade
                 out.append(self._finalize(Decision(action=Action.STAY_OUT, reason=signal.reason, **base)))
-                return self._end_tick(out)
+                return out
             cd = self._cooldown(sym) if signal.action == Action.BUY else None
             if cd:
                 out.append(self._finalize(Decision(action=Action.STAY_OUT, reason=f"BUY not executed: {cd}", **base)))
-                return self._end_tick(out)
+                return out
             waiting = self._pending_buy_for(sym) if signal.action == Action.BUY else None
             if waiting is not None:  # one confirmation per symbol/agent at a time: no stale approval queue
                 d = Decision(action=Action.STAY_OUT, reason=(
@@ -334,7 +551,7 @@ class TradingLoop:
                 while len(self._awaiting) > 2000:
                     self._awaiting.popitem(last=False)
                 out.append(self._finalize(d))
-                return self._end_tick(out)
+                return out
             verdict = self._risk_check(signal, pf, control)  # LIVE BUY: pass 1 with LiveContext (no quote yet)
             if not verdict.approved:
                 out.append(self._finalize(Decision(action=Action.STAY_OUT, risk_verdict=verdict,
@@ -354,7 +571,7 @@ class TradingLoop:
                 out.append(d)
             else:
                 out.append(self._buy(signal, verdict, base))
-            return self._end_tick(out)
+            return out
 
     def _end_tick(self, out: list[Decision]) -> list[Decision]:
         self._persist()

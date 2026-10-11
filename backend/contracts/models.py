@@ -12,7 +12,7 @@ Conventions:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -324,6 +324,14 @@ class StrategyFilters(ContractModel):
     min_volume: MinVolumeFilter = Field(default_factory=MinVolumeFilter)
 
 
+class AutoPickConfig(ContractModel):
+    """Watchlist Auto-pick (v0.3): pick up to ``max_tokens`` tradable tokens of one narrative by momentum/trend/liquidity."""
+
+    enabled: bool = False
+    max_tokens: int = Field(default=3, ge=1, le=5)
+    narrative: Literal["AI_CHIPS", "EV_ENERGY", "BIG_TECH", "CRYPTO", "ANY"] = "ANY"
+
+
 class ManualStrategy(ContractModel):
     """A user-built rule set (spec 2.1/2.2). Saved and exchanged as JSON. Defaults == simulator defaults."""
 
@@ -338,6 +346,9 @@ class ManualStrategy(ContractModel):
     activation: ActivationMode = ActivationMode.CONFIRMATION
     created_at: datetime = Field(default_factory=utc_now)
     version: int = 1
+    watchlist: list[str] = Field(default_factory=list, max_length=5, description=(
+        "v0.3: up to 5 tokens traded with these rules; empty = [symbol]. `symbol` stays the first entry"))
+    auto_pick: AutoPickConfig = Field(default_factory=AutoPickConfig, description="v0.3: pick the watchlist automatically (off by default)")
 
 
 # --------------------------------------------------------------------------- auto mode (spec 3)
@@ -348,6 +359,9 @@ class AutoConfig(ContractModel):
     capital: float = Field(gt=0, description="USDT allocated to the auto agent")
     timeframe: Timeframe = Timeframe.H1
     activation: ActivationMode = ActivationMode.CONFIRMATION
+    watchlist: list[str] = Field(default_factory=list, max_length=5, description=(
+        "v0.3: up to 5 tokens for the auto agent; empty = [symbol]. `symbol` stays the first entry"))
+    auto_pick: AutoPickConfig = Field(default_factory=AutoPickConfig, description="v0.3: pick the watchlist automatically (off by default)")
 
 
 class RegimeAnalysis(ContractModel):
@@ -542,7 +556,7 @@ ALL_MODELS: list[type[BaseModel]] = [
     RsiBelowCondition, PriceAboveSmaCondition, PriceAboveEmaCondition, MacdParams, MacdCrossCondition,
     BollingerLowerCondition, VolumeAboveAverageCondition, BreakoutCondition, EntryConditions,
     TrailingStopRule, RsiExitRule, ExitRules, PositionRiskRules, MarketHoursFilter, MinVolumeFilter, StrategyFilters,
-    ManualStrategy, AutoConfig, RegimeAnalysis, StrategySelection, Signal, RiskCheck, RiskVerdict,
+    AutoPickConfig, ManualStrategy, AutoConfig, RegimeAnalysis, StrategySelection, Signal, RiskCheck, RiskVerdict,
     Decision, ControlState, BacktestTrade, EquityPoint, BacktestResult, StatusSnapshot,
     Alert, PerformanceSummary, SystemInfo, LoopState, BacktestRequest, Event,
 ]
