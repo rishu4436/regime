@@ -57,6 +57,7 @@ from .status import (
     xstock_enabled,
 )
 from .tokens import DEFAULT_TOKENS
+from .wallet import SimWalletMixin
 
 ONDO_MIN_ORDER_USD = 20.0
 # xStock quotes are RFQ (need userWalletAddress, else 40001); BStock supports SWAP (observed) as well as RFQ.
@@ -88,7 +89,7 @@ def path_for(token_type: TokenType) -> ExecutionPath:
     return ExecutionPath.RFQ if token_type in RFQ_TYPES else ExecutionPath.SWAP
 
 
-class SimulatedBinanceClient(TokenStatusMixin, MockExchangeClient):
+class SimulatedBinanceClient(SimWalletMixin, TokenStatusMixin, MockExchangeClient):
     def __init__(
         self,
         regimes: Optional[dict[str, Regime]] = None,

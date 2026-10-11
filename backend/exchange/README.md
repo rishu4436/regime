@@ -97,3 +97,35 @@ and `BinanceWeb3Client` (PAPER/LIVE):
   40375 -> below_minimum, 40366 -> above_maximum).
 - xStock (`…x`) is disabled by default: `BINANCE_ENABLE_XSTOCK=true` re-enables it.
 - SIM: bStock TRADING 24/7, Ondo OFFHOURS Sat/Sun UTC, xStock NO_LIQUIDITY; `set_trading_status()` forces one.
+
+## LIVE Agentic Wallet executor (bot4/baw-live)
+Real funds on BSC through the Binance Agentic Wallet CLI (`baw` 1.10.0, `npm i -g @binance/agentic-wallet@1.10.0`).
+Built from `baw --help` + the CLI's bundled source; tests use a fake runner with the exact `--json` shapes (no network).
+
+| File | What |
+|---|---|
+| `baw.py` | `BawCli` subprocess wrapper (`--json`, errors = JSON on stdout + exit 1 -> `BawError(reason)` / `BawSessionExpired`), 20 s reads / 45 s swap, `resolve_baw_command()` (`BAW_CMD`, else on Windows `node %APPDATA%\npm\node_modules\@binance\agentic-wallet\dist\index.js`), reason codes, `classify()` |
+| `baw_executor.py` | `BawExecutor` (LiveExecutor + wallet reads), `BawLiveClient` (Web3 data/quotes/status + baw execution/wallet), `IntentStore`, `live_gate()`, `result_reason()`, `wallet_snapshot()` |
+| `wallet.py` | `get_balances()` / `get_wallet()` / `get_wallet_settings()` on `BawLiveClient` (LIVE) and `SimulatedBinanceClient` (SIM) |
+| `baw_smoke.py` | `python -m backend.exchange.baw_smoke [--json]` - READ-ONLY checks (status, address, balance, settings, left-quota, tx-lock, quote 1 USDT->NVDAB). Never swaps (read_only client refuses writes before spawning). |
+
+**Gate (per order):** `LIVE_TRADING_ENABLED`, `BINANCE_LIVE_ENABLED`, `RISK_ALLOW_LIVE` must all be `true`; BUY notional
+<= `BINANCE_LIVE_MAX_ORDER_USDT` (25), SELL <= `BINANCE_LIVE_MAX_SELL_USDT` (2x). Every swap/quote passes
+`--slippage <BINANCE_LIVE_MAX_SLIPPAGE_PCT>` (default 1 %, never `auto`) or `execute_order(..., max_slippage_pct=)`; `--mev true`.
+
+**One order:** process lock -> reconcile/refuse open intents -> `wallet status` CONNECTED -> `wallet tx-lock` UNLOCKED ->
+no PENDING `market-order list` -> intent persisted (`BAW_INTENT_FILE`, default `~/.teamwork/baw_intents.json`) ->
+`market-order swap` -> poll `market-order list --orderId` every 3 s up to 120 s -> FINISHED: fill + gas from
+`wallet tx-history` (instructions.send/receive + networkFee) | FAILED | PENDING -> `PENDING_CONFIRMATION`.
+A timed-out/ambiguous submit is never retried: reconciled via `market-order list --fromToken --toToken --startTime`,
+else `PENDING_CONFIRMATION` + `outcome_unknown` with the intent kept open (new swaps refused until
+`executor.reconcile()` or `executor.resolve_intent(id)`). Note: `tx-history --tx` only returns status in 1.10.0, so
+amounts come from the `tx-history` list entry with that hash.
+
+**Results:** non-filled results carry `error="[<reason>] ..."` (`result_reason(res)`); extras (no contract fields):
+`executor.extras[client_order_id]` = `{explorer_url, route (ONDO_RFQ|SWAP), real_funds: True, wallet_order_id, reason,
+slippage_pct, gas_fee_bnb, gas_fee_usd, fill_source}`. Reasons: `session_expired`, `wallet_not_ready` (pause + alert:
+`PAUSE_REASONS`), `live_disabled`, `order_cap_exceeded`, `tx_locked`, `order_in_flight`, `app_confirmation_required`,
+`abnormal_txn_rejected`, `quota_exceeded`, `policy_rejected`, `insufficient_balance`, `insufficient_gas`,
+`slippage_exceeded`, `no_route`, `market_closed`, `amount_out_of_range`, `quote_expired`, `service_unavailable`,
+`baw_timeout`, `baw_not_found`, `outcome_unknown`, `pending_confirmation`, `order_failed`, `order_rejected`, `baw_error`.
