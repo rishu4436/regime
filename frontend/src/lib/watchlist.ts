@@ -20,12 +20,12 @@ const SECTOR: Record<string, Narrative> = {
 export const underlyingOf = (sym: string) => sym.replace(/(on|x|B)$/, "");
 /** Narrative code -> plain label. Accepts codes or labels from the backend ("AI_CHIPS", "AI & chips"). */
 export const narrativeLabel = (n?: string | null) => {
-  if (!n) return null;
+  if (!n || /^other$/i.test(n)) return null; // "other" = no theme: no pill
   const hit = NARRATIVES.find((x) => x.value === n.toUpperCase() || x.label.toLowerCase() === n.toLowerCase());
   return hit ? (hit.value === "ANY" ? null : hit.label) : n.replace(/_/g, " ").toLowerCase().replace(/^\w/, (c) => c.toUpperCase());
 };
 export const narrativeOf = (sym: string): Narrative | null => SECTOR[underlyingOf(sym)] ?? null;
-export const narrativeText = (sym: string, fromBackend?: string | null) => narrativeLabel(fromBackend) ?? narrativeLabel(narrativeOf(sym));
+export const narrativeText = (sym: string, fromBackend?: string | null) => narrativeLabel(fromBackend) ?? (fromBackend && /^other$/i.test(fromBackend) ? null : narrativeLabel(narrativeOf(sym)));
 
 /** The watchlist the user set, cleaned: unique, max 5, never empty (falls back to the strategy's symbol). */
 export function cleanWatchlist(w: string[] | undefined | null, symbol: string): string[] {
