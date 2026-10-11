@@ -9,7 +9,7 @@ Only show what is on the screen. If something isn't there on the day, skip it an
 
 | When (11 Oct 2026, IST) | What | Tx |
 |---|---|---|
-| 09:25 | First live buy: 10 USDT of NVDAB at about 230.47 USDT | [0x228c02688cd2a8170b38dba6abfdb4f95fca9e9e22ae6bed6a191d0b88a19f22](https://bscscan.com/tx/0x228c02688cd2a8170b38dba6abfdb4f95fca9e9e22ae6bed6a191d0b88a19f22) |
+| 09:25 | First autonomous buy (Auto mode, Grid): 10 USDT of NVDAB at about 230.47 USDT | [0x228c02688cd2a8170b38dba6abfdb4f95fca9e9e22ae6bed6a191d0b88a19f22](https://bscscan.com/tx/0x228c02688cd2a8170b38dba6abfdb4f95fca9e9e22ae6bed6a191d0b88a19f22) |
 | 12:01 | Autonomous buy in Auto mode, Grid strategy: 10 USDT of NVDAB | [0x187fdc3e1023e1ecd37af1dc7bed4176a13e75e39a0b35727681538c0690bf7f](https://bscscan.com/tx/0x187fdc3e1023e1ecd37af1dc7bed4176a13e75e39a0b35727681538c0690bf7f) |
 
 ## Before recording (checklist)
@@ -54,7 +54,7 @@ Only show what is on the screen. If something isn't there on the day, skip it an
 |---|---|---|
 | 1:10 | In the Activity feed, click **tx ↗** on the 12:01 buy, or switch to its BscScan tab. | "Here's a trade Regime made on its own today at 12:01, in Auto mode with Grid. 10 USDT of NVDAB." |
 | 1:22 | BscScan page: status Success, from the wallet address. | "It's on BscScan. Status success, from our Agentic Wallet. Anyone can check it." |
-| 1:32 | Switch to the 09:25 BscScan tab. | "And this was our first live buy, at 09:25 this morning." |
+| 1:32 | Switch to the 09:25 BscScan tab. | "And this was Regime's first autonomous trade, at 09:25 this morning." |
 
 **If there's no new trade during the demo:** that's normal. Regime often stays out. Say "No new trade right now, so here are the ones it already made," and show the two recorded txs above.
 
@@ -117,9 +117,7 @@ Time budget: 15 s. Take it from 2:25–2:45 (Agent Studio, cut to 10 s) and 2:45
 
 ## Facts to re-check right before recording
 
-- Mode: say "Auto mode with Grid" for the 12:01 trade. For 09:25, just say "first live buy". The team chat called it
-  a Manual strategy trade, but the explanation logged for it in the README reads "AUTO mode, Strategy: Grid".
-  Check which is right before naming the mode on camera.
+- Mode: both trades are Auto mode with Grid, made by Regime on its own (confirmed from the PC decision log).
 - Agent Studio: still not registered unless Rishu registers. If he does, fill in the placeholder above.
 - Watchlist: the picker is in the frontend, but the backend (PR #28) isn't merged yet. Keep that section commented
   out unless it merges by 13:45.
