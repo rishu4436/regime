@@ -1076,6 +1076,12 @@ class TradingLoop:
         with self.lock:
             out = self._limits_call("get")
             out["is_default"] = limitsmod.panel(out) == limitsmod.panel(out.get("defaults") or {})
+            fn = getattr(self.c.exchange, "live_limits", None)  # read-only: the exchange's current exit (SELL) cap
+            try:
+                sell = (fn() if callable(fn) else {}).get("max_sell_usdt")
+                out["max_sell_usdt"] = float(sell) if sell is not None else None
+            except Exception:
+                out["max_sell_usdt"] = None
             return out
 
     def set_limits(self, raw: dict) -> dict:

@@ -24,7 +24,7 @@ log = logging.getLogger("backend.app.limits")
 
 FIELDS = ("order_mode", "order_usdt", "order_pct", "max_order_usdt", "max_total_usdt", "max_per_token_usdt",
           "daily_loss_usdt", "daily_buy_usdt")
-READ_ONLY = frozenset({"wallet_daily_limit_usdt", "defaults", "notes", "is_default", "updated_at"})
+READ_ONLY = frozenset({"wallet_daily_limit_usdt", "defaults", "notes", "is_default", "updated_at", "max_sell_usdt"})
 ENGINE_DEFAULT_SIZE_PCT = 2.0  # Bot 2 LiveSafetyConfig.max_size_pct (Auto live sizes: never above 2% of equity)
 
 

@@ -260,3 +260,13 @@ def test_default_startup_applies_sell_headroom(tmp_path):
         d = c.get("/api/settings/limits").json()
         assert d["is_default"] is True
         assert ex.live_limits()["max_sell_usdt"] >= 2 * float(d["max_per_token_usdt"] or d["max_total_usdt"])
+
+
+def test_limits_view_shows_sell_cap_and_put_roundtrip(tmp_path):
+    c = _sim(tmp_path)
+    d = c.get("/api/settings/limits").json()
+    assert "max_sell_usdt" in d
+    if d["max_sell_usdt"] is not None:
+        assert d["max_sell_usdt"] >= 2 * float(d["max_per_token_usdt"] or d["max_total_usdt"])
+    r = c.put("/api/settings/limits", json=d)  # sending the GET body back (with the read-only field) must not 422
+    assert r.status_code == 200, r.text
