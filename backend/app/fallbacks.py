@@ -329,6 +329,15 @@ class FallbackRiskManager:
         self._live_allowed = live_allowed if live_allowed is not None else all(
             os.getenv(k, "").lower() == "true" for k in ("LIVE_TRADING_ENABLED", "BINANCE_LIVE_ENABLED"))
 
+    @property
+    def allow_live(self) -> bool:
+        """Stand-in for Bot 3's RiskConfig.allow_live."""
+        return self._live_allowed
+
+    @allow_live.setter
+    def allow_live(self, v: bool) -> None:
+        self._live_allowed = bool(v)
+
     def _set(self, **kw) -> ControlState:
         self._control = self._control.model_copy(update={**kw, "updated_at": utc_now()})
         return self._control
