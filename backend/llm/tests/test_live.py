@@ -313,3 +313,8 @@ def test_baw_session_codes():
     from backend.llm.live import plain_reason
     assert "re-scans the QR" in plain_reason("session_expired")
     assert "QR" in plain_reason("wallet_not_ready")
+
+
+def test_order_in_flight_code():
+    from backend.llm.live import plain_reason
+    assert "settling" in plain_reason("order_in_flight")
