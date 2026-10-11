@@ -17,6 +17,7 @@ from backend.contracts import (
 )
 
 from . import exits
+from .data import sanitize_candles
 from .manual import ManualIndicators, check_filters, evaluate_entry, indicator_exit
 
 
@@ -64,7 +65,7 @@ def run_backtest(
         raise ValueError("initial_capital must be > 0")
     if fee_pct < 0 or slippage_bps < 0:
         raise ValueError("fee_pct and slippage_bps must be >= 0")
-    cs = sorted(candles, key=lambda c: c.timestamp)
+    cs, _rep = sanitize_candles(candles)  # sorted, de-duplicated, invalid rows dropped
     n = len(cs)
     fee = fee_pct / 100
     slip = slippage_bps / 10_000

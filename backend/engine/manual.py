@@ -33,6 +33,7 @@ class ManualIndicators:
     macd_exit: tuple[Series, Series]
     bb_lower: Series
     vol_avg: Series
+    vol_active: Series  # fraction of bars with volume > 0 in the volume-average window
     breakout_high: Series
     breakout_low: Series
 
@@ -63,6 +64,7 @@ class ManualIndicators:
             macd_exit=(mx[0], mx[1]),
             bb_lower=bb_lower,
             vol_avg=ind.volume_average([c.volume for c in candles], vol_period),
+            vol_active=ind.sma([1.0 if c.volume > 0 else 0.0 for c in candles], vol_period),
             breakout_high=ind.rolling_max([c.high for c in candles], e.breakout.lookback),
             breakout_low=ind.rolling_min([c.low for c in candles], e.breakout.lookback),
         )
@@ -77,9 +79,13 @@ class EntryEvaluation:
     detail: list[str]
 
 
-def evaluate_entry(s: ManualStrategy, mi: ManualIndicators, candles: Sequence[Candle], i: int) -> EntryEvaluation:
+def evaluate_entry(
+    s: ManualStrategy, mi: ManualIndicators, candles: Sequence[Candle], i: int, volume_applicable: bool = True
+) -> EntryEvaluation:
     """Each ENABLED condition whose indicator is available contributes one boolean; warm-up ones are skipped.
-    No booleans -> no entry. AND = all true, OR = any true. Names = EntryConditions field names."""
+    No booleans -> no entry. AND = all true, OR = any true. Names = EntryConditions field names.
+    ``volume_applicable=False`` (token families without on-chain bar volume, e.g. Ondo off-hours): the volume
+    condition is NOT APPLICABLE: it is left out entirely (neither met, failed nor warming up)."""
     c = candles[i]
     e = s.entry
     results: dict[str, Optional[bool]] = {}
@@ -119,10 +125,17 @@ def evaluate_entry(s: ManualStrategy, mi: ManualIndicators, candles: Sequence[Ca
                 f"close {c.close:.4g} {'<' if c.close < lim else '>='} "
                 f"lower BB*(1+{e.bollinger_lower.proximity_pct:g}%) {lim:.4g}"
             )
-    if e.volume_above_avg.enabled:
+    if e.volume_above_avg.enabled and not volume_applicable:
+        detail.append("volume condition n/a (token family has no on-chain bar volume)")
+    elif e.volume_above_avg.enabled:
         v = mi.vol_avg[i]
-        results["volume_above_avg"] = None if v is None else c.volume > e.volume_above_avg.multiplier * v
-        if v is not None:
+        if v is None:
+            results["volume_above_avg"] = None
+        elif not _has_volume_baseline(mi, i, c):  # sparse on-chain volume is never a reason to buy
+            results["volume_above_avg"] = False
+            detail.append(f"no volume data (volume {c.volume:.4g}, avg {v:.4g}, {_active_pct(mi, i)} bars traded)")
+        else:
+            results["volume_above_avg"] = c.volume > e.volume_above_avg.multiplier * v
             detail.append(f"volume {c.volume:.4g} vs {e.volume_above_avg.multiplier:g}x avg {v:.4g}")
     if e.breakout.enabled:
         if e.breakout.direction == BreakoutDirection.HIGH:
@@ -166,8 +179,11 @@ def in_market_hours(ts: datetime, f: MarketHoursFilter) -> bool:
     return h >= f.start_hour_utc or h < f.end_hour_utc
 
 
-def check_filters(s: ManualStrategy, mi: ManualIndicators, candles: Sequence[Candle], i: int) -> tuple[bool, list[str]]:
-    """Hard filters (always ANDed with the entry result). Returns (passed, human-readable failures)."""
+def check_filters(
+    s: ManualStrategy, mi: ManualIndicators, candles: Sequence[Candle], i: int, volume_applicable: bool = True
+) -> tuple[bool, list[str]]:
+    """Hard filters (always ANDed with the entry result). Returns (passed, human-readable failures).
+    ``volume_applicable=False`` skips the min-volume filter (not applicable, see ``evaluate_entry``)."""
     c = candles[i]
     fails: list[str] = []
     mh = s.filters.market_hours
@@ -177,15 +193,35 @@ def check_filters(s: ManualStrategy, mi: ManualIndicators, candles: Sequence[Can
             f"{', weekdays' if mh.weekdays_only else ''})"
         )
     mv = s.filters.min_volume
-    if mv.enabled:
+    if mv.enabled and volume_applicable:
         avg = mi.vol_avg[i]
         if avg is None:
             fails.append("min-volume filter: volume average still in warm-up")
+        elif not _has_volume_baseline(mi, i, c):
+            fails.append(
+                f"min-volume filter: no volume data (volume {c.volume:.4g}, avg {avg:.4g}, "
+                f"{_active_pct(mi, i)} bars traded)"
+            )
         elif not c.volume > mv.multiplier * avg:
             fails.append(f"min-volume filter: volume {c.volume:.4g} <= {mv.multiplier:g}x avg {avg:.4g}")
         if mv.min_volume is not None and c.volume < mv.min_volume:
             fails.append(f"min-volume filter: volume {c.volume:.4g} < minimum {mv.min_volume:g}")
     return (not fails), fails
+
+
+MIN_ACTIVE_VOLUME_FRACTION = 0.5
+
+
+def _has_volume_baseline(mi: ManualIndicators, i: int, c: Candle) -> bool:
+    """Volume comparisons need a real baseline: this bar traded, the average is positive and at least half of
+    the bars in the window traded (otherwise one stray on-chain trade looks like a huge "spike")."""
+    avg, act = mi.vol_avg[i], mi.vol_active[i]
+    return avg is not None and avg > 0 and c.volume > 0 and (act is not None and act >= MIN_ACTIVE_VOLUME_FRACTION)
+
+
+def _active_pct(mi: ManualIndicators, i: int) -> str:
+    act = mi.vol_active[i]
+    return "n/a" if act is None else f"{act * 100:.0f}%"
 
 
 def indicator_exit(s: ManualStrategy, mi: ManualIndicators, i: int) -> Optional[tuple[ExitReason, str]]:

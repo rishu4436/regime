@@ -10,8 +10,9 @@ from backend.monitoring import EventLog
 
 
 def to_payload(obj: Any) -> dict:
+    """JSON payload; every execution inside (EXECUTION, DECISION, STATUS events) gets `explorer_url` (see live.py)."""
     if hasattr(obj, "model_dump"):
-        return obj.model_dump(mode="json")
+        obj = obj.model_dump(mode="json")
     return obj
 
 
@@ -21,11 +22,14 @@ class EventBus:
         self._subs: dict[int, Callable[[Event], None]] = {}
         self._lock = threading.Lock()
         self._next = 0
+        self.enrich: Callable[[Any], Any] | None = None  # set by the loop: LIVE execution fields (explorer_url, route, ...)
 
     def publish(self, type_: EventType, payload: Any, **extra: Any) -> Event:
         p = to_payload(payload)
         if extra:
             p = {**p, **{k: to_payload(v) for k, v in extra.items()}}
+        if self.enrich is not None:
+            p = self.enrich(p)
         ev = Event(type=type_, payload=p)
         self.log.write(ev)
         with self._lock:

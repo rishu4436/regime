@@ -16,7 +16,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.contracts import (
-    CONTRACTS_VERSION, Alert, AlertLevel, AutoConfig, BacktestRequest, BacktestResult, Candle, ControlState, Decision, Event, EventType, ManualStrategy,
+    ActivationMode, utc_now, CONTRACTS_VERSION, Alert, AlertLevel, AutoConfig, BacktestRequest, BacktestResult, Candle, ControlState, Decision, Event, EventType, ManualStrategy,
     LoopState, PerformanceSummary, Portfolio, RegimeAnalysis, SystemInfo, StatusSnapshot, StrategySelection, Timeframe, TokenInfo, TraderStyle, PresetName,
 )
 from backend.monitoring import EventLog
@@ -24,9 +24,13 @@ from backend.monitoring import EventLog
 from .events import EventBus
 from .loop import AgentStateError, TradingLoop
 from .schemas import (
+    TokenView,
+    PortfolioView,
     AskRequest, ConfirmationModeRequest, EmergencyStopRequest, LoopStartRequest, ManualActivateRequest, ParseRequest,
-    ParseResponse, PresetsTable, PresetsTableEntry, ReasonRequest,
+    ParseResponse, PresetsTable, PresetsTableEntry, ReasonRequest, DecisionView, Heartbeat, LiveStatus, LoopStateView,
+    StatusView, SystemInfoView, WalletInfo,
 )
+from .live import agent_identity
 from .settings import Settings
 from .store import StrategyStore
 from .wiring import Components, build_components, presets_table
@@ -44,6 +48,9 @@ class AppState:
         self.store = StrategyStore(settings.log_dir)
         self.interval = settings.loop_interval_seconds
         self.task: Optional[asyncio.Task] = None
+        self.want_running = False  # watchdog restarts the loop task while this is True
+        self.monitor: Optional[asyncio.Task] = None
+        self.stall_alerted = False
 
 
 def create_app(settings: Optional[Settings] = None, components: Optional[Components] = None) -> FastAPI:
@@ -53,7 +60,12 @@ def create_app(settings: Optional[Settings] = None, components: Optional[Compone
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        st.aio = asyncio.get_running_loop()
+        st.monitor = asyncio.create_task(_monitor(st))
+        if settings.loop_autostart:
+            await run_in_threadpool(_autostart, st)
         yield
+        st.monitor.cancel()
         await _stop_task(st)
 
     app = FastAPI(title="Autonomous On-Chain Stock Trading Agent", version=CONTRACTS_VERSION, lifespan=lifespan)
@@ -74,18 +86,31 @@ def create_app(settings: Optional[Settings] = None, components: Optional[Compone
     def health() -> dict:
         return {"status": "ok", "contracts_version": CONTRACTS_VERSION, "trading_mode": settings.trading_mode.value}
 
-    @app.get("/api/system", response_model=SystemInfo)
-    def system() -> SystemInfo:
-        return SystemInfo(trading_mode=settings.trading_mode, live_enabled=settings.live_enabled, contracts_version=CONTRACTS_VERSION,
-                          sim_seed=settings.sim_seed if L.sim else None, components=comps.names())
+    def dv(d: Decision) -> DecisionView:  # + LIVE execution fields (explorer_url, route, quote_expires_at, real_funds)
+        return DecisionView.model_validate(L.enrich_payload(d.model_dump(mode="json")))
+
+    @app.get("/api/system", response_model=SystemInfoView)
+    def system() -> SystemInfoView:
+        return SystemInfoView(trading_mode=settings.trading_mode, live_enabled=settings.live_enabled, contracts_version=CONTRACTS_VERSION,
+                              sim_seed=settings.sim_seed if L.sim else None, components=comps.names(),
+                              live=LiveStatus.model_validate(L.live_status()), agent_identity=agent_identity())
+
+    @app.get("/api/live/status", response_model=LiveStatus)
+    def live_status() -> LiveStatus:
+        return LiveStatus.model_validate(L.live_status())
+
+    @app.get("/api/wallet", response_model=WalletInfo)
+    def wallet() -> WalletInfo:
+        return WalletInfo.model_validate(L.wallet())
 
     # ---------------------------------------------------------------- market data
-    @app.get("/api/tokens", response_model=list[TokenInfo])
-    def tokens(q: str = "") -> list[TokenInfo]:
+    @app.get("/api/tokens", response_model=list[TokenView])
+    def tokens(q: str = "") -> list[TokenView]:
         toks = comps.exchange.search_tokens(q)
-        if not L.sim:
-            return toks
-        return [t.model_copy(update={"price": guard(L.view_price, t.symbol)}) for t in toks]
+        if L.sim:
+            toks = [t.model_copy(update={"price": guard(L.view_price, t.symbol)}) for t in toks]
+        # + token_status (Bot 4 get_token_status, cached ~60 s; null if unavailable)
+        return [TokenView(**t.model_dump(), token_status=L.token_status(t.symbol)) for t in toks]
 
     @app.get("/api/candles/{symbol}", response_model=list[Candle])
     def candles(symbol: str, timeframe: Timeframe = Timeframe.H1, limit: Optional[int] = None, history: bool = False) -> list[Candle]:
@@ -144,13 +169,15 @@ def create_app(settings: Optional[Settings] = None, components: Optional[Compone
     @app.post("/api/backtest", response_model=BacktestResult)
     def backtest(req: BacktestRequest) -> BacktestResult:
         c = guard(L.history_candles, req.strategy.symbol, req.strategy.timeframe, req.limit)  # never replay-pinned
-        return comps.engine.backtest_manual(req.strategy, c, req.initial_capital)
+        return (comps.backtest_engine or comps.engine).backtest_manual(req.strategy, c, req.initial_capital)
 
     # ---------------------------------------------------------------- agent & loop
     @app.post("/api/manual/activate", response_model=StatusSnapshot)
     def manual_activate(req: ManualActivateRequest) -> StatusSnapshot:
         if req.strategy is not None:
             s = req.strategy
+            if "activation" not in s.model_fields_set:  # full autonomy unless the request asks for confirmation
+                s = s.model_copy(update={"activation": ActivationMode.AUTO_EXECUTE})
         elif req.strategy_id:
             s = guard(st.store.get, req.strategy_id)
         else:
@@ -159,6 +186,8 @@ def create_app(settings: Optional[Settings] = None, components: Optional[Compone
 
     @app.post("/api/auto/activate", response_model=StatusSnapshot)
     def auto_activate(cfg: AutoConfig) -> StatusSnapshot:
+        if "activation" not in cfg.model_fields_set:  # full autonomy unless the request asks for confirmation
+            cfg = cfg.model_copy(update={"activation": ActivationMode.AUTO_EXECUTE})
         return guard(L.activate_auto, cfg)
 
     @app.post("/api/agent/deactivate", response_model=StatusSnapshot)
@@ -166,76 +195,76 @@ def create_app(settings: Optional[Settings] = None, components: Optional[Compone
         await _stop_task(st)
         return await run_in_threadpool(L.deactivate)
 
-    def loop_state() -> LoopState:
-        return LoopState(running=st.task is not None and not st.task.done(), interval_seconds=st.interval, ticks=L.ticks,
-                         agent_mode=L.agent_mode, active_symbol=L.symbol, active_strategy=L.active_strategy, replay_finished=L.finished)
+    def loop_state() -> LoopStateView:
+        return LoopStateView(running=st.task is not None and not st.task.done(), interval_seconds=st.interval, ticks=L.ticks,
+                             agent_mode=L.agent_mode, active_symbol=L.symbol, active_strategy=L.active_strategy, replay_finished=L.finished,
+                             heartbeat=Heartbeat(**L.heartbeat(), autostart=settings.loop_autostart))
 
-    @app.get("/api/loop", response_model=LoopState)
-    def get_loop() -> LoopState:
+    @app.get("/api/loop", response_model=LoopStateView)
+    def get_loop() -> LoopStateView:
         return loop_state()
 
-    @app.post("/api/loop/tick", response_model=list[Decision])
-    def tick() -> list[Decision]:
-        return guard(L.tick)
+    @app.post("/api/loop/tick", response_model=list[DecisionView])
+    def tick() -> list[DecisionView]:
+        return [dv(d) for d in guard(L.tick)]
 
-    @app.post("/api/loop/start", response_model=LoopState)
+    @app.post("/api/loop/start", response_model=LoopStateView)
     async def start(req: Optional[LoopStartRequest] = None) -> LoopState:
         if L.symbol is None:
             raise HTTPException(409, "no active agent: activate a manual strategy or auto config first")
         if req and req.interval_seconds:
             st.interval = req.interval_seconds
-        if st.task is None or st.task.done():
-            st.task = asyncio.create_task(_run(st))
+        _start_task(st)
         return loop_state()
 
-    @app.post("/api/loop/stop", response_model=LoopState)
+    @app.post("/api/loop/stop", response_model=LoopStateView)
     async def stop() -> LoopState:
         await _stop_task(st)
         return loop_state()
 
     # ---------------------------------------------------------------- decisions & confirmations
-    @app.get("/api/status", response_model=StatusSnapshot)
-    def status() -> StatusSnapshot:
-        return L.status()
+    @app.get("/api/status", response_model=StatusView)
+    def status() -> StatusView:
+        return StatusView.model_validate(L.enrich_payload(L.status().model_dump(mode="json")))
 
-    @app.get("/api/portfolio", response_model=Portfolio)
-    def portfolio() -> Portfolio:
-        with L.lock:
-            return L.book.portfolio()
+    @app.get("/api/portfolio", response_model=PortfolioView)
+    def portfolio() -> PortfolioView:
+        with L.lock:  # + in-flight LIVE buys flagged pending (Bot 1)
+            return PortfolioView.model_validate(L.portfolio_view())
 
-    @app.get("/api/decisions", response_model=list[Decision])
-    def decisions(limit: int = 50, symbol: Optional[str] = None) -> list[Decision]:
+    @app.get("/api/decisions", response_model=list[DecisionView])
+    def decisions(limit: int = 50, symbol: Optional[str] = None) -> list[DecisionView]:
         with L.lock:
             ds = [d for d in L.decisions if symbol is None or d.symbol == symbol]
-        return ds[::-1][:limit]
+        return [dv(d) for d in ds[::-1][:limit]]
 
-    @app.get("/api/decisions/{did}", response_model=Decision)
-    def decision(did: str) -> Decision:
+    @app.get("/api/decisions/{did}", response_model=DecisionView)
+    def decision(did: str) -> DecisionView:
         with L.lock:
             for d in L.decisions:
                 if d.id == did:
-                    return d
+                    return dv(d)
         raise HTTPException(404, f"not found: {did}")
 
-    @app.get("/api/confirmations", response_model=list[Decision])
-    def confirmations() -> list[Decision]:
-        return L.pending_decisions()
+    @app.get("/api/confirmations", response_model=list[DecisionView])
+    def confirmations() -> list[DecisionView]:
+        return [dv(d) for d in L.pending_decisions()]
 
-    @app.post("/api/confirmations/{did}/approve", response_model=Decision)
-    def approve(did: str) -> Decision:
-        return guard(L.approve, did)
+    @app.post("/api/confirmations/{did}/approve", response_model=DecisionView)
+    def approve(did: str) -> DecisionView:
+        return dv(guard(L.approve, did))
 
-    @app.post("/api/confirmations/{did}/reject", response_model=Decision)
-    def reject(did: str, req: Optional[ReasonRequest] = None) -> Decision:
-        return guard(L.reject, did, req.reason if req else "")
+    @app.post("/api/confirmations/{did}/reject", response_model=DecisionView)
+    def reject(did: str, req: Optional[ReasonRequest] = None) -> DecisionView:
+        return dv(guard(L.reject, did, req.reason if req else ""))
 
-    @app.post("/api/positions/by-id/{position_id}/close", response_model=Decision)
-    def close_position_by_id(position_id: str) -> Decision:
-        return guard(L.close_position, position_id)
+    @app.post("/api/positions/by-id/{position_id}/close", response_model=DecisionView)
+    def close_position_by_id(position_id: str) -> DecisionView:
+        return dv(guard(L.close_position, position_id))
 
-    @app.post("/api/positions/{symbol}/close", response_model=Decision)
-    def close_position(symbol: str) -> Decision:
-        return guard(L.close_symbol, symbol)
+    @app.post("/api/positions/{symbol}/close", response_model=DecisionView)
+    def close_position(symbol: str) -> DecisionView:
+        return dv(guard(L.close_symbol, symbol))
 
     # ---------------------------------------------------------------- control
     @app.get("/api/control", response_model=ControlState)
@@ -324,20 +353,101 @@ def create_app(settings: Optional[Settings] = None, components: Optional[Compone
 
 
 async def _run(st: AppState) -> None:
+    """One loop task. A failing tick is an alert, not a crash; repeated failures back off (max 12 intervals)."""
+    fails = 0
     while True:
         try:
             await run_in_threadpool(st.loop.tick)
+            fails = 0
         except AgentStateError:
+            st.want_running = False
             return
-        except Exception:  # keep the loop alive; surface it as an alert
+        except Exception as e:  # keep the loop alive; surface it as an alert
+            fails += 1
+            st.loop.last_error = f"{type(e).__name__}: {e}"
             log.exception("tick failed")
-            st.loop._alert(AlertLevel.WARNING, "TICK_FAILED", "a loop cycle failed; see server log")
+            st.loop._alert(AlertLevel.WARNING, "TICK_FAILED", f"a loop cycle failed ({type(e).__name__}); retrying with backoff")
         if st.loop.finished:
+            st.want_running = False
             return
-        await asyncio.sleep(st.interval)
+        await asyncio.sleep(st.interval * min(2 ** fails, 12) if fails else st.interval)
+
+
+async def _supervise(st: AppState) -> None:
+    """Watchdog: restarts the loop task if it crashes, with exponential backoff (1s .. 60s)."""
+    backoff = 1.0
+    while st.want_running:
+        try:
+            await _run(st)
+            return
+        except asyncio.CancelledError:
+            raise
+        except BaseException as e:  # noqa: BLE001 - anything that escaped _run
+            st.loop.restarts += 1
+            st.loop.last_error = f"{type(e).__name__}: {e}"
+            log.exception("loop task crashed; restarting in %.0fs", backoff)
+            st.loop._alert(AlertLevel.CRITICAL, "LOOP_RESTARTED", f"loop crashed ({type(e).__name__}); restart #{st.loop.restarts} in {backoff:.0f}s")
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 60.0)
+
+
+def _start_task(st: AppState) -> None:
+    st.want_running = True
+    if st.task is None or st.task.done():
+        st.task = asyncio.create_task(_supervise(st))
+
+
+async def _monitor(st: AppState) -> None:
+    """Stall alert: no tick for `stall_intervals` intervals while the loop should run. Also restarts a dead task."""
+    while True:
+        await asyncio.sleep(max(st.interval, 0.05))
+        try:
+            check_stall(st)
+            if st.want_running and (st.task is None or st.task.done()) and not st.loop.finished and st.loop.symbol:
+                st.loop.restarts += 1
+                st.loop._alert(AlertLevel.WARNING, "LOOP_RESTARTED", "loop task was not running; restarted by the watchdog")
+                _start_task(st)
+        except Exception:  # pragma: no cover - the monitor must never die
+            log.exception("monitor failed")
+
+
+def check_stall(st: AppState) -> bool:
+    if not st.want_running:
+        st.stall_alerted = False
+        return False
+    last = st.loop.last_tick_at or st.loop.started_at
+    limit = st.settings.stall_intervals * st.interval
+    stalled = (utc_now() - last).total_seconds() > limit
+    if stalled and not st.stall_alerted:
+        st.loop._alert(AlertLevel.CRITICAL, "LOOP_STALLED", f"no tick for more than {limit:.0f}s ({st.settings.stall_intervals:g} intervals)")
+    st.stall_alerted = stalled
+    return stalled
+
+
+def _autostart(st: AppState) -> None:
+    """LOOP_AUTOSTART=true: resume the saved agent (restored by the loop) or start the default demo agent
+    (Auto, DEFAULT_AGENT_SYMBOL; PAPER/LIVE default NVDAB), then start the loop. Never overrides an emergency stop
+    (the loop runs; exits/flatten work, BUYs stay blocked until reset)."""
+    L = st.loop
+    if L.symbol is None:
+        sym = st.settings.default_agent_symbol or ("NVDAB" if not L.sim else None)
+        if sym:
+            try:
+                L.activate_auto(AutoConfig(symbol=sym, capital=L.book.starting_capital, activation=ActivationMode.AUTO_EXECUTE))
+            except Exception as e:
+                L._alert(AlertLevel.WARNING, "AUTOSTART", f"could not start the default agent on {sym}: {e}")
+    if L.symbol is None:
+        L._alert(AlertLevel.WARNING, "AUTOSTART", "LOOP_AUTOSTART is on but no agent is saved or configured; loop not started")
+        return
+    asyncio.run_coroutine_threadsafe(_astart(st), st.aio).result(timeout=10)
+
+
+async def _astart(st: AppState) -> None:
+    _start_task(st)
 
 
 async def _stop_task(st: AppState) -> None:
+    st.want_running = False
     t, st.task = st.task, None
     if t and not t.done():
         t.cancel()

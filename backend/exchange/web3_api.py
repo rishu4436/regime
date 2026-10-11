@@ -186,3 +186,43 @@ class Web3ApiClient:
         if isinstance(data, dict):
             data = [data]
         return data or []
+
+
+PUBLIC_BASE_URL = "https://www.binance.com/bapi/defi"
+PUBLIC_HEADERS = {"Accept-Encoding": "identity", "User-Agent": "binance-web3/1.1 (Skill)"}
+
+
+class PublicRwaClient:
+    """No-key public RWA endpoints used by the official binance-tokenized-securities-info skill (v1.1).
+    They work from regions where the HMAC Web3 API returns 40304. Envelope: {code: "000000", data, success}."""
+
+    def __init__(self, base_url: str = PUBLIC_BASE_URL, http: Optional[httpx.Client] = None,
+                 timeout_s: float = 8.0) -> None:
+        self._base = base_url.rstrip("/")
+        self._http = http or httpx.Client(timeout=timeout_s, headers=PUBLIC_HEADERS)
+
+    def _get(self, path: str, **params: Any) -> Any:
+        resp = self._http.get(self._base + path, params={k: v for k, v in params.items() if v is not None},
+                              headers=PUBLIC_HEADERS)
+        try:
+            payload = resp.json()
+        except ValueError:
+            payload = None
+        if resp.status_code >= 400 or not isinstance(payload, dict) or payload.get("success") is False:
+            code = payload.get("code") if isinstance(payload, dict) else None
+            try:
+                code = int(code) if code is not None else None
+            except (TypeError, ValueError):
+                code = None
+            raise Web3ApiError(code, f"public RWA HTTP {resp.status_code}", resp.status_code)
+        return payload.get("data")
+
+    def rwa_dynamic(self, chain_id: str, contract_address: str) -> dict:
+        """GET v2/.../rwa/dynamic/ai -> {tokenInfo{price, sharesMultiplier}, stockInfo{price}, statusInfo, limitInfo}."""
+        return self._get("/v2/public/wallet-direct/buw/wallet/market/token/rwa/dynamic/ai",
+                         chainId=chain_id, contractAddress=contract_address) or {}
+
+    def asset_market_status(self, chain_id: str, contract_address: str) -> dict:
+        """GET v1/.../rwa/asset/market/status/ai -> {openState, marketStatus, reasonCode, reasonMsg, nextOpenTime, ...}."""
+        return self._get("/v1/public/wallet-direct/buw/wallet/market/token/rwa/asset/market/status/ai",
+                         chainId=chain_id, contractAddress=contract_address) or {}

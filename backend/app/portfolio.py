@@ -98,6 +98,26 @@ class PortfolioBook:
         self.closed.append(t)
         return t
 
+    # ------------------------------------------------------------------ persistence (24/7 restarts, PAPER/LIVE)
+    def snapshot(self) -> dict:
+        return {
+            "starting_capital": self.starting_capital, "cash": self.cash, "realized_pnl": self.realized_pnl,
+            "lots": [{"position": l.position.model_dump(mode="json"), "cost": l.cost} for l in self.lots],
+            "bars_since_exit": dict(self.bars_since_exit), "daily_pnl": self.daily_pnl, "trades_today": self.trades_today,
+            "day": self._day.isoformat() if self._day else None, "prices": dict(self.prices),
+        }
+
+    def restore(self, d: dict) -> None:
+        self.starting_capital = float(d.get("starting_capital", self.starting_capital))
+        self.cash = float(d.get("cash", self.cash))
+        self.realized_pnl = float(d.get("realized_pnl", 0.0))
+        self.lots = [Lot(Position.model_validate(x["position"]), float(x["cost"])) for x in d.get("lots", [])]
+        self.bars_since_exit = {k: int(v) for k, v in d.get("bars_since_exit", {}).items()}
+        self.daily_pnl = float(d.get("daily_pnl", 0.0))
+        self.trades_today = int(d.get("trades_today", 0))
+        self._day = date.fromisoformat(d["day"]) if d.get("day") else None
+        self.prices = {k: float(v) for k, v in d.get("prices", {}).items()}
+
     def lots_for(self, symbol: str) -> list[Lot]:
         return [lot for lot in self.lots if lot.position.symbol == symbol]
 

@@ -1,7 +1,7 @@
 // Real client for Bot 6's FastAPI (backend/app). Paths and payloads follow backend/app/API.md exactly.
 import type { Alert, AutoConfig, BacktestRequest, BacktestResult, Candle, ControlState, Decision, Event, LoopState, ManualStrategy,
   PerformanceSummary, Portfolio, RegimeAnalysis, StatusSnapshot, StrategySelection, SystemInfo, Timeframe, TokenInfo, TraderStyle } from "../contracts";
-import { ApiError, type ActivateManualBody, type ApiClient, type ParseResult, type PresetsTable } from "./types";
+import { ApiError, type ActivateManualBody, type ApiClient, type LiveGate, type ParseResult, type PresetsTable, type WalletInfo } from "./types";
 
 const enc = encodeURIComponent;
 
@@ -31,6 +31,11 @@ export class HttpApi implements ApiClient {
     return res.json() as Promise<T>;
   }
   private get<T>(p: string) { return this.req<T>("GET", p); }
+  /** For endpoints a backend may not have yet: 404/405/501 -> null so the UI can say "not available". */
+  private async optional<T>(p: string): Promise<T | null> {
+    try { return await this.get<T>(p); }
+    catch (e) { if (e instanceof ApiError && [404, 405, 501].includes(e.status)) return null; throw e; }
+  }
   private post<T>(p: string, body: unknown = {}) { return this.req<T>("POST", p, body); }
 
   health() { return this.get<{ status: string; contracts_version?: string; trading_mode?: string }>("/health"); }
@@ -65,6 +70,20 @@ export class HttpApi implements ApiClient {
   getDecisions(limit = 50, symbol?: string) { return this.get<Decision[]>(`/api/decisions?limit=${limit}${symbol ? `&symbol=${enc(symbol)}` : ""}`); }
   getDecision(id: string) { return this.get<Decision>(`/api/decisions/${enc(id)}`); }
   getConfirmations() { return this.get<Decision[]>("/api/confirmations"); }
+  /** Live gate: GET /api/live/status (bot6/live), else the copy inside /api/system, else null (UI derives it). */
+  async getLiveGate() {
+    const g = await this.optional<LiveGate>("/api/live/status");
+    if (g) return g;
+    const sys = await this.system().catch(() => null) as (SystemInfo & { live?: LiveGate; live_status?: LiveGate; live_gate?: LiveGate }) | null;
+    return sys?.live ?? sys?.live_status ?? sys?.live_gate ?? null;
+  }
+  /** GET /api/wallet (bot6/live), else the copy inside /api/system, else null ("not available"). */
+  async getWallet() {
+    const w = await this.optional<WalletInfo>("/api/wallet");
+    if (w) return w;
+    const sys = await this.system().catch(() => null) as (SystemInfo & { wallet?: WalletInfo }) | null;
+    return sys?.wallet ?? null;
+  }
   approve(id: string) { return this.post<Decision>(`/api/confirmations/${enc(id)}/approve`); }
   reject(id: string, reason?: string) { return this.post<Decision>(`/api/confirmations/${enc(id)}/reject`, reason ? { reason } : {}); }
   closePositionById(id: string) { return this.post<Decision>(`/api/positions/by-id/${enc(id)}/close`); }

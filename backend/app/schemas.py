@@ -1,9 +1,9 @@
 """App-only request/response bodies. SystemInfo / LoopState / BacktestRequest / Alert / PerformanceSummary live in backend.contracts (v0.2)."""
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field  # noqa: F401
+from pydantic import BaseModel, ConfigDict, Field, model_serializer  # noqa: F401
 
 from backend.contracts import AutoConfig, ManualStrategy, PresetName, Regime, TraderStyle
 
@@ -63,3 +63,112 @@ class PresetsTable(_M):
 
     source: str
     entries: list[PresetsTableEntry]
+
+
+# ---------------------------------------------------------------- LIVE / wallet (app-side until the contract has them)
+from datetime import datetime  # noqa: E402
+
+from backend.contracts import Decision, ExecutionResult, LoopState, Portfolio, Position, StatusSnapshot, SystemInfo, TokenInfo  # noqa: E402
+
+
+class ExecutionView(ExecutionResult):
+    """ExecutionResult + LIVE-only UI fields. Keys are only emitted when set, so SIM/PAPER payloads stay identical to
+    the contract model. Contract request: add these as optional fields to ExecutionResult."""
+    explorer_url: Optional[str] = None       # https://bscscan.com/tx/<tx_hash>
+    route: Optional[str] = None              # 'SWAP' | 'RFQ' (= path)
+    quote_expires_at: Optional[str] = None   # expiry of the quote that was executed
+    real_funds: Optional[bool] = None        # true in LIVE
+    gas: Optional[Any] = None                # Bot 4 executor extras (real gas from tx-history)
+    price_impact_pct: Optional[float] = None  # percent units, from the executed quote / executor
+    wallet_order_id: Optional[str] = None    # baw market-order id
+
+    @model_serializer(mode="wrap")
+    def _drop_unset_live_fields(self, handler):
+        data = handler(self)
+        if isinstance(data, dict):
+            for k in ("explorer_url", "route", "quote_expires_at", "real_funds", "gas", "price_impact_pct", "wallet_order_id"):
+                if data.get(k) is None:
+                    data.pop(k, None)
+        return data
+
+
+class DecisionView(Decision):
+    execution: Optional[ExecutionView] = None
+
+
+class StatusView(StatusSnapshot):
+    portfolio: "PortfolioView"
+    last_decision: Optional[DecisionView] = None
+    recent_decisions: list[DecisionView] = Field(default_factory=list)
+
+
+class LiveStatus(_M):
+    live_trading_enabled: bool
+    binance_live_enabled: bool
+    risk_allow_live: bool
+    wallet_connected: bool
+    can_trade: bool
+    blocked_reasons: list[str] = Field(default_factory=list)
+    cooldowns: list[dict] = Field(default_factory=list, description="[{symbol, until, code, reason}] after 40367/40369/40374")
+    chain_pending: list[dict] = Field(default_factory=list, description="BUYs submitted and waiting on chain")
+
+
+class SystemInfoView(SystemInfo):
+    """SystemInfo + `live` block. Contract request: add `live: Optional[LiveStatus]` to SystemInfo."""
+    live: LiveStatus
+    agent_identity: Optional[dict] = Field(default=None, description="Bot 5 agent_studio: {erc8004_id, registry, studio_version}")
+
+
+class WalletBalance(_M):
+    symbol: str
+    amount: float
+    usd_value: Optional[float] = None
+
+
+class WalletInfo(_M):
+    """Bot 1 shape. limits always has daily_limit_usdt, daily_used_usdt, per_order_cap_usdt, allowed_tokens (+ any
+    keys Bot 3's risk.live_limits() returns, e.g. daily_remaining_usdt, limit_source)."""
+    provider: str            # 'baw' (LIVE), 'web3_api', 'paper', 'sim'
+    address: Optional[str] = None
+    chain: str = "BSC"
+    chain_id: int = 56
+    connected: bool
+    balances: list[WalletBalance] = Field(default_factory=list)
+    bnb_gas_reserve: Optional[float] = None
+    limits: dict
+    updated_at: datetime
+
+
+class Heartbeat(_M):
+    started_at: datetime
+    uptime_s: float
+    last_tick_at: Optional[datetime] = None
+    seconds_since_tick: Optional[float] = None
+    restarts: int = 0
+    last_error: Optional[str] = None
+    autostart: bool = False
+
+
+class LoopStateView(LoopState):
+    heartbeat: Heartbeat
+
+
+class PositionView(Position):
+    """Position + in-flight flags (Bot 1). pending=true: a LIVE BUY submitted but not yet settled on chain (synthetic
+    position at the quote amount, counted by engine and risk); held_exit = {reason, source} while an exit waits for it."""
+    pending: bool = False
+    client_order_id: Optional[str] = None
+    held_exit: Optional[dict] = None
+
+
+class PortfolioView(Portfolio):
+    positions: list[PositionView] = Field(default_factory=list)
+
+
+class TokenView(TokenInfo):
+    """TokenInfo + token_status (Bot 4 get_token_status as JSON: trading_status, min_order_usdt, reference_price_only,
+    ...); null when the exchange has no status for it."""
+    token_status: Optional[dict] = None
+
+
+StatusView.model_rebuild()

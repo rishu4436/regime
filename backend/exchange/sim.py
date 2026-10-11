@@ -40,12 +40,24 @@ from backend.mocks import MockExchangeClient, generate_candles
 from backend.mocks.exchange import FEE_RATE, RFQ_FEE_RATE
 
 from .errors import (
+    QuoteUnavailable,
     BSTOCK_INVALID_TRADING_TIME,
     ONDO_FROM_USD_AMOUNT_TOO_SMALL,
     ONDO_MARKET_STATE_NOT_TRADABLE,
     RWA_INSUFFICIENT_LIQUIDITY,
 )
+from .status import (
+    QuoteReason,
+    TokenStatus,
+    TokenStatusMixin,
+    TradingStatus,
+    default_min_order_usdt,
+    finalize_status,
+    is_xstock,
+    xstock_enabled,
+)
 from .tokens import DEFAULT_TOKENS
+from .wallet import SimWalletMixin
 
 ONDO_MIN_ORDER_USD = 20.0
 # xStock quotes are RFQ (need userWalletAddress, else 40001); BStock supports SWAP (observed) as well as RFQ.
@@ -63,11 +75,21 @@ def is_us_market_open(now: datetime) -> bool:
     return now.weekday() < 5 and 13 <= now.hour < 20
 
 
+def is_ondo_offhours(now: datetime) -> bool:
+    """Ondo regular/overnight sessions run 24/5; the weekend is the reference-price-only "offhours" session
+    (observed Sun 2026-10-11: marketStatus=offhours, nextOpenTime Mon 00:05 UTC). SIM: Sat/Sun UTC = OFFHOURS."""
+    return now.weekday() >= 5
+
+
+# SIM shares multipliers (real values for the NVDA tokens from rwa_dynamic samples; 1.0 otherwise).
+SIM_SHARES_MULTIPLIER = {"NVDAon": 1.0017152487959898, "NVDAB": 1.000778223752807865}
+
+
 def path_for(token_type: TokenType) -> ExecutionPath:
     return ExecutionPath.RFQ if token_type in RFQ_TYPES else ExecutionPath.SWAP
 
 
-class SimulatedBinanceClient(MockExchangeClient):
+class SimulatedBinanceClient(SimWalletMixin, TokenStatusMixin, MockExchangeClient):
     def __init__(
         self,
         regimes: Optional[dict[str, Regime]] = None,
@@ -79,6 +101,7 @@ class SimulatedBinanceClient(MockExchangeClient):
         enforce_paths: bool = True,
         latency_s: float = 0.0,
         sleep: Optional[Callable[[float], None]] = None,
+        enable_xstock: Optional[bool] = None,
     ) -> None:
         if mode != TradingMode.SIM:
             raise ValueError("SimulatedBinanceClient only runs in SIM mode")
@@ -90,12 +113,56 @@ class SimulatedBinanceClient(MockExchangeClient):
             if s in real else t
             for s, t in self._tokens.items()
         }
+        # Real tokens the shared mocks don't have yet (NVDAB is the 24/7 demo token). SIM start prices:
+        # NVDAB ~230.5 USDT from a real 25 USDT quote on 2026-10-11; TSLAon reuses the mock TSLA start (200).
+        sim_start = {"NVDAB": 230.5, "TSLAon": 200.0}
+        sim_regime = {"NVDAB": Regime.MILD_UPTREND, "TSLAon": Regime.HIGH_VOLATILITY}
+        for sym, t in real.items():
+            if sym not in self._tokens:
+                self._tokens[sym] = t.model_copy(update={"price": sim_start.get(sym, 100.0)})
+                self._regimes.setdefault(sym, sim_regime.get(sym, Regime.SIDEWAYS))
         self.enforce_market_hours = enforce_market_hours
         self.enforce_paths = enforce_paths
         self._latency = latency_s
         self._sleep = sleep
         self._replay_index: Optional[int] = None
         self._series_cache: dict[tuple, list[Candle]] = {}
+        self.enable_xstock = xstock_enabled() if enable_xstock is None else enable_xstock
+        self._quote_meta = {}
+        self._status_override: dict[str, TradingStatus] = {}
+
+    # ------------------------------------------------------------------ token status
+    def set_trading_status(self, symbol: str, status: Optional[TradingStatus]) -> None:
+        """Force a status for scenarios/tests (None clears)."""
+        if status is None:
+            self._status_override.pop(symbol, None)
+        else:
+            self._status_override[symbol] = status
+
+    def get_token_status(self, symbol: str) -> TokenStatus:
+        """SIM emulation of the real statuses: bStock TRADING 24/7; Ondo OFFHOURS on weekends (TRADING otherwise);
+        xStock NO_LIQUIDITY (+ xstock_disabled) unless enabled; enforce_market_hours=True -> CLOSED outside
+        13:00-20:00 UTC weekdays. Ondo min order 20 USDT, others 10."""
+        tok = self._token(symbol)
+        now = self._clock()
+        if symbol in self._status_override:
+            status = self._status_override[symbol]
+        elif is_xstock(symbol, tok.token_type):
+            status = TradingStatus.TRADING if self.enable_xstock else TradingStatus.NO_LIQUIDITY
+        elif self.enforce_market_hours and tok.token_type in MARKET_HOURS_TYPES and not is_us_market_open(now):
+            status = TradingStatus.CLOSED
+        elif tok.token_type == TokenType.ONDO and is_ondo_offhours(now):
+            status = TradingStatus.OFFHOURS
+        else:
+            status = TradingStatus.TRADING
+        price = self.get_price(symbol)
+        mult = SIM_SHARES_MULTIPLIER.get(symbol, 1.0)
+        st = TokenStatus(symbol=symbol, token_type=tok.token_type.value, trading_status=status, tradable=True,
+                         min_order_usdt=default_min_order_usdt(tok.token_type), shares_multiplier=mult,
+                         reference_price=price / mult, price=price,
+                         market_status="offhours" if status == TradingStatus.OFFHOURS else None,
+                         source="sim", checked_at=now)
+        return finalize_status(st, self.enable_xstock)
 
     # ------------------------------------------------------------------ replay
     @property
@@ -153,6 +220,9 @@ class SimulatedBinanceClient(MockExchangeClient):
 
     def get_quote(self, symbol: str, side: OrderSide, notional: float, path: Optional[ExecutionPath] = None) -> Quote:
         tok = self._token(symbol)
+        if is_xstock(symbol, tok.token_type) and not self.enable_xstock:
+            raise QuoteUnavailable(f"{symbol}: xStock disabled (zero BSC liquidity); set BINANCE_ENABLE_XSTOCK=true",
+                                   reason=QuoteReason.XSTOCK_DISABLED.value)
         self._maybe_sleep()
         route = path or path_for(tok.token_type)
         price = self.get_price(symbol)
@@ -167,6 +237,7 @@ class SimulatedBinanceClient(MockExchangeClient):
             fee=round(notional * fee_rate, 8), created_at=now, expires_at=now + timedelta(seconds=QUOTE_TTL_SECONDS),
         )
         self._quotes[q.quote_id] = q
+        self._record_quote_meta(q, self.get_token_status(symbol), price)
         return q
 
     def _venue_check(self, order: OrderRequest, quote: Quote, path: ExecutionPath) -> Optional[ExecutionResult]:
@@ -190,11 +261,11 @@ class SimulatedBinanceClient(MockExchangeClient):
             return reject(f"{code} market closed for {order.symbol}")
         return None
 
-    def execute_swap(self, order: OrderRequest, quote: Quote) -> ExecutionResult:
+    def execute_swap(self, order: OrderRequest, quote: Quote, max_slippage_pct: Optional[float] = None) -> ExecutionResult:
         self._maybe_sleep()
         return self._venue_check(order, quote, ExecutionPath.SWAP) or self._finish(order, quote, ExecutionPath.SWAP)
 
-    def execute_rfq(self, order: OrderRequest, quote: Quote) -> ExecutionResult:
+    def execute_rfq(self, order: OrderRequest, quote: Quote, max_slippage_pct: Optional[float] = None) -> ExecutionResult:
         self._maybe_sleep()
         return self._venue_check(order, quote, ExecutionPath.RFQ) or self._finish(order, quote, ExecutionPath.RFQ)
 

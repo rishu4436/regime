@@ -5,16 +5,16 @@ import { defaultStrategy } from "./strategy";
 
 const numAfter = (t: string, re: RegExp) => { const m = t.match(re); const g = m?.slice(1).find((x) => x != null); return g != null ? parseFloat(g.replace(/,/g, "")) : undefined; };
 
-export function parseStrategyText(text: string, defaultSymbol = "NVDAon"): ManualStrategy | AutoConfig {
+export function parseStrategyText(text: string, defaultSymbol = "NVDAB"): ManualStrategy | AutoConfig {
   const t = text.toLowerCase();
-  const symbol = /tsla|tesla/.test(t) ? "TSLAx" : /aapl|apple/.test(t) ? "AAPLB" : /nvda|nvidia/.test(t) ? "NVDAon" : defaultSymbol;
+  const symbol = /tsla|tesla/.test(t) ? "TSLAx" : /aapl|apple/.test(t) ? "AAPLB" : /ondo|nvdaon/.test(t) ? "NVDAon" : /nvda|nvidia/.test(t) ? "NVDAB" : defaultSymbol;
   const capital = numAfter(t, /\$\s?(\d[\d,]*)|(\d[\d,]*)\s*(?:usdt|usd|dollars)/);
 
   // Auto Mode: "auto", "let the agent decide", a style word with no indicator rules
   const style: TraderStyle | undefined = /patient|accumulat|long[- ]term/.test(t) ? "PATIENT" : /active|scalp|aggressive/.test(t) ? "ACTIVE" : /balanced|swing/.test(t) ? "BALANCED" : undefined;
   const hasRules = /rsi|sma|ema|macd|bollinger|\bbb\b|volume|breakout|take profit|stop loss|trailing/.test(t);
   if (/\bauto\b(?![- ]?execut)|auto mode|agent decide|you decide|pick for me/.test(t) || (style && !hasRules)) {
-    return { symbol, style: style ?? "BALANCED", capital: capital ?? 10000, activation: /auto[- ]?execute|without asking/.test(t) ? "AUTO_EXECUTE" : "CONFIRMATION" };
+    return { symbol, style: style ?? "BALANCED", capital: capital ?? 10000, activation: /\b(confirm|ask me|approve|approval)\b/.test(t) && !/without (asking|confirm)/.test(t) ? "CONFIRMATION" : "AUTO_EXECUTE" };
   }
 
   const s = defaultStrategy();
@@ -53,6 +53,7 @@ export function parseStrategyText(text: string, defaultSymbol = "NVDAon"): Manua
   if (cool != null) s.risk.cooldown_bars = cool;
   if (/market hours|us session|trading hours/.test(t)) s.filters.market_hours.enabled = true;
   if (/(above[- ]average|high|min(?:imum)?) volume (filter|only)|only .*high volume/.test(t)) s.filters.min_volume.enabled = true;
+  if (/\b(confirm|ask me|approve|approval)\b/.test(t) && !/without (asking|confirm)/.test(t)) s.activation = "CONFIRMATION";
   if (/auto[- ]?execute|without (asking|confirmation)/.test(t)) s.activation = "AUTO_EXECUTE";
   return s;
 }
