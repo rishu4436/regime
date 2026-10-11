@@ -6,7 +6,7 @@ Binance Agentic Wallet, with hard safety limits and a plain-English reason for e
 Built for BNB Hack: Tokenized Stocks Edition. Tokens: **NVDAB** (default) and other bStocks, Ondo tokens (`…on`) during
 US market hours; xStocks (`…x`) are off by default.
 
-![Regime dashboard: Auto mode on NVDAB with the market regime, active strategy and the reason for the last decision](docs/screenshots/dashboard.png)
+![Regime dashboard: Auto mode on NVDAB running on its own, with the status bar (Pause, Emergency stop) at the top, P&L, the price chart with trades, and the market regime and active strategy](docs/screenshots/dashboard.png)
 
 **Live on mainnet:** Regime's first autonomous trade bought 10 USDT of NVDAB on 11 Oct 2026 at 09:25 IST.
 [View it on BscScan](https://bscscan.com/tx/0x228c02688cd2a8170b38dba6abfdb4f95fca9e9e22ae6bed6a191d0b88a19f22).
@@ -158,7 +158,7 @@ Every rule above is covered by tests in [`backend/risk/tests/`](backend/risk/tes
 |---|---|
 | ![Trade explanation](docs/screenshots/trade-explanation.png)<br/>**Trade explanation:** every decision with its plain-English reason. | ![Auto mode](docs/screenshots/auto-mode.png)<br/>**Auto mode:** the regime picks one preset for your trading style. |
 | ![Manual strategy builder](docs/screenshots/manual-builder.png)<br/>**Manual builder:** your own entry and exit rules, no code. | ![Backtest](docs/screenshots/backtest.png)<br/>**Backtest:** the same engine run on past candles before going live. |
-| ![Trading limits](docs/screenshots/limits.png)<br/>**Trading limits:** set order size and spending caps from the dashboard. | ![Agent Studio](docs/screenshots/agent-studio.png)<br/>**Agent Studio:** register Regime's public ERC-8004 identity on BNB Chain. |
+| ![Trading limits](docs/screenshots/limits.png)<br/>**Trading limits:** its own page for order size, spending caps and the decision loop. Pause and Emergency stop stay in the status bar on every page. | ![Agent identity](docs/screenshots/agent-studio.png)<br/>**Agent identity:** its own page to register Regime's public ERC-8004 identity on BNB Chain (Agent Studio). |
 
 ## Architecture
 
