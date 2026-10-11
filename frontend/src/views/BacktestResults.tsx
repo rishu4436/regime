@@ -15,6 +15,15 @@ export function BacktestResults({ run, loading }: { run: BacktestRun | null; loa
     { time: t.entry_time, type: "BUY" as const, text: "" },
     ...(t.exit_time ? [{ time: t.exit_time, type: "SELL" as const, text: t.exit_reason ? EXIT_SHORT[t.exit_reason] : "" }] : []),
   ]), [run]);
+  // Backends without /api/candles?history=true return the loop-pinned (shorter) series: show only the trades the
+  // chart covers instead of piling later markers onto the last bar, and say so.
+  const coverage = useMemo(() => {
+    const c = run?.candles ?? [], eq = run?.result.equity_curve ?? [];
+    if (!c.length || !eq.length) return null;
+    const lastBar = Date.parse(c[c.length - 1].timestamp), lastEq = Date.parse(eq[eq.length - 1].timestamp);
+    return lastEq > lastBar ? { lastBar, missing: eq.filter((p) => Date.parse(p.timestamp) > lastBar).length } : null;
+  }, [run]);
+  const shownMarkers = useMemo(() => coverage ? markers.filter((m) => Date.parse(m.time) <= coverage.lastBar) : markers, [markers, coverage]);
 
   if (!run) {
     return (
@@ -47,7 +56,8 @@ ${filters.length ? `Filters: ${filters.join(", ")}\n` : ""}Result: ${pct(r.total
       </div>
       <Card title={<>Price & trades <span className="muted small" style={{ fontWeight: 400 }}>{r.symbol} · {run.candles.length} bars</span></>}
         extra={<div className="legend"><span><i style={{ background: "#22c55e" }} />Buy</span><span><i style={{ background: "#f87171" }} />Sell · TP/SL/TS(trail)/RSI/MACD</span></div>}>
-        <PriceChart candles={run.candles} markers={markers} height={320} />
+        <PriceChart candles={run.candles} markers={shownMarkers} height={320} />
+        {coverage && <div className="note">The chart stops {coverage.missing} bars before the end of the backtest (this backend doesn't serve <code>/api/candles?history=true</code> yet); trades after that aren't drawn.</div>}
       </Card>
       <Card title="Equity curve" extra={<span className={`small ${cls(r.total_return_pct)}`}>{usd(r.final_equity)}</span>}>
         <EquityChart points={r.equity_curve ?? []} baseline={r.initial_capital} height={190} />
