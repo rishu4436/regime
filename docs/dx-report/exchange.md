@@ -1,9 +1,9 @@
 # Binance Web3 API and Agentic Wallet
 
-*Part of the Developer Experience Report for team `teamwork` (BNB Hack: Tokenized Stocks). Written 11 Oct 2026 by the
+*Part of the Developer Experience Report for **Regime**, our autonomous tokenized-stock agent (BNB Hack: Tokenized Stocks). Written 11 Oct 2026 by the
 exchange-layer owner (`backend/exchange`). We only list what we hit ourselves. For each item we say whether the evidence is
-a **live call**, the **`baw` 1.10.0 CLI source/help**, or the **docs**. As of writing, no real-funds swap had been made, so
-anything about fills is from the CLI source and docs, not from an observed trade.*
+a **live call**, the **`baw` 1.10.0 CLI source/help**, or the **docs**. Most of this was written before the first real-funds swap. Regime's first
+autonomous mainnet trade (10 USDT into NVDAB on 11 Oct 2026, 09:25 IST) is [0x228c…9f22 on BscScan](https://bscscan.com/tx/0x228c02688cd2a8170b38dba6abfdb4f95fca9e9e22ae6bed6a191d0b88a19f22).*
 
 ## What we built on
 
