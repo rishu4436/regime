@@ -30,7 +30,8 @@ export interface ApiClient {
   system(): Promise<SystemInfo>;
   // market data
   getTokens(q?: string): Promise<TokenInfo[]>;
-  getCandles(symbol: string, timeframe?: Timeframe, limit?: number): Promise<Candle[]>;
+  /** Default: SIM candles pinned to the loop's current bar. `history: true` = the full seeded series /api/backtest runs on. */
+  getCandles(symbol: string, timeframe?: Timeframe, limit?: number, opts?: { history?: boolean }): Promise<Candle[]>;
   getPrice(symbol: string): Promise<{ symbol: string; price: number }>;
   getRegime(symbol: string, timeframe?: Timeframe): Promise<RegimeAnalysis>;
   getSelection(symbol: string, style?: TraderStyle, timeframe?: Timeframe): Promise<StrategySelection>;
@@ -45,6 +46,7 @@ export interface ApiClient {
   validateStrategy(json: unknown): Promise<ManualStrategy>;
   backtest(req: BacktestRequest): Promise<BacktestResult>;
   /** Candles for the backtest chart (BacktestResult has none): GET /api/candles with the same limit. */
+  /** Candles for the backtest chart: getCandles(..., { history: true }). An older backend ignores the flag (shorter, pinned series). */
   backtestCandles(symbol: string, timeframe?: Timeframe, limit?: number): Promise<Candle[]>;
   // agent & loop
   activateManual(body: ActivateManualBody): Promise<StatusSnapshot>;

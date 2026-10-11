@@ -36,7 +36,9 @@ export class HttpApi implements ApiClient {
   health() { return this.get<{ status: string; contracts_version?: string; trading_mode?: string }>("/health"); }
   system() { return this.get<SystemInfo>("/api/system"); }
   getTokens(q = "") { return this.get<TokenInfo[]>(`/api/tokens?q=${enc(q)}`); }
-  getCandles(symbol: string, timeframe: Timeframe = "1h", limit = 200) { return this.get<Candle[]>(`/api/candles/${enc(symbol)}?timeframe=${timeframe}&limit=${limit}`); }
+  getCandles(symbol: string, timeframe: Timeframe = "1h", limit = 200, opts?: { history?: boolean }) {
+    return this.get<Candle[]>(`/api/candles/${enc(symbol)}?timeframe=${timeframe}&limit=${limit}${opts?.history ? "&history=true" : ""}`);
+  }
   getPrice(symbol: string) { return this.get<{ symbol: string; price: number }>(`/api/price/${enc(symbol)}`); }
   getRegime(symbol: string, timeframe: Timeframe = "1h") { return this.get<RegimeAnalysis>(`/api/regime/${enc(symbol)}?timeframe=${timeframe}`); }
   getSelection(symbol: string, style: TraderStyle = "BALANCED", timeframe: Timeframe = "1h") {
@@ -50,7 +52,7 @@ export class HttpApi implements ApiClient {
   deleteStrategy(id: string) { return this.req<{ deleted: string }>("DELETE", `/api/strategies/${enc(id)}`); }
   validateStrategy(json: unknown) { return this.post<ManualStrategy>("/api/strategies/validate", json); }
   backtest(r: BacktestRequest) { return this.post<BacktestResult>("/api/backtest", r); }
-  backtestCandles(symbol: string, timeframe: Timeframe = "1h", limit = 500) { return this.getCandles(symbol, timeframe, limit); }
+  backtestCandles(symbol: string, timeframe: Timeframe = "1h", limit = 500) { return this.getCandles(symbol, timeframe, limit, { history: true }); }
   activateManual(body: ActivateManualBody) { return this.post<StatusSnapshot>("/api/manual/activate", body); }
   activateAuto(c: AutoConfig) { return this.post<StatusSnapshot>("/api/auto/activate", c); }
   deactivate() { return this.post<StatusSnapshot>("/api/agent/deactivate"); }
