@@ -23,7 +23,7 @@ about live fills come from the `baw` CLI source and docs, and every section mark
 | [Binance Web3 API and Agentic Wallet](exchange.md) | What we built on the Web3 API and `baw`, and 14 pain points with our workarounds and suggested fixes |
 | [Strategy engine](strategy.md) | Indicators, regimes, presets, backtester, bugs fixed relative to the reference simulator, and what real mainnet candles broke |
 | [Risk control](risk.md) | The LIVE risk profile, caps vs hard gates, safety layers under the wallet's own limits, pending orders, risk-side pain points |
-| [Integration and monitoring](integration.md) | The trading loop, in-flight order handling, SIM/PAPER/LIVE separation, e2e tests, run scripts *(being written)* |
+| [Integration and monitoring](integration.md) | The trading loop, in-flight order handling, SIM/PAPER/LIVE separation, e2e tests, run scripts |
 | [Product and UX](ux.md) | How the dashboard shows whether it is live, whether it is alive, why it (didn't) trade, and who set each limit |
 | [Demo video script](../demo-script.md) | The 4-minute demo walkthrough |
 
