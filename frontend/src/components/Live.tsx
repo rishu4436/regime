@@ -55,12 +55,15 @@ export function SessionBanner() {
 export function AgentIdentityCard() {
   const { system, wallet } = useLive();
   if (!system) return <Card title="Agent identity"><Skeleton h={60} /></Card>;
-  const id = (system as typeof system & { agent_identity?: { erc8004_id?: string | number | null; registry?: string | null; studio_version?: string | null } | null }).agent_identity;
+  const id = (system as typeof system & { agent_identity?: { erc8004_id?: string | number | null; registry?: string | null; studio_version?: string | null; network?: string | null; explorer_url?: string | null } | null }).agent_identity;
   return (
     <Card title="Agent identity" extra={<span className="pill">BNB Agent Studio · ERC-8004</span>}>
       {!id && <div className="small muted" style={{ marginBottom: 8 }}>Agent Studio identity: <b>not registered yet</b></div>}
       <div className="kv">
-        <span className="k">ERC-8004 id</span><span className="mono">{id?.erc8004_id ?? (id ? <span className="faint">placeholder</span> : NA)}</span>
+        <span className="k">ERC-8004 id</span><span className="mono">{id?.erc8004_id != null
+          ? (id.explorer_url ? <a href={id.explorer_url} target="_blank" rel="noreferrer" title="View on 8004scan">{String(id.erc8004_id)} ↗</a> : String(id.erc8004_id))
+          : (id ? <span className="faint">placeholder</span> : NA)}</span>
+        <span className="k">Network</span><span className="small">{id?.network ?? NA}</span>
         <span className="k">Registry</span><span className="small">{id?.registry ?? NA}</span>
         <span className="k">Studio</span><span className="small">{id?.studio_version ?? NA}</span>
         <span className="k">Executes with</span><span><span className="pill">Agentic Wallet (baw)</span>{wallet?.address ? <a className="mono small" style={{ marginLeft: 6 }} href={bscAddr(wallet.address)} target="_blank" rel="noreferrer">{shortHex(wallet.address)}</a> : null}</span>

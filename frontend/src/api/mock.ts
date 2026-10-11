@@ -85,7 +85,7 @@ export class MockApi implements ApiClient {
   health() { return ok({ status: "ok", contracts_version: CONTRACTS_VERSION, trading_mode: MODE }); }
   system() {
     return ok<SystemInfo & { agent_identity: unknown }>({ trading_mode: MODE, live_enabled: LIVE, contracts_version: CONTRACTS_VERSION, sim_seed: LIVE ? null : 42,
-      agent_identity: { erc8004_id: null, registry: "placeholder (mock)", studio_version: "mock" },
+      agent_identity: { erc8004_id: "0 (placeholder)", registry: "ERC-8004 Identity Registry (placeholder)", studio_version: "mock", network: "BSC Testnet (placeholder)", explorer_url: "https://8004scan.io" },
       components: { engine: "mock:browser", risk: "mock:browser", exchange: LIVE ? "mock:LiveBinanceClient(agentic_wallet, demo)" : "mock:browser", explainer: "mock:template" } });
   }
   // ------------------------------------------------------------------ live / wallet (requested endpoints, mocked)
