@@ -6,6 +6,7 @@ timer (`/api/loop/start`) or on demand (`/api/loop/tick`, used by the e2e tests)
 """
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections import OrderedDict, deque
@@ -25,6 +26,7 @@ from .events import EventBus
 from .exits import check_protective_exit, exit_reason_of, trailing_level
 from .feed import PollingFeed, ReplayFeed
 from .fallbacks import DAILY_LOSS_LIMIT_PCT
+from . import limits as limitsmod
 from . import live as livemod
 from .portfolio import Lot, PortfolioBook
 from .settings import Settings
@@ -33,6 +35,8 @@ from .wiring import Components, call_with_supported, supported_kwargs
 
 WALLET_BACKOFF_S = (60.0, 120.0, 300.0)  # LIVE wallet read failed for a network reason: next tries after 60 s, 120 s, then every 300 s
 ORDER_READ_REUSE_S = 20.0  # the pre-order wallet read is reused for the rest of that order (risk pass 1 + pass 2)
+log = logging.getLogger("backend.app.loop")
+
 SESSION_PAUSE_REASON = "Wallet session expired: click Reconnect wallet"  # the pause this app sets (auto-cleared on sign-in)
 SESSION_PAUSE_REASONS = (SESSION_PAUSE_REASON, "Wallet session expired: re-scan the baw QR code, then resume")
 PENDING_EXIT = "pending_exit"        # exit held while the BUY settles on chain (Bot 1 / Bot 5 code)
@@ -136,6 +140,7 @@ class TradingLoop:
             if not self.allow_live:
                 self._alert(AlertLevel.WARNING, "LIVE_MODE", "LIVE risk switch is off (allow_live=False, set RISK_ALLOW_LIVE=true): "
                             "every BUY will be blocked")
+        self._init_limits()
         self._restore()
         if not self.sim:  # the curve starts at the SAME baseline as /api/portfolio (restored state / wallet USDT)
             self._rebase_performance()
@@ -872,10 +877,17 @@ class TradingLoop:
         if cfg is not None and hasattr(cfg, "max_order_usdt"):
             cap = livemod.risk_live_limits(self.c.risk, pf, livemod.make_live_context(
                 wallet_limits=self.wallet_settings.peek())).get("per_order_cap_usdt")
+            upd: dict = {}
+            if self.user_limits is not None:  # Trading limits panel: Auto's size cap follows the user's order size
+                size_pct = limitsmod.engine_size_pct(self.user_limits)
+                if size_pct != getattr(cfg, "max_size_pct", size_pct):
+                    upd["max_size_pct"] = float(size_pct)
             if cap and cap != cfg.max_order_usdt:
+                upd["max_order_usdt"] = float(cap)
+            if upd:
                 try:
                     import dataclasses
-                    eng.live_config = dataclasses.replace(cfg, max_order_usdt=float(cap))
+                    eng.live_config = dataclasses.replace(cfg, **upd)
                 except Exception:
                     pass
         setter = getattr(eng, "set_market_context", None)
@@ -1009,6 +1021,93 @@ class TradingLoop:
                 "updated_at": (self.wcache["read_at"] if self.live else None) or utc_now(),
                 **(self.wallet_cache_info() if self.live else {}),
             }
+
+    # ------------------------------------------------------------------ Trading limits panel (/api/settings/limits)
+    def _init_limits(self) -> None:
+        """Risk owns the limits (Bot 3 set_live_limits); LOG_DIR/limits.json is applied on top at startup."""
+        self.limits_store = limitsmod.LimitsStore(self.s.log_dir)
+        self.limits_fallback = None if limitsmod.has_risk_limits(self.c.risk) else limitsmod.FallbackLimits(self.s, self.c.risk)
+        self.user_limits: Optional[dict] = None  # current panel values once the user changed them (None = defaults)
+        saved = self.limits_store.load()
+        if saved:
+            try:
+                self._limits_call("set", saved, wallet_daily=None)
+                self._after_limits_change("restored from limits.json")
+            except ValueError as e:
+                try:
+                    self._limits_call("reset", wallet_daily=None)
+                    limitsmod.apply_exchange(self.c.exchange, limitsmod.panel(self._limits_call("get", wallet_daily=None)))
+                except Exception:
+                    log.exception("could not restore the default limits")
+                self._alert(AlertLevel.WARNING, "LIMITS", f"saved trading limits ignored ({e}); using the safe defaults")
+
+    def _wallet_limits_for_risk(self) -> Any:
+        """The real wallet's limits (LIVE only): the SIM client's simulated 100 USDT quota must not block a SIM demo."""
+        if not self.live:
+            return None
+        try:
+            return self.wallet_settings.peek()  # the cached read: the API never calls baw
+        except Exception:
+            return None
+
+    def wallet_daily_limit(self) -> Optional[float]:
+        v = getattr(self._wallet_limits_for_risk(), "daily_limit_usdt", None)
+        return float(v) if v is not None else None
+
+    def _limits_call(self, op: str, body: Optional[dict] = None, wallet_daily: Any = "live") -> dict:
+        wl = self._wallet_limits_for_risk() if wallet_daily == "live" else None
+        fb = self.limits_fallback
+        if fb is not None:
+            daily = getattr(wl, "daily_limit_usdt", None)
+            return fb.settings(daily) if op == "get" else fb.reset(daily) if op == "reset" else fb.set(body or {}, daily)
+        r = self.c.risk
+        if op == "get":
+            return dict(r.live_limits_settings(wl))
+        if op == "reset":
+            return dict(r.reset_live_limits(wl))
+        return dict(r.set_live_limits(body or {}, wl))
+
+    def limits_view(self) -> dict:
+        with self.lock:
+            out = self._limits_call("get")
+            out["is_default"] = limitsmod.panel(out) == limitsmod.panel(out.get("defaults") or {})
+            return out
+
+    def set_limits(self, raw: dict) -> dict:
+        """Validate (ValueError -> 422; nothing changes), apply to risk + engine + exchange, save, alert. Never touches
+        pause or the emergency stop."""
+        if not isinstance(raw, dict):
+            raise limitsmod.LimitsError("Send the limits as a JSON object.")
+        with self.lock:
+            prev = limitsmod.panel(self._limits_call("get", wallet_daily=None))
+            out = self._limits_call("set", {k: v for k, v in raw.items() if k not in limitsmod.READ_ONLY})
+            try:  # the exchange can refuse too (Bot 4: BINANCE_LIVE_HARD_MAX_ORDER_USDT): then nothing changes
+                limitsmod.apply_exchange(self.c.exchange, limitsmod.panel(out))
+            except ValueError:
+                self._limits_call("set", prev, wallet_daily=None)
+                limitsmod.apply_exchange(self.c.exchange, prev)
+                raise
+            self._after_limits_change("changed from the dashboard", out)
+            return {**self.limits_view(), "notes": list(out.get("notes") or [])}
+
+    def reset_limits(self) -> dict:
+        with self.lock:
+            out = self._limits_call("reset")
+            self._after_limits_change("reset to the safe defaults", out)
+            return {**self.limits_view(), "notes": list(out.get("notes") or [])}
+
+    def _after_limits_change(self, why: str, out: Optional[dict] = None) -> None:
+        cur = self._limits_call("get", wallet_daily=None)
+        d = limitsmod.panel(cur)
+        is_default = d == limitsmod.panel(cur.get("defaults") or {})
+        limitsmod.apply_settings(self.s, d)
+        applied = [limitsmod.apply_engine(self.c.engine, d), limitsmod.apply_exchange(self.c.exchange, d)]
+        self.user_limits = None if is_default else d
+        self.limits_store.save(None if is_default else d)
+        self._sync_explainer_limits()
+        notes = "; ".join((out or {}).get("notes") or [])
+        self._alert(AlertLevel.INFO, "LIMITS_CHANGED", f"Trading limits {why}: {limitsmod.describe(d)}" + (f" ({notes})" if notes else ""))
+        log.info("limits %s: %s (also applied: %s)", why, d, ", ".join(applied))
 
     def _risk_token_status(self, symbol: Optional[str]) -> Any:
         """Bot 4 token status for `symbol` as Bot 3's TokenStatus (None when unknown / unconvertible)."""

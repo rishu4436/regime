@@ -47,6 +47,10 @@ LIVE switch is opt-in, and the caps default to tiny amounts (25 USDT per order).
 
 ### Optional: on-chain agent identity (ERC-8004)
 This step registers the agent's identity so `/api/system.agent_identity` shows it. It never touches the trading wallet.
+Easiest: use the **Register on-chain** card (inside **Agent identity** on the Dashboard) on the PC running Regime, after
+`pip install -e ".[studio]"` (Windows: `.venv\Scripts\python -m pip install -e ".[studio]"`). It creates the identity
+key in the gitignored `logs/agent_studio_identity.key`, shows the address to fund, then registers. Back that file up.
+The command-line flow below does the same thing:
 1. Create a **new, identity-only** EVM key. Don't use the trading wallet or any wallet holding funds. The command is in
    `backend/agent_studio/README.md`:
    `python -c "from eth_account import Account; a=Account.create(); print(a.address); print(a.key.hex())"`.
