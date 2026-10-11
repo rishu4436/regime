@@ -24,8 +24,8 @@ with the templates as fallback). The BNB Agent Studio identity (ERC-8004) is pre
 
 **1. Get the code**
 ```bash
-git clone https://github.com/rishu4436/teamwork.git
-cd teamwork
+git clone https://github.com/rishu4436/regime.git
+cd regime
 ```
 
 **2. Start it.** One command, run from the repo root, installs everything on the first run (a `.venv` and the dashboard's npm packages) and starts both parts.
