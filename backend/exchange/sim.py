@@ -2,11 +2,15 @@
 
 Market data comes from the coordinator's deterministic mocks (so every bot sees the same candles/prices), while
 the execution rules follow the real API (https://web3.binance.com/en/dev-docs/products/trading-api/introduction):
-- Routing: Ondo (`...on`) and BStock (`...B`) quote as RFQ, xStock (`...x`) as SWAP (`executionMode`).
+- Routing (`executionMode`): Ondo (`...on`) and xStock (`...x`) quote as RFQ, BStock (`...B`) as SWAP.
+  Verified with read-only PAPER quotes on 2026-10-11: an xStock quote without `userWalletAddress` fails with
+  40001 "userWalletAddress is required for RFQ (xStock) quote"; a 25 USDT -> NVDAB quote came back as a SWAP route.
+  (PAPER/LIVE always follow the route's real `executionMode`; Ondo can also come back as a DEX SWAP route.)
 - Quote TTL 30 s; an expired quote returns EXPIRED (real API: QUOTE_EXPIRED 40401).
 - Executing a quote on the wrong path is REJECTED (real API: RFQ routes have no `tx`, SWAP routes have no `rfq`).
 - Ondo minimum order 20 USD (40375 ONDO_FROM_USD_AMOUNT_TOO_SMALL) -> REJECTED.
-- Optional US-market-hours gate (40367 / 40369) and simulated latency, both off by default.
+- Optional US-market-hours gate for tokenized stocks (Ondo 40367, BStock 40369, xStock RFQ 40374 - the code a
+  weekend xStock quote returned) and simulated latency, both off by default.
 - Replay: `set_replay_index(i)` pins the "current" bar to index i of the fixed n_candles-bar series, so
   candles/prices/quotes/fills behave as if time stood at bar i (for bar-by-bar SIM loops).
 Never touches the network and refuses LIVE.
@@ -35,11 +39,23 @@ from backend.contracts import (
 from backend.mocks import MockExchangeClient, generate_candles
 from backend.mocks.exchange import FEE_RATE, RFQ_FEE_RATE
 
-from .errors import BSTOCK_INVALID_TRADING_TIME, ONDO_FROM_USD_AMOUNT_TOO_SMALL, ONDO_MARKET_STATE_NOT_TRADABLE
+from .errors import (
+    BSTOCK_INVALID_TRADING_TIME,
+    ONDO_FROM_USD_AMOUNT_TOO_SMALL,
+    ONDO_MARKET_STATE_NOT_TRADABLE,
+    RWA_INSUFFICIENT_LIQUIDITY,
+)
 from .tokens import DEFAULT_TOKENS
 
 ONDO_MIN_ORDER_USD = 20.0
-RFQ_TYPES = {TokenType.ONDO, TokenType.BSTOCK}
+# xStock quotes are RFQ (need userWalletAddress, else 40001); BStock supports SWAP (observed) as well as RFQ.
+RFQ_TYPES = {TokenType.ONDO, TokenType.XSTOCK}
+MARKET_HOURS_TYPES = {TokenType.ONDO, TokenType.BSTOCK, TokenType.XSTOCK}
+MARKET_CLOSED_CODE = {
+    TokenType.ONDO: ONDO_MARKET_STATE_NOT_TRADABLE,
+    TokenType.BSTOCK: BSTOCK_INVALID_TRADING_TIME,
+    TokenType.XSTOCK: RWA_INSUFFICIENT_LIQUIDITY,
+}
 
 
 def is_us_market_open(now: datetime) -> bool:
@@ -169,8 +185,8 @@ class SimulatedBinanceClient(MockExchangeClient):
         if tok.token_type == TokenType.ONDO and order.side == OrderSide.BUY and quote.notional < ONDO_MIN_ORDER_USD:
             return reject(f"{ONDO_FROM_USD_AMOUNT_TOO_SMALL} ONDO_FROM_USD_AMOUNT_TOO_SMALL: "
                           f"Minimum order amount is {ONDO_MIN_ORDER_USD:.0f} USD")
-        if self.enforce_market_hours and tok.token_type in RFQ_TYPES and not is_us_market_open(now):
-            code = ONDO_MARKET_STATE_NOT_TRADABLE if tok.token_type == TokenType.ONDO else BSTOCK_INVALID_TRADING_TIME
+        if self.enforce_market_hours and tok.token_type in MARKET_HOURS_TYPES and not is_us_market_open(now):
+            code = MARKET_CLOSED_CODE[tok.token_type]
             return reject(f"{code} market closed for {order.symbol}")
         return None
 

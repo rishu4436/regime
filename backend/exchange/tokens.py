@@ -48,6 +48,10 @@ DEFAULT_TOKENS: list[TokenInfo] = [
               contract_address="0x96702be57cd9777f835117a809c7124fe4ec989a", underlying="META", decimals=18),
 ]
 
+# Token types whose /aggregator/quote needs userWalletAddress. xStock quotes are RFQ and fail with 40001
+# "userWalletAddress is required for RFQ (xStock) quote" without one (verified 2026-10-11, read-only PAPER check).
+WALLET_REQUIRED_TYPES = {TokenType.XSTOCK}
+
 PLATFORM_TYPES = {"ondo": TokenType.ONDO, "bstock": TokenType.BSTOCK, "xstock": TokenType.XSTOCK}
 
 

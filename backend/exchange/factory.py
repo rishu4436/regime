@@ -4,7 +4,8 @@ Env vars (never commit values):
   TRADING_MODE              SIM (default) | PAPER | LIVE
   BINANCE_API_KEY           Web3 API key from https://web3.binance.com/en/dev-portal/project  (PAPER, LIVE)
   BINANCE_API_SECRET        matching secret key (HMAC)                                      (PAPER, LIVE)
-  BINANCE_WALLET_ADDRESS    wallet that receives RFQ fills; needed to quote Ondo/BStock RFQ routes
+  BINANCE_WALLET_ADDRESS    wallet that receives RFQ fills; REQUIRED to quote xStock (RFQ, else 40001) and
+                            Ondo/BStock RFQ routes
   BINANCE_LIVE_ENABLED      must be exactly "true" to allow LIVE
   BINANCE_LIVE_EXECUTOR     agentic_wallet (default, `baw` CLI) | web3_api (needs a WalletSigner in code)
   BINANCE_LIVE_MAX_NOTIONAL per-order cap in USDT for LIVE (default 25)

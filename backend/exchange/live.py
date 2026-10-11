@@ -27,9 +27,17 @@ from backend.contracts import (
     utc_now,
 )
 
-from .errors import ExchangeError, QuoteUnavailable, Web3ApiError
+from .errors import INVALID_PARAMS, ExchangeError, QuoteUnavailable, Web3ApiError
 from .executors import LiveExecutor, RouteContext
-from .tokens import CHAIN_NAMES, DEFAULT_TOKENS, QUOTE_ASSETS, from_base_units, infer_token_type, to_base_units
+from .tokens import (
+    CHAIN_NAMES,
+    DEFAULT_TOKENS,
+    QUOTE_ASSETS,
+    WALLET_REQUIRED_TYPES,
+    from_base_units,
+    infer_token_type,
+    to_base_units,
+)
 from .web3_api import Web3ApiClient
 
 log = logging.getLogger(__name__)
@@ -139,8 +147,14 @@ class BinanceWeb3Client:
     # ------------------------------------------------------------------ quotes
     def get_quote(self, symbol: str, side: OrderSide, notional: float) -> Quote:
         """`GET /api/v1/dex/aggregator/quote` (best route). Raises QuoteUnavailable on API errors such as
-        40367 market closed / 40375 below 20 USD minimum / 40374 no liquidity."""
+        40367 market closed / 40375 below 20 USD minimum / 40374 no liquidity.
+
+        xStock quotes are RFQ and need `userWalletAddress` (API: 40001 "userWalletAddress is required for RFQ (xStock)
+        quote"), so without a wallet we fail fast with that code instead of spending a request."""
         tok = self._token(symbol)
+        if tok.token_type in WALLET_REQUIRED_TYPES and not self.wallet_address:
+            raise QuoteUnavailable(f"{INVALID_PARAMS} userWalletAddress is required for RFQ ({tok.token_type.value}) "
+                                   f"quote: set BINANCE_WALLET_ADDRESS", INVALID_PARAMS)
         stable = QUOTE_ASSETS.get(tok.chain_id or "")
         if stable is None:
             raise QuoteUnavailable(f"no quote asset configured for chain {tok.chain_id}")

@@ -1,4 +1,4 @@
-from backend.contracts import OrderRequest, OrderSide, OrderStatus, Timeframe
+from backend.contracts import ExecutionPath, OrderRequest, OrderSide, OrderStatus, Timeframe
 from backend.exchange.sim import SimulatedBinanceClient
 from backend.mocks import MockExchangeClient
 
@@ -31,8 +31,8 @@ def test_price_quote_and_fill_use_bar_close():
     px = series[50].close
     assert c.get_price("TSLAx") == px
     q = c.get_quote("TSLAx", OrderSide.BUY, 100)
-    assert q.price == px
-    r = c.execute_swap(OrderRequest(symbol="TSLAx", side=OrderSide.BUY, notional=100), q)
+    assert q.price == px and q.path == ExecutionPath.RFQ
+    r = c.execute_rfq(OrderRequest(symbol="TSLAx", side=OrderSide.BUY, notional=100), q)
     assert r.status == OrderStatus.FILLED and r.avg_price == px
     assert {t.symbol: t.price for t in c.search_tokens("tsla")}["TSLAx"] == px
 

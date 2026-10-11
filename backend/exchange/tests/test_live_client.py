@@ -86,6 +86,27 @@ def test_quote_errors_become_quote_unavailable(fake, api, clock):
     assert e.value.code == 40375
 
 
+def test_xstock_quote_needs_wallet(fake, api, clock):
+    """Real API (2026-10-11): xStock quotes are RFQ -> 40001 'userWalletAddress is required for RFQ (xStock) quote'."""
+    fake.on("GET", "/api/v1/dex/aggregator/quote", ok([route("RFQ", E18, vendor="xStockRfq")]))
+    no_wallet = BinanceWeb3Client(api, mode=TradingMode.PAPER, clock=clock)
+    n = len(fake.requests)
+    with pytest.raises(QuoteUnavailable) as e:
+        no_wallet.get_quote("TSLAx", OrderSide.BUY, 25)
+    assert e.value.code == 40001 and "userWalletAddress" in str(e.value) and len(fake.requests) == n  # no request
+    q = paper(api, clock).get_quote("TSLAx", OrderSide.BUY, 25)
+    p = fake.params(fake.requests[-1])
+    assert p["userWalletAddress"] == WALLET and p["toTokenAddress"] == TSLA and p["amount"] == str(25 * E18)
+    assert q.path == ExecutionPath.RFQ
+
+
+def test_route_execution_mode_wins_for_ondo(fake, api, clock):
+    """A 25 USDT -> NVDAon quote came back as a DEX SWAP route (LiquidMesh) on 2026-10-11: follow executionMode."""
+    fake.on("GET", "/api/v1/dex/aggregator/quote", ok([route("SWAP", int(0.1084 * E18))]))
+    q = paper(api, clock).get_quote("NVDAon", OrderSide.BUY, 25)
+    assert q.path == ExecutionPath.SWAP and q.quantity == pytest.approx(0.1084)
+
+
 def test_expired_quote(fake, api, clock):
     fake.on("GET", "/api/v1/dex/aggregator/quote", ok([route("SWAP", E18)]))
     c = paper(api, clock)
