@@ -5,7 +5,7 @@
 Total length is 3:00. Timestamps are cumulative. Record at 1080p, browser zoom 110%, dark theme.
 Only show what is on the screen. If something isn't there on the day, skip it and say so.
 
-## Real mainnet trades (both verified on BscScan: status success, wallet `0xc44eddcffa4227d38bc92a7ca5990953aa7ff0cf`)
+## Real mainnet trades (both verified on BscScan: status success)
 
 | When (11 Oct 2026, IST) | What | Tx |
 |---|---|---|
