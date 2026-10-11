@@ -31,7 +31,7 @@ export function useStatus() {
       if (e.type === "STATUS" && e.payload && "control" in e.payload) { setStatus(e.payload as unknown as StatusSnapshot); setError(null); return; }
       if (e.type === "ALERT" && e.payload) {
         const a = e.payload as unknown as Alert;
-        toast(`${a.code.replace(/_/g, " ")}: ${a.message}`, a.level === "CRITICAL" ? "error" : a.level === "WARNING" ? "warn" : "info");
+        toast(a.message || a.code.replace(/_/g, " "), a.level === "CRITICAL" ? "error" : a.level === "WARNING" ? "warn" : "info");
         setAlertsVersion((v) => v + 1);
       }
       if (e.type === "DECISION" || e.type === "EXECUTION" || e.type === "CONTROL") {
