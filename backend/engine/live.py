@@ -59,6 +59,9 @@ class LiveSafetyConfig:
     # STAY_OUT 'live_price_impact'. Same 1% limit as Bot 3's risk check, on the SIZE of the impact (the exchange
     # reports no sign, so risk counts it as adverse too). Unknown impact (None) never blocks.
     max_price_impact_pct: float = 1.0
+    # Manual strategies: the user's own position_size_pct is used as set (only the min-order floor and
+    # max_order_usdt apply, plus risk's caps). True = shrink Manual buys like Auto ones (x size_factor, cap, thin).
+    shrink_manual_size: bool = False
 
     def __post_init__(self) -> None:
         if not (0 < self.size_factor <= 1) or not (0 < self.max_size_pct <= 100):
@@ -260,16 +263,23 @@ def live_size(
     candles: Sequence[Candle],
     cfg: LiveSafetyConfig,
     ctx: Optional[dict] = None,
+    user_sized: bool = False,
 ) -> SizeDecision:
     """Live-safe BUY size: x size_factor, cap max_size_pct, x thin-liquidity factor (volume families only); then
-    the per-family min-order floor and the max_order_usdt cap. (Price impact is a gate, not a size factor.)"""
+    the per-family min-order floor and the max_order_usdt cap. (Price impact is a gate, not a size factor.)
+    ``user_sized`` (a Manual strategy's own size, unless cfg.shrink_manual_size): skip the shrink steps and keep the
+    user's %; the floor and the per-order cap still apply."""
     fam = token_family(symbol)
     # Equity basis: the smallest KNOWN equity (engine equity/capital, context ``equity``, config hint); None = unknown.
     known = [e for e in (equity, ctx.get("equity") if ctx else None, cfg.equity_hint_usdt) if e is not None and e > 0]
     basis = min(known) if known else None
-    steps = [f"{proposed_pct:g}% x{cfg.size_factor:g} capped at {cfg.max_size_pct:g}%"]
-    pct = min(proposed_pct * cfg.size_factor, cfg.max_size_pct)
-    if fam not in cfg.volume_exempt_families:
+    if user_sized and not cfg.shrink_manual_size:
+        steps = [f"your size {proposed_pct:g}%"]
+        pct = proposed_pct
+    else:
+        steps = [f"{proposed_pct:g}% x{cfg.size_factor:g} capped at {cfg.max_size_pct:g}%"]
+        pct = min(proposed_pct * cfg.size_factor, cfg.max_size_pct)
+    if fam not in cfg.volume_exempt_families and not (user_sized and not cfg.shrink_manual_size):
         factor, thin = thin_liquidity_factor(candles, cfg)
         if thin:
             pct *= factor
