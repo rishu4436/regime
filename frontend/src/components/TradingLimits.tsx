@@ -13,10 +13,22 @@ const FIELDS: { key: keyof Omit<TradingLimits, "order_mode" | "order_usdt" | "or
   { key: "max_per_token_usdt", label: "Max in one token", hint: "Keeps one stock from taking over." },
   { key: "daily_loss_usdt", label: "Daily loss limit", hint: "Losing this much in a day triggers the emergency stop." },
 ];
+// no order_mode / no size from the backend = the strategy decides the size
+const modeOf = (l: Partial<TradingLimits>): TradingLimits["order_mode"] =>
+  l.order_mode === "pct" || l.order_mode === "fixed" ? l.order_mode : "strategy";
 const pick = (l: TradingLimitsResponse | TradingLimits): TradingLimits => ({
-  order_mode: l.order_mode === "pct" ? "pct" : "fixed", order_usdt: l.order_usdt, order_pct: l.order_pct, max_order_usdt: l.max_order_usdt,
+  order_mode: modeOf(l), order_usdt: l.order_usdt, order_pct: l.order_pct, max_order_usdt: l.max_order_usdt,
   max_total_usdt: l.max_total_usdt, max_per_token_usdt: l.max_per_token_usdt, daily_loss_usdt: l.daily_loss_usdt,
 });
+/** Only what the user changed: risk keeps every other value as it is (e.g. the per-token cap). */
+function changed(cur: TradingLimits, next: TradingLimits): Partial<TradingLimits> {
+  const out: Partial<TradingLimits> = {};
+  for (const k of Object.keys(next) as (keyof TradingLimits)[]) if (next[k] !== cur[k]) (out as Record<string, unknown>)[k] = next[k];
+  if (out.order_mode === "strategy") { out.order_usdt = null as unknown as number; out.order_pct = null as unknown as number; }
+  else if (out.order_mode === "fixed") out.order_usdt = next.order_usdt;
+  else if (out.order_mode === "pct") out.order_pct = next.order_pct;
+  return out;
+}
 const errText = (e: unknown) => e instanceof ApiError
   ? e.status === 403 ? "Only works on the PC running Regime. Open the dashboard there (localhost) to change limits."
     : e.status === 0 ? "Can't reach the agent right now. Try again in a moment." : e.detail
@@ -25,9 +37,9 @@ const errText = (e: unknown) => e instanceof ApiError
 /** Which limits go up vs the saved ones (raising needs a confirmation). */
 function raised(cur: TradingLimits, next: TradingLimits): string[] {
   const out: string[] = [];
-  const perOrder = (l: TradingLimits) => (l.order_mode === "pct" ? null : l.order_usdt);
+  const perOrder = (l: TradingLimits) => (l.order_mode === "fixed" ? l.order_usdt : null);
   if (next.order_mode === cur.order_mode && next.order_mode === "pct" && next.order_pct > cur.order_pct) out.push(`order size ${cur.order_pct}% → ${next.order_pct}% of wallet`);
-  else if (next.order_mode !== cur.order_mode) out.push(next.order_mode === "pct" ? `order size → ${next.order_pct}% of wallet` : `order size → ${usd(next.order_usdt)}`);
+  else if (next.order_mode !== cur.order_mode && next.order_mode !== "strategy") out.push(next.order_mode === "pct" ? `order size → ${next.order_pct}% of wallet` : `order size → ${usd(next.order_usdt)}`);
   else if ((perOrder(next) ?? 0) > (perOrder(cur) ?? 0)) out.push(`order size ${usd(cur.order_usdt)} → ${usd(next.order_usdt)}`);
   for (const f of FIELDS) if (next[f.key] > cur[f.key]) out.push(`${f.label.toLowerCase()} ${usd(cur[f.key])} → ${usd(next[f.key])}`);
   return out;
@@ -54,14 +66,14 @@ export function TradingLimitsCard({ refresh }: { refresh?: () => void }) {
   if (data === undefined || !draft) return <Card title="Trading limits"><Skeleton h={180} /></Card>;
 
   const set = <K extends keyof TradingLimits>(k: K, v: TradingLimits[K]) => { setDraft({ ...draft, [k]: v }); setErr(null); };
-  const perOrder = draft.order_mode === "pct" ? (walletUsdt != null ? (walletUsdt * draft.order_pct) / 100 : null) : draft.order_usdt;
+  const perOrder = draft.order_mode === "pct" ? (walletUsdt != null ? (walletUsdt * (draft.order_pct ?? 0)) / 100 : null) : draft.order_mode === "fixed" ? draft.order_usdt : null;
   const capped = perOrder != null ? Math.min(perOrder, draft.max_order_usdt) : null;
   const localIssue = draft.max_order_usdt > draft.max_total_usdt ? "Max per order can't be above max total invested."
     : draft.max_per_token_usdt > draft.max_total_usdt ? "Max in one token can't be above max total invested."
     : walletCap != null && [draft.max_order_usdt, draft.max_total_usdt, draft.max_per_token_usdt, draft.daily_loss_usdt].some((v) => v > walletCap) ? `No limit can go above the wallet's own daily limit (${usd(walletCap)}).`
     : null;
 
-  const put = async (body: TradingLimits, reset = false) => {
+  const put = async (body: Partial<TradingLimits>, reset = false) => {
     setBusy(true); setErr(null);
     try {
       const d = await api.putLimits(body);
@@ -72,9 +84,10 @@ export function TradingLimitsCard({ refresh }: { refresh?: () => void }) {
   };
   const save = () => {
     const changes = raised(pick(data), draft);
-    if (changes.length) setConfirm({ body: draft, changes }); else put(draft);
+    if (changes.length) setConfirm({ body: draft, changes }); else put(changed(pick(data), draft));
   };
   const reset = () => data.defaults && setConfirm({ body: pick(data.defaults), changes: raised(pick(data), pick(data.defaults)), reset: true });
+  const confirmBody = (c: { body: TradingLimits; reset?: boolean }) => (c.reset ? c.body : changed(pick(data), c.body));
 
   return (
     <Card title="Trading limits" extra={dirty && <span className="pill warn">Unsaved</span>}>
@@ -82,17 +95,18 @@ export function TradingLimitsCard({ refresh }: { refresh?: () => void }) {
         {err && <div className="banner red" role="alert" style={{ marginBottom: 0 }}><span className="grow">{err}</span></div>}
         <div>
           <span className="lbl">Order size</span>
-          <Segmented size="sm" value={draft.order_mode} onChange={(v) => set("order_mode", v)} options={[{ value: "fixed", label: "Fixed USDT" }, { value: "pct", label: "% of wallet" }]} />
+          <Segmented size="sm" value={draft.order_mode} onChange={(v) => set("order_mode", v)} options={[{ value: "strategy", label: "Strategy decides" }, { value: "fixed", label: "Fixed USDT" }, { value: "pct", label: "% of wallet" }]} />
           <div style={{ marginTop: 8 }}>
             {draft.order_mode === "fixed"
-              ? <NumberInput value={draft.order_usdt} min={1} step={5} suffix="USDT" onChange={(v) => set("order_usdt", v ?? 1)} />
-              : <NumberInput value={draft.order_pct} min={0.1} max={100} step={0.5} suffix="%" onChange={(v) => set("order_pct", v ?? 0.1)} />}
+              ? <NumberInput value={draft.order_usdt ?? 25} min={1} step={5} suffix="USDT" onChange={(v) => set("order_usdt", v ?? 1)} />
+              : draft.order_mode === "pct" ? <NumberInput value={draft.order_pct ?? 2} min={0.1} max={100} step={0.5} suffix="%" onChange={(v) => set("order_pct", v ?? 0.1)} /> : null}
           </div>
           <div className="small faint" style={{ marginTop: 4 }}>
-            {draft.order_mode === "pct" ? "Grows and shrinks with your wallet." : "The same amount every buy."}{" "}
+            {draft.order_mode === "strategy" ? "Each strategy sizes its own buys (DCA and Grid buy small); the limits below still trim them."
+              : <>{draft.order_mode === "pct" ? "Grows and shrinks with your wallet." : "The same amount every buy."} This replaces the strategy's own size.</>}{" "}
             {walletUsdt != null && capped != null
               ? <>With your wallet of <b>{usd(walletUsdt)}</b> this is <b>{usd(capped)}</b> per order{perOrder != null && perOrder > draft.max_order_usdt ? " (held to the max per order)" : ""}.</>
-              : draft.order_mode === "pct" ? "Example: with 10,000 USDT, 2% is 200 USDT per order." : null}
+              : draft.order_mode !== "pct" ? null : "Example: with 10,000 USDT, 2% is 200 USDT per order."}
           </div>
         </div>
         <div className="field-grid">
@@ -130,7 +144,7 @@ export function TradingLimitsCard({ refresh }: { refresh?: () => void }) {
             </div>
             <div className="btn-row" style={{ marginTop: 16, justifyContent: "flex-end" }}>
               <button className="btn ghost" onClick={() => setConfirm(null)} disabled={busy}>Cancel</button>
-              <button className={`btn${confirm.reset ? "" : " red"}`} onClick={() => put(confirm.body, confirm.reset)} disabled={busy} autoFocus>{busy ? "Saving…" : confirm.reset ? "Reset limits" : "Confirm new limits"}</button>
+              <button className={`btn${confirm.reset ? "" : " red"}`} onClick={() => put(confirmBody(confirm), confirm.reset)} disabled={busy} autoFocus>{busy ? "Saving…" : confirm.reset ? "Reset limits" : "Confirm new limits"}</button>
             </div>
           </div>
         </div>

@@ -39,7 +39,7 @@ const TOKEN_LIST = [
   T("NVDAx", "NVIDIA xStock", "XSTOCK", 140),
 ];
 const TOKENS: TokenInfo[] = TOKEN_LIST.map(({ start: _s, ...t }) => t);
-const LIMIT_DEFAULTS: TradingLimits = { order_mode: "fixed", order_usdt: 25, order_pct: 2, max_order_usdt: 25, max_total_usdt: 100, max_per_token_usdt: 50, daily_loss_usdt: 10 };
+const LIMIT_DEFAULTS: TradingLimits = { order_mode: "strategy", order_usdt: 25, order_pct: 2, max_order_usdt: 25, max_total_usdt: 100, max_per_token_usdt: 50, daily_loss_usdt: 10 };
 const WALLET_DAILY_LIMIT = 500;
 const START: Record<string, number> = Object.fromEntries(TOKEN_LIST.map((t) => [t.symbol, t.start]));
 const LIVE_REGIMES: Regime[] = ["MILD_UPTREND", "SIDEWAYS", "OVERSOLD_PULLBACK", "STRONG_UPTREND", "HIGH_VOLATILITY", "DOWNTREND"];
@@ -154,10 +154,11 @@ export class MockApi implements ApiClient {
   // Trading limits (mock of Bot 6's GET/PUT /api/settings/limits): saved in localStorage like logs/limits.json
   private limits: TradingLimits = (() => { try { const r = localStorage.getItem("mock.limits"); if (r) return { ...LIMIT_DEFAULTS, ...JSON.parse(r) }; } catch { /* ignore */ } return { ...LIMIT_DEFAULTS }; })();
   getLimits() { return ok<TradingLimitsResponse | null>({ ...this.limits, wallet_daily_limit_usdt: WALLET_DAILY_LIMIT, defaults: { ...LIMIT_DEFAULTS }, updated_at: now() }); }
-  putLimits(b: TradingLimits) {
+  putLimits(part: Partial<TradingLimits>) {
+    const b: TradingLimits = { ...this.limits, ...part };
     const nums: (keyof TradingLimits)[] = ["order_usdt", "order_pct", "max_order_usdt", "max_total_usdt", "max_per_token_usdt", "daily_loss_usdt"];
-    if (b.order_mode !== "fixed" && b.order_mode !== "pct") return fail(422, "order_mode must be fixed or pct");
-    for (const k of nums) if (!(typeof b[k] === "number" && (b[k] as number) > 0)) return fail(422, `${k} must be greater than 0`);
+    if (!["strategy", "fixed", "pct"].includes(b.order_mode)) return fail(422, "order_mode must be strategy, fixed or pct");
+    for (const k of nums.filter((k) => b.order_mode !== "strategy" || (k !== "order_usdt" && k !== "order_pct"))) if (!(typeof b[k] === "number" && (b[k] as number) > 0)) return fail(422, `${k} must be greater than 0`);
     if (b.order_pct > 100) return fail(422, "order_pct can't be above 100");
     if (b.order_mode === "fixed" && b.order_usdt > b.max_order_usdt) return fail(422, "order size is above the max per order");
     if (b.max_order_usdt > b.max_total_usdt) return fail(422, "max per order can't be above max total invested");

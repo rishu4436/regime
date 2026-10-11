@@ -90,7 +90,7 @@ export class HttpApi implements ApiClient {
   getAutoPick(narrative: Narrative, max_tokens: number) { return this.optional<AutoPickResult>(`/api/autopick?narrative=${enc(narrative)}&max_tokens=${max_tokens}`); }
   getWatchlist() { return this.optional<WatchlistInfo>("/api/watchlist"); }
   getLimits() { return this.optional<TradingLimitsResponse>("/api/settings/limits"); }
-  putLimits(body: TradingLimits) { return this.req<TradingLimitsResponse>("PUT", "/api/settings/limits", body); }
+  putLimits(body: Partial<TradingLimits>) { return this.req<TradingLimitsResponse>("PUT", "/api/settings/limits", body); }
   approve(id: string) { return this.post<Decision>(`/api/confirmations/${enc(id)}/approve`); }
   reject(id: string, reason?: string) { return this.post<Decision>(`/api/confirmations/${enc(id)}/reject`, reason ? { reason } : {}); }
   closePositionById(id: string) { return this.post<Decision>(`/api/positions/by-id/${enc(id)}/close`); }

@@ -105,8 +105,9 @@ export interface WalletReconcileResult { address?: string | null; was_blocked?: 
 export type ActivateManualBody = { strategy_id: string } | { strategy: ManualStrategy };
 
 // ---------------------------------------------------------------- Trading limits (Bot 6: GET/PUT /api/settings/limits, localhost only)
-export type OrderMode = "fixed" | "pct";
-/** User-editable trading limits. order_mode "fixed" = order_usdt per order; "pct" = order_pct % of wallet USDT per order. */
+/** "strategy" = the strategy sizes each buy (DCA/Grid etc.), only the caps trim it; "fixed" = order_usdt; "pct" = order_pct % of wallet. */
+export type OrderMode = "strategy" | "fixed" | "pct";
+/** User-editable trading limits. A fixed or % size REPLACES the strategy's own size (risk still applies every cap). */
 export interface TradingLimits {
   order_mode: OrderMode;
   order_usdt: number;
@@ -199,7 +200,8 @@ export interface ApiClient {
   /** GET /api/settings/limits (null = not available on this backend: the panel hides). */
   getLimits(): Promise<TradingLimitsResponse | null>;
   /** PUT /api/settings/limits (localhost only: 403 elsewhere; 422 on invalid values). */
-  putLimits(body: TradingLimits): Promise<TradingLimitsResponse>;
+  /** Partial: only the fields the user changed (risk keeps the rest as they are). */
+  putLimits(body: Partial<TradingLimits>): Promise<TradingLimitsResponse>;
   approve(decisionId: string): Promise<Decision>;
   reject(decisionId: string, reason?: string): Promise<Decision>;
   /** Manual override: close ONE lot by Position.id at the last price (signal.exit_reason MANUAL). 404 if not open. */
