@@ -38,7 +38,9 @@ elif [[ -d /workspace/.venv ]]; then . /workspace/.venv/bin/activate
 else
   [[ -d .venv ]] || python3 -m venv .venv
   . .venv/bin/activate
-  python -c "import fastapi, uvicorn" 2>/dev/null || pip install -q -e ".[dev]"
+  # eth_account is in the check so an older .venv picks up new deps after a git pull.
+  # Agent Studio "Register" also needs the optional SDK: pip install -e ".[studio]"
+  python -c "import fastapi, uvicorn, eth_account" 2>/dev/null || pip install -q -e ".[dev]"
 fi
 
 if [[ "$TRADING_MODE" == "LIVE" ]] && ! command -v baw >/dev/null 2>&1 && [[ -z "${BAW_CMD:-}" ]]; then

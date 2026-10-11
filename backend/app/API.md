@@ -283,8 +283,25 @@ baw wipes its own session when a token refresh fails during a network blip, so t
 - A dashboard wallet sign-in and `POST /api/wallet/reconcile` force one fresh read, even during a back-off.
 - An expired session is re-checked by that schedule, by the next order, or immediately by a dashboard sign-in.
 
+## Agent Studio identity from the dashboard (v0.9, localhost only)
+Mounted from Bot 5's `backend.agent_studio.api` (`app.include_router(agent_studio_router)`). Every endpoint answers
+**403** unless the request comes from this PC (client, `X-Forwarded-For`, `Host` and `Origin` must all be localhost).
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| GET | `/api/agent-studio/status` | - | `{registered, network, identity_address, bnb_balance, bnb_needed, erc8004_id, explorer_url, has_key}` |
+| POST | `/api/agent-studio/create-key` | - | `{identity_address}`; 409 if a key file or `AGENT_STUDIO_PRIVATE_KEY` already exists; 503 without `eth-account` |
+| POST | `/api/agent-studio/register` | `{network?, confirm_mainnet: true}` | `{erc8004_id, explorer_url, tx_hash}`; 400 without `confirm_mainnet` on mainnet or under 0.002 BNB; 409 if already registered; 503 without `bnbagent` |
+
+- `status` works without `eth-account` or `bnbagent` (both are imported lazily). `eth-account` is a main dependency;
+  `bnbagent==0.5.0` is the optional `studio` extra: `pip install -e ".[studio]"`.
+- The key is saved to `logs/agent_studio_identity.key` in the repo (gitignored, mode 600; `AGENT_STUDIO_KEY_FILE`
+  moves it). No response, error or log line contains it, and there is no export endpoint.
+- `bnb_balance` is one read-only `eth_getBalance` on a public BSC RPC, only when a key exists.
+
 ## Changelog
 - v0.9: LIVE wallet cache: `/api/wallet` + `/api/live/status` never call baw (`read_at`/`age_s`/`stale`); `WALLET_REFRESH_SEC` (300 s) + a fresh read before every order; network failures keep the last read, block BUYs, allow exits, back off 60/120/300 s.
+- v0.9: `/api/agent-studio/{status,create-key,register}` mounted (localhost only); `eth-account` main dependency, `bnbagent` optional `studio` extra.
 - v0.8: dashboard wallet sign-in (`POST/GET /api/wallet/connect`, `POST /api/wallet/reconcile`, localhost only), `wallet_block` in `/api/live/status`, "different wallet connected" LIVE block, fake baw for SIM/PAPER; app title "Regime".
 - v0.7: LIVE section (wallet, live status, cooldowns, in-flight buys with synthetic `pending` positions and `pending_exit` held exits, `order_in_flight`, executor extras on executions, `agent_identity` pass-through, `allowed_tokens` 'ALL'/'LIMITED' pass-through + `tradable_tokens`); `/api/portfolio` positions gain `pending`, `client_order_id`, `held_exit`; an unavailable quote is a STAY_OUT decision in every mode; `/api/tokens` adds `token_status`; activation defaults to `AUTO_EXECUTE` unless the request sets `activation`; `record_execution(res, quote_notional=)` at submission + after reconcile; slippage cap passed per order.
 - v0.6: LIVE needs both `LIVE_TRADING_ENABLED=true` and `BINANCE_LIVE_ENABLED=true` (+ keys); no per-token path assumptions.

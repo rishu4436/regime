@@ -41,7 +41,9 @@ if (-not (Test-Path $py)) {
   Write-Host "==> creating venv $venv"
   python -m venv $venv
 }
-& $py -c "import fastapi, uvicorn" 2>$null
+# eth_account is in the check so an older .venv picks up new deps after a git pull.
+# Agent Studio "Register" also needs the optional SDK: & $py -m pip install -e ".[studio]"
+& $py -c "import fastapi, uvicorn, eth_account" 2>$null
 if ($LASTEXITCODE -ne 0) {
   Write-Host "==> pip install -e .[dev]"
   & $py -m pip install -q -e ".[dev]"
