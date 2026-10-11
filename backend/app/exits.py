@@ -1,18 +1,18 @@
-"""Agreed protective-exit semantics (team decision, applies to Engine.backtest_manual and Risk.check_exits).
+"""Agreed protective-exit semantics (contract v0.2 ExitRules + Bot 3 edge rules; Engine.backtest_manual and
+Risk.check_exits must agree - parity-tested in tests/e2e/test_exit_parity.py).
 
 Per bar, for an open position (never on its entry bar):
-1. Levels are taken from the PREVIOUS bar's state: stop-loss price, take-profit price and the trailing level
-   `highest_before_this_bar * (1 - trail_pct/100)` (highest starts at the entry price).
-2. The active stop is the higher of trailing level and stop-loss price (tie -> TRAILING_STOP, simulator priority).
-3. Gaps: if the bar OPENS at/through the stop -> exit at the open (STOP_LOSS / TRAILING_STOP);
-   if it OPENS at/through the take-profit -> exit at the open (TAKE_PROFIT).
-4. Intrabar: low <= stop -> exit at the stop level; high >= take-profit -> exit at the take-profit level.
-   If both are touched in the same bar the STOP wins (pessimistic: OHLC cannot tell which came first).
-5. After the checks, the trailing high-water mark is raised with this bar's HIGH (used from the next bar on).
+1. Levels come from PREVIOUS bars: stop-loss price, take-profit price, optional max-loss level, and the trailing level
+   `max(highest_price, entry) * (1 - trail_pct/100)` where highest_price only includes bars before this one.
+2. Stop hit tests: stop-loss `low <= level`; trailing `low < level` (STRICT); max-loss `low <= level`.
+3. If any stop is hit it wins over a take-profit touched in the same bar (worst case; this includes a bar that gaps
+   up through the TP and then trades down through a stop). Among several hit stops the HIGHEST level wins
+   (it is touched first on the way down); ties: TRAILING_STOP > STOP_LOSS > MAX_LOSS.
+4. Fill at the level, or at the OPEN if the bar opened beyond it (stop: open < level -> open; TP: open > level -> open).
+5. Take-profit: `high >= level`, only if no stop was hit.
+6. After check_exits, the app raises Position.highest_price with this bar's HIGH (check_exits never mutates).
+7. Emergency stop: risk emits EMERGENCY_STOP exits for every position filled at the bar close / last price.
 RSI / MACD exits stay on the bar close and are the engine's job (evaluated after the protective exits).
-
-This module is the app's executable statement of that rule: the fallback engine/risk use it, and the parity
-tests in tests/e2e assert the real Bot 2 / Bot 3 implementations agree with it.
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from typing import Optional
 
 from backend.contracts import ExitReason
 
-STOP_WINS_SAME_BAR = True  # documented assumption for "SL and TP touched in the same bar"
+_STOP_PRIORITY = {ExitReason.TRAILING_STOP: 0, ExitReason.STOP_LOSS: 1, ExitReason.MAX_LOSS: 2}
 
 
 @dataclass(frozen=True)
@@ -30,10 +30,21 @@ class ExitHit:
     price: float
 
 
-def trailing_level(highest: Optional[float], trail_pct: Optional[float]) -> Optional[float]:
-    if highest is None or not trail_pct:
+def trailing_level(highest: Optional[float], trail_pct: Optional[float], entry: Optional[float] = None) -> Optional[float]:
+    if not trail_pct:
         return None
-    return highest * (1 - trail_pct / 100.0)
+    hwm = max(highest or 0.0, entry or 0.0)
+    if hwm <= 0:
+        return None
+    return hwm * (1 - trail_pct / 100.0)
+
+
+def max_loss_level(entry: float, quantity: float, max_loss_pct: Optional[float], capital: float) -> Optional[float]:
+    """Price at which the position has lost `max_loss_pct` % of `capital` (USDT); None if off / unreachable."""
+    if not max_loss_pct or capital <= 0 or quantity <= 0:
+        return None
+    level = entry - capital * max_loss_pct / 100.0 / quantity
+    return level if level > 0 else None
 
 
 def check_protective_exit(
@@ -44,29 +55,21 @@ def check_protective_exit(
     stop_loss_price: Optional[float],
     take_profit_price: Optional[float],
     trail_level: Optional[float],
+    max_loss_price: Optional[float] = None,
 ) -> Optional[ExitHit]:
     stops: list[tuple[float, ExitReason]] = []
-    if trail_level is not None:
-        stops.append((trail_level, ExitReason.TRAILING_STOP))
-    if stop_loss_price is not None:
+    if stop_loss_price is not None and low <= stop_loss_price:
         stops.append((stop_loss_price, ExitReason.STOP_LOSS))
-    stop = None
+    if trail_level is not None and low < trail_level:
+        stops.append((trail_level, ExitReason.TRAILING_STOP))
+    if max_loss_price is not None and low <= max_loss_price:
+        stops.append((max_loss_price, ExitReason.MAX_LOSS))
     if stops:
-        # highest level is hit first; on a tie the trailing stop is reported (listed first, max keeps the first)
-        stop = max(stops, key=lambda s: s[0])
+        level, reason = sorted(stops, key=lambda s: (-s[0], _STOP_PRIORITY[s[1]]))[0]
+        return ExitHit(reason, open_ if open_ < level else level)
     tp = take_profit_price
-    if stop is not None and open_ <= stop[0]:
-        return ExitHit(stop[1], open_)
-    if tp is not None and open_ >= tp:
-        return ExitHit(ExitReason.TAKE_PROFIT, open_)
-    stop_hit = stop is not None and low <= stop[0]
-    tp_hit = tp is not None and high >= tp
-    if stop_hit and (STOP_WINS_SAME_BAR or not tp_hit):
-        return ExitHit(stop[1], stop[0])
-    if tp_hit:
-        return ExitHit(ExitReason.TAKE_PROFIT, tp)
-    if stop_hit:
-        return ExitHit(stop[1], stop[0])
+    if tp is not None and high >= tp:
+        return ExitHit(ExitReason.TAKE_PROFIT, open_ if open_ > tp else tp)
     return None
 
 

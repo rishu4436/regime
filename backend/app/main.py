@@ -25,11 +25,11 @@ from .events import EventBus
 from .loop import AgentStateError, TradingLoop
 from .schemas import (
     AskRequest, ConfirmationModeRequest, EmergencyStopRequest, LoopStartRequest, ManualActivateRequest, ParseRequest,
-    ParseResponse, ReasonRequest,
+    ParseResponse, PresetsTable, PresetsTableEntry, ReasonRequest,
 )
 from .settings import Settings
 from .store import StrategyStore
-from .wiring import Components, build_components
+from .wiring import Components, build_components, presets_table
 
 log = logging.getLogger("backend.app")
 
@@ -100,6 +100,12 @@ def create_app(settings: Optional[Settings] = None, components: Optional[Compone
     def selection(symbol: str, style: TraderStyle = TraderStyle.BALANCED, timeframe: Timeframe = Timeframe.H1) -> StrategySelection:
         ra = regime(symbol, timeframe)
         return comps.engine.select_strategy(ra.regime, style, list(PresetName))
+
+    @app.get("/api/auto/presets-table", response_model=PresetsTable)
+    def auto_presets_table() -> PresetsTable:
+        source, rows = presets_table(comps.engine)
+        return PresetsTable(source=source, entries=[PresetsTableEntry(regime=r.regime, style=r.style, preset=r.preset,
+                                                                      size_multiplier=r.size_multiplier, reason=r.reason) for r in rows])
 
     # ---------------------------------------------------------------- strategies
     @app.get("/api/strategies", response_model=list[ManualStrategy])
@@ -215,6 +221,10 @@ def create_app(settings: Optional[Settings] = None, components: Optional[Compone
     def reject(did: str, req: Optional[ReasonRequest] = None) -> Decision:
         return guard(L.reject, did, req.reason if req else "")
 
+    @app.post("/api/positions/by-id/{position_id}/close", response_model=Decision)
+    def close_position_by_id(position_id: str) -> Decision:
+        return guard(L.close_position, position_id)
+
     @app.post("/api/positions/{symbol}/close", response_model=Decision)
     def close_position(symbol: str) -> Decision:
         return guard(L.close_symbol, symbol)
@@ -265,11 +275,11 @@ def create_app(settings: Optional[Settings] = None, components: Optional[Compone
 
     @app.post("/api/llm/ask")
     def llm_ask(req: AskRequest) -> dict:
-        return {"answer": comps.explainer.answer(req.question, L.status())}
+        return {"answer": L.answer(req.question)}
 
     @app.get("/api/llm/summary")
     def llm_summary() -> dict:
-        return {"summary": comps.explainer.summarize_state(L.status())}
+        return {"summary": L.summarize()}
 
     # ---------------------------------------------------------------- websocket
     @app.websocket("/ws")

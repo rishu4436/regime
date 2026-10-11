@@ -1,0 +1,52 @@
+"""The loop must execute on the path the quote was issued for (Quote.path): RFQ -> execute_rfq, SWAP -> execute_swap.
+Bot 4's clients REJECT an order sent to the wrong path; this mock does the same."""
+from __future__ import annotations
+
+import pytest
+from fastapi.testclient import TestClient
+
+from backend.app.main import create_app
+from backend.app.settings import Settings
+from backend.app.wiring import build_components
+from backend.contracts import ExecutionPath, ExecutionResult, OrderStatus
+from backend.mocks import MockExchangeClient
+
+from .helpers import SEED, tick_until, trading_strategy
+
+
+class PathStrictMock(MockExchangeClient):
+    def __init__(self, path: ExecutionPath, **kw) -> None:
+        super().__init__(**kw)
+        self.path = path
+        self.calls: list[str] = []
+
+    def get_quote(self, symbol, side, notional, path=None):
+        return super().get_quote(symbol, side, notional, path=self.path)
+
+    def _strict(self, name, expected, order, quote):
+        self.calls.append(name)
+        if quote.path != expected:
+            return ExecutionResult(client_order_id=order.client_order_id, symbol=order.symbol, side=order.side,
+                                   status=OrderStatus.REJECTED, path=expected, mode=self.mode, error="wrong execution path")
+        return getattr(super(), name)(order, quote)
+
+    def execute_swap(self, order, quote):
+        return self._strict("execute_swap", ExecutionPath.SWAP, order, quote)
+
+    def execute_rfq(self, order, quote):
+        return self._strict("execute_rfq", ExecutionPath.RFQ, order, quote)
+
+
+@pytest.mark.parametrize("path", [ExecutionPath.RFQ, ExecutionPath.SWAP])
+def test_loop_dispatches_on_quote_path(path):
+    s = Settings(sim_seed=SEED)
+    ex = PathStrictMock(path, seed=SEED, n_candles=s.sim_replay_bars)
+    c = TestClient(create_app(s, build_components(s, exchange=ex)))
+    c.post("/api/manual/activate", json={"strategy": trading_strategy(activation="AUTO_EXECUTE").model_dump(mode="json")})
+    buy, _ = tick_until(c, lambda d: d["action"] == "BUY")
+    assert buy is not None and buy["execution"]["status"] == "FILLED" and buy["execution"]["path"] == path.value
+    sell, _ = tick_until(c, lambda d: d["action"] == "SELL")
+    assert sell is not None and sell["execution"]["path"] == path.value
+    want = "execute_rfq" if path == ExecutionPath.RFQ else "execute_swap"
+    assert ex.calls and set(ex.calls) == {want}
+    assert not [a for a in c.get("/api/alerts").json() if a["code"] == "EXECUTION_FAILED"]

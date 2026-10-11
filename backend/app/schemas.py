@@ -5,7 +5,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field  # noqa: F401
 
-from backend.contracts import AutoConfig, ManualStrategy
+from backend.contracts import AutoConfig, ManualStrategy, PresetName, Regime, TraderStyle
 
 
 class _M(BaseModel):
@@ -47,3 +47,19 @@ class ParseResponse(_M):
 
 class AskRequest(_M):
     question: str
+
+
+class PresetsTableEntry(_M):
+    regime: Regime
+    style: TraderStyle
+    preset: Optional[PresetName] = Field(default=None, description="None = stay out / pause")
+    size_multiplier: float
+    reason: str
+
+
+class PresetsTable(_M):
+    """map(regime, style) -> preset for all 6 x 3 combinations, all presets enabled.
+    source = "engine:<class>" (the wired engine's select_strategy) or "fallback:<class>" (app stand-in)."""
+
+    source: str
+    entries: list[PresetsTableEntry]

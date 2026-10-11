@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from backend.contracts import (
-    Action, ActivationMode, AgentMode, AutoConfig, Candle, ControlState, Decision, EventType, ExecutionResult,
+    Action, ActivationMode, AgentMode, AutoConfig, Candle, ControlState, Decision, EventType, ExecutionPath, ExecutionResult,
     ExitReason, ExitRules, ManualStrategy, OrderRequest, OrderSide, OrderStatus, Regime, RiskVerdict, Signal,
     StatusSnapshot, Timeframe, TradingMode, utc_now,
 )
@@ -27,7 +27,7 @@ from .feed import PollingFeed, ReplayFeed
 from .fallbacks import DAILY_LOSS_LIMIT_PCT
 from .portfolio import Lot, PortfolioBook
 from .settings import Settings
-from .wiring import Components
+from .wiring import Components, call_with_supported
 
 
 class AgentStateError(RuntimeError):
@@ -114,6 +114,9 @@ class TradingLoop:
             self._check_switch(strategy.symbol)
             self.manual, self.auto = strategy, None
             self.active_strategy = f"MANUAL:{strategy.name}"
+            hook = getattr(self.c.risk, "apply_manual_strategy", None)  # optional (Bot 3): per-symbol risk/exit rules
+            if callable(hook):
+                hook(strategy)
             self._on_activate(strategy.symbol, strategy.timeframe, strategy.activation)
             return self.status()
 
@@ -238,7 +241,7 @@ class TradingLoop:
             p = l.position
             hit = check_protective_exit(open_=bar.open, high=bar.high, low=bar.low, stop_loss_price=p.stop_loss_price,
                                         take_profit_price=p.take_profit_price,
-                                        trail_level=trailing_level(p.highest_price or p.avg_entry_price, p.trailing_stop_pct))
+                                        trail_level=trailing_level(p.highest_price, p.trailing_stop_pct, p.avg_entry_price))
             if hit and (want is None or hit.reason == want) and (sig.price is None or abs(hit.price - sig.price) < 1e-9 * max(1, hit.price)):
                 return l
         return lots[0]
@@ -258,7 +261,8 @@ class TradingLoop:
                 quote = ex.get_quote(sym, side, notional)
                 order = OrderRequest(symbol=sym, side=side, notional=quote.notional, quantity=quantity, quote_id=quote.quote_id,
                                      path=quote.path, mode=mode, decision_id=decision_id)
-                res = ex.execute_swap(order, quote)
+                # dispatch on Quote.path: the exchange rejects an order sent to the wrong path (Bot 4)
+                res = ex.execute_rfq(order, quote) if quote.path == ExecutionPath.RFQ else ex.execute_swap(order, quote)
             except Exception as e:  # never let an exchange error kill the loop
                 res = ExecutionResult(client_order_id=decision_id, symbol=sym, side=side, status=OrderStatus.FAILED,
                                       path=OrderRequest.model_fields["path"].default, mode=mode, error=f"{type(e).__name__}: {e}")
@@ -357,15 +361,29 @@ class TradingLoop:
             return self._finalize(d0.model_copy(update={"action": Action.STAY_OUT, "execution": ex, "explanation": None,
                                                         "reason": f"rejected by user{': ' + reason if reason else ''}"}))
 
+    def close_position(self, position_id: str, reason: ExitReason = ExitReason.MANUAL) -> Decision:
+        """Close one lot (Position.id) at the last price."""
+        with self.lock:
+            lot = next((l for l in self.book.lots if l.position.id == position_id), None)
+            if lot is None:
+                raise KeyError(position_id)
+            return self._close_lots([lot], lot.position.symbol, reason)
+
     def close_symbol(self, symbol: str, reason: ExitReason = ExitReason.MANUAL) -> Decision:
+        """Close every lot of `symbol` at the last price (manual override / emergency flatten)."""
         with self.lock:
             lots = self.book.lots_for(symbol)
             if not lots:
                 raise KeyError(symbol)
+            return self._close_lots(lots, symbol, reason)
+
+    def _close_lots(self, lots: list[Lot], symbol: str, reason: ExitReason) -> Decision:
+        with self.lock:
             px = self.book.prices.get(symbol) or self.c.exchange.get_price(symbol)
             sig = Signal(symbol=symbol, action=Action.SELL, source=self.agent_mode or AgentMode.MANUAL,
                          strategy=lots[0].position.strategy, reason=f"{reason.value} close requested", price=px,
-                         exit_reason=reason, timestamp=self._now())
+                         exit_reason=reason, position_id=lots[0].position.id if len(lots) == 1 else None,
+                         timestamp=self._now())
             d = self._exit(lots, sig, reason, self.current_regime, None)
             self.bus.publish(EventType.STATUS, self.status())
             return d
@@ -402,6 +420,19 @@ class TradingLoop:
         self._publish_alerts(self.alerts.on_control(ctrl))
         self.bus.publish(EventType.STATUS, self.status())
         return ctrl
+
+    # ------------------------------------------------------------------ LLM (read-only)
+    def llm_context(self) -> tuple[StatusSnapshot, dict]:
+        with self.lock:
+            return self.status(), {"performance": self.perf.summary(self.book.portfolio()), "alerts": self.alerts.alerts(20)}
+
+    def summarize(self) -> str:
+        status, kw = self.llm_context()
+        return call_with_supported(self.c.explainer.summarize_state, status, **kw)
+
+    def answer(self, question: str) -> str:
+        status, kw = self.llm_context()
+        return call_with_supported(self.c.explainer.answer, question, status, **kw)
 
     # ------------------------------------------------------------------ output
     def _finalize(self, d: Decision) -> Decision:

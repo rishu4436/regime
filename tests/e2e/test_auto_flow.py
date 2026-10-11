@@ -104,3 +104,18 @@ def test_llm_endpoints_offline():
     assert r["kind"] in ("MANUAL", "AUTO")
     assert c.post("/api/llm/ask", json={"question": "what is the agent doing?"}).json()["answer"]
     assert c.get("/api/llm/summary").json()["summary"]
+
+
+def test_presets_table_covers_every_regime_and_style():
+    c = make_client()
+    t = c.get("/api/auto/presets-table").json()
+    assert t["source"].split(":")[0] in ("engine", "fallback")
+    keys = {(e["regime"], e["style"]) for e in t["entries"]}
+    assert keys == {(r.value, s.value) for r in Regime for s in TraderStyle}
+    for e in t["entries"]:
+        assert e["preset"] is None or e["preset"] in PRESETS
+        assert 0 <= e["size_multiplier"] <= 1 and e["reason"]
+    # consistent with the single-combination preview endpoint
+    sel = c.get("/api/auto/selection?symbol=AAPLB&style=PATIENT").json()
+    row = next(e for e in t["entries"] if e["regime"] == sel["regime"] and e["style"] == "PATIENT")
+    assert row["preset"] == sel["preset"]

@@ -1,8 +1,9 @@
 """Exit parity: Engine.backtest_manual vs the live loop's RiskManager.check_exits path must agree on
 exit bar, exit reason and fill price (agreed rule, see backend/app/exits.py):
-- trailing stop checked against the bar LOW using the PREVIOUS bar's level, then raised with this bar's HIGH;
-- exits fill at the stop / target price, or at the OPEN when the bar gaps through the level (SL gap down, TP gap up);
-- SL and TP touched in the same bar -> STOP_LOSS (pessimistic; documented assumption, confirm with Bot 2/3).
+- trailing stop: `low < level` (strict) with the level from PRIOR bars' highs; the app raises highest_price after;
+- any stop (SL / trailing / max-loss) beats a take-profit touched in the same bar; several stops -> highest level wins;
+- fills at the stop / target level, or at the OPEN when the bar gaps through it (SL gap down, TP gap up);
+- emergency stop -> EMERGENCY_STOP exits at the bar close; check_exits never mutates the portfolio.
 Runs for the app fallbacks always and for the real Bot 2 + Bot 3 classes once both are implemented.
 """
 from __future__ import annotations
@@ -32,6 +33,9 @@ def live_exit(risk, strategy: ManualStrategy, candles: list[Candle], entry_idx: 
     fill = ExecutionResult(client_order_id="t", symbol=sym, side=OrderSide.BUY, status=OrderStatus.FILLED,
                            path=ExecutionPath.SWAP, mode=TradingMode.SIM, filled_quantity=qty, avg_price=entry_price,
                            notional=qty * entry_price)
+    hook = getattr(risk, "apply_manual_strategy", None)  # same optional hook the loop calls on activation
+    if callable(hook):
+        hook(strategy)
     pos = book.open_lot(fill, qty * entry_price, f"MANUAL:{strategy.name}", strategy.exit, candles[entry_idx].timestamp)
     for j in range(entry_idx + 1, len(candles)):
         bar = candles[j]
@@ -104,7 +108,7 @@ def _series(scenario: list[tuple[float, float, float, float]]) -> list[Candle]:
     return out
 
 
-def _fixture_strategy(trailing: bool) -> ManualStrategy:
+def _fixture_strategy(trailing: bool, max_loss_pct=None) -> ManualStrategy:
     s = ManualStrategy(name="fixture", symbol="NVDAon")
     d = s.model_dump()
     for k in ("rsi_below", "price_above_sma"):
@@ -114,10 +118,12 @@ def _fixture_strategy(trailing: bool) -> ManualStrategy:
     d["exit"]["rsi_above"]["enabled"] = False
     d["exit"]["trailing_stop"] = {"enabled": trailing, "pct": 3.0}
     d["risk"]["cooldown_bars"] = 10_000  # exactly one trade
+    d["risk"]["max_loss_per_trade_pct"] = max_loss_pct  # 15% size -> 15 units at 100; 0.3% of 10k = 30 USDT -> level 98
     return ManualStrategy.model_validate(d)
 
 
 E = SIM_WARMUP_BARS  # entry bar
+TRAIL_108 = 108 * (1 - 3.0 / 100)  # trailing level after a 108 high (same float expression the implementations use)
 CASES = {
     # name: (trailing, scenario bars, expected (bar index, reason, fill price))
     "sl_and_tp_same_bar": (False, [(100, 111, 94, 100)], (E + 1, ExitReason.STOP_LOSS, 95.0)),
@@ -130,15 +136,24 @@ CASES = {
     "trailing_uses_previous_bar_level": (True, [(105, 108, 104.5, 107), (107, 107, 106, 106.5), (106, 106, 103, 103.5)],
                                          (E + 3, ExitReason.TRAILING_STOP, 108 * 0.97)),
     "trailing_gap_down_fills_at_open": (True, [(100, 108, 99, 107), (103, 103.5, 102, 103)], (E + 2, ExitReason.TRAILING_STOP, 103.0)),
+    # Bot 3 edge rules
+    "gap_up_through_tp_then_sl_same_bar_stop_wins": (False, [(115, 116, 94, 100)], (E + 1, ExitReason.STOP_LOSS, 95.0)),
+    "trailing_beats_tp_same_bar": (True, [(100, 108, 99, 107), (106, 111, 104, 105)], (E + 2, ExitReason.TRAILING_STOP, TRAIL_108)),
+    "several_stops_highest_level_wins": (True, [(99, 99.5, 94, 96)], (E + 1, ExitReason.TRAILING_STOP, 97.0)),
+    "trailing_is_strict_low_equal_level_no_exit": (True, [(100, 108, 99, 107), (106, 107, TRAIL_108, 105), (105, 105, 104, 104.5)],
+                                                   (E + 3, ExitReason.TRAILING_STOP, TRAIL_108)),
+    "max_loss_beats_tp_same_bar": (False, [(100, 111, 97, 100)], (E + 1, ExitReason.MAX_LOSS, 98.0), 0.3),
+    "max_loss_above_sl_wins": (False, [(99, 99, 94, 96)], (E + 1, ExitReason.MAX_LOSS, 98.0), 0.3),
+    "sl_above_max_loss_wins": (False, [(99, 99, 89, 96)], (E + 1, ExitReason.STOP_LOSS, 95.0), 1.5),  # max-loss level 100-150/15=90
 }
 
 
 @pytest.mark.parametrize("engine,risk", engine_risk_impls())
 @pytest.mark.parametrize("case", list(CASES))
 def test_exit_fixture_cases(engine, risk, case):
-    trailing, scenario, (want_bar, want_reason, want_px) = CASES[case]
+    trailing, scenario, (want_bar, want_reason, want_px), *rest = CASES[case]
     candles = _series(scenario)
-    strat = _fixture_strategy(trailing)
+    strat = _fixture_strategy(trailing, rest[0] if rest else None)
     bt = engine.backtest_manual(strat, candles, 10_000.0)
     assert bt.trades, "fixture should enter at bar 60"
     t = bt.trades[0]
@@ -150,3 +165,43 @@ def test_exit_fixture_cases(engine, risk, case):
     assert got is not None
     assert (got[0], got[1]) == (want_bar, want_reason)
     assert got[2] == pytest.approx(want_px, rel=1e-9)
+
+
+# ------------------------------------------------------------------ risk-only rules
+def _one_lot_portfolio():
+    from backend.contracts import Portfolio, Position
+    pos = Position(symbol="NVDAon", quantity=10, avg_entry_price=100, strategy="MANUAL:x", highest_price=104,
+                   stop_loss_price=95, take_profit_price=110, trailing_stop_pct=3.0, current_price=101)
+    return Portfolio(starting_capital=10_000, cash=9_000, positions=[pos], equity=10_010)
+
+
+def _bar(o, h, l, c):
+    return Candle(timestamp=T0, open=o, high=h, low=l, close=c, volume=1000)
+
+
+@pytest.mark.parametrize("engine,risk", engine_risk_impls())
+def test_check_exits_never_mutates_portfolio(engine, risk):
+    pf = _one_lot_portfolio()
+    before = pf.model_dump()
+    for bar in (_bar(101, 109, 100.5, 108), _bar(100, 100, 90, 92), _bar(101, 112, 100.5, 111)):
+        call_check_exits(risk, pf, {"NVDAon": bar.close}, {"NVDAon": bar})
+        assert pf.model_dump() == before
+
+
+@pytest.mark.parametrize("engine,risk", engine_risk_impls())
+def test_emergency_stop_exits_fill_at_close(engine, risk):
+    pf = _one_lot_portfolio()
+    risk.emergency_stop("test")
+    try:
+        bar = _bar(101, 103, 100.5, 102)  # no SL/TP/trailing level touched
+        sigs = call_check_exits(risk, pf, {"NVDAon": bar.close}, {"NVDAon": bar})
+        assert len(sigs) == 1 and sigs[0].action == Action.SELL
+        assert sigs[0].exit_reason == ExitReason.EMERGENCY_STOP and sigs[0].price == pytest.approx(102)
+        assert sigs[0].position_id == pf.positions[0].id
+        # e-stop blocks BUYs but allows the closing SELL
+        from backend.contracts import AgentMode, Signal
+        buy = Signal(symbol="NVDAon", action=Action.BUY, source=AgentMode.MANUAL, strategy="x", reason="x", proposed_notional=100, price=102)
+        assert not risk.check(buy, pf, risk.get_control_state()).approved
+        assert risk.check(sigs[0], pf, risk.get_control_state()).approved
+    finally:
+        risk.reset_emergency_stop()

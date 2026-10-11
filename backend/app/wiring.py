@@ -14,6 +14,7 @@ from typing import Any, Optional
 
 from backend.contracts import (
     Action, AgentMode, ControlState, Decision, ExchangeClient, Explainer, Portfolio, RiskManager, Signal, StrategyEngine,
+    StrategySelection,
     TradingMode,
 )
 
@@ -71,6 +72,24 @@ class ResilientEngine(_PerCallFallback):
     def backtest_manual(self, strategy, candles, initial_capital): return self.__getattr__("backtest_manual")(strategy, candles, initial_capital)
 
 
+def supported_kwargs(fn: Any, kw: dict[str, Any]) -> dict[str, Any]:
+    """Subset of `kw` that `fn` accepts (by name, or all if it takes **kwargs). Lets the app pass newer optional
+    keyword args (e.g. Bot 5's `performance=` / `alerts=`) without breaking implementations that lack them."""
+    import inspect
+
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return {}
+    if any(p.kind == p.VAR_KEYWORD for p in params.values()):
+        return dict(kw)
+    return {k: v for k, v in kw.items() if k in params and params[k].kind in (params[k].KEYWORD_ONLY, params[k].POSITIONAL_OR_KEYWORD)}
+
+
+def call_with_supported(fn: Any, *args: Any, **kw: Any) -> Any:
+    return fn(*args, **supported_kwargs(fn, {k: v for k, v in kw.items() if v is not None}))
+
+
 class ResilientExplainer(_PerCallFallback):
     """The LLM layer must never break the loop: any error -> template fallback."""
 
@@ -78,9 +97,22 @@ class ResilientExplainer(_PerCallFallback):
         super().__init__(primary, fallback, catch_all=True)
 
     def explain_decision(self, decision): return self.__getattr__("explain_decision")(decision)
-    def summarize_state(self, status): return self.__getattr__("summarize_state")(status)
+    def _opt(self, name: str, args: tuple, kw: dict) -> Any:
+        """Per-call fallback that forwards optional kwargs only to implementations whose signature accepts them."""
+        p = getattr(self._primary, name) if self._primary is not None else None
+        f = getattr(self._fallback, name)
+        if p is not None:
+            try:
+                return call_with_supported(p, *args, **kw)
+            except Exception as e:  # NotImplementedError (stub) or any LLM error -> template
+                if not isinstance(e, NotImplementedError):
+                    log.exception("%s.%s failed, using fallback", type(self._primary).__name__, name)
+        self.fallback_methods.add(name)
+        return call_with_supported(f, *args, **kw)
+
+    def summarize_state(self, status, **kw): return self._opt("summarize_state", (status,), kw)
     def parse_strategy_from_text(self, text, default_symbol=None): return self.__getattr__("parse_strategy_from_text")(text, default_symbol)
-    def answer(self, question, status): return self.__getattr__("answer")(question, status)
+    def answer(self, question, status, **kw): return self._opt("answer", (question, status), kw)
 
 
 def _probe_risk(r: Any) -> bool:
@@ -91,6 +123,20 @@ def _probe_risk(r: Any) -> bool:
         return True
     except NotImplementedError:
         return False
+
+
+def presets_table(engine: Any) -> tuple[str, list[StrategySelection]]:
+    """Ask the wired engine's select_strategy for every (regime, style) with all presets enabled.
+    Returns (source, selections); source says whether the real engine or the app fallback answered."""
+    from backend.contracts import PresetName, Regime, TraderStyle
+
+    rows = [engine.select_strategy(r, s, list(PresetName)) for r in Regime for s in TraderStyle]
+    if isinstance(engine, _PerCallFallback):
+        if engine._primary is None or "select_strategy" in engine.fallback_methods:
+            return f"fallback:{type(engine._fallback).__name__}", rows
+        return f"engine:{type(engine._primary).__name__}", rows
+    n = type(engine).__name__
+    return (f"fallback:{n}" if n.startswith("Fallback") else f"engine:{n}"), rows
 
 
 @dataclass

@@ -10,14 +10,14 @@ from datetime import datetime
 from typing import Optional, Sequence, Union
 
 from backend.contracts import (
-    SIM_WARMUP_BARS, Action, AgentMode, AutoConfig, BacktestResult, BacktestTrade, Candle, ConditionLogic,
+    SIM_WARMUP_BARS, Action, Alert, PerformanceSummary, AgentMode, AutoConfig, BacktestResult, BacktestTrade, Candle, ConditionLogic,
     ControlState, Decision, EquityPoint, ExitReason, ManualStrategy, Portfolio, Position, PresetName, Regime,
     RegimeAnalysis, RiskCheck, RiskVerdict, Signal, StatusSnapshot, StrategySelection, TraderStyle, TradingMode,
     utc_now,
 )
 
 from . import indicators as ind
-from .exits import check_protective_exit, trailing_level
+from .exits import ExitHit, check_protective_exit, max_loss_level, trailing_level
 
 
 # =========================================================================== engine
@@ -261,7 +261,8 @@ class FallbackStrategyEngine:
                     open_=b.open, high=b.high, low=b.low,
                     stop_loss_price=p["entry"] * (1 - ex.stop_loss_pct / 100),
                     take_profit_price=p["entry"] * (1 + ex.take_profit_pct / 100),
-                    trail_level=trailing_level(p["high"], ex.trailing_stop.pct if ex.trailing_stop.enabled else None))
+                    trail_level=trailing_level(p["high"], ex.trailing_stop.pct if ex.trailing_stop.enabled else None, p["entry"]),
+                    max_loss_price=max_loss_level(p["entry"], p["qty"], strategy.risk.max_loss_per_trade_pct, initial_capital))
                 reason, px = (hit.reason, hit.price) if hit else (None, None)
                 if reason is None:
                     r = _strategy_exit_on_close(strategy, x, i)
@@ -317,6 +318,7 @@ class FallbackRiskManager:
 
     def __init__(self, control: Optional[ControlState] = None, live_allowed: Optional[bool] = None) -> None:
         self._control = control or ControlState()
+        self._max_loss_pct: dict[str, Optional[float]] = {}
         self._live_allowed = live_allowed if live_allowed is not None else os.getenv("LIVE_TRADING_ENABLED", "").lower() == "true"
 
     def _set(self, **kw) -> ControlState:
@@ -368,17 +370,26 @@ class FallbackRiskManager:
             requires_confirmation=approved and signal.action == Action.BUY and control.confirmation_mode,
         )
 
+    def apply_manual_strategy(self, strategy: ManualStrategy) -> None:
+        """Same optional hook as Bot 3's DefaultRiskManager: per-symbol rules from the active manual strategy."""
+        self._max_loss_pct[strategy.symbol] = strategy.risk.max_loss_per_trade_pct
+
     def check_exits(self, portfolio: Portfolio, prices: dict[str, float], bars: Optional[dict[str, Candle]] = None) -> list[Signal]:
+        """Never mutates `portfolio`. Emergency stop -> EMERGENCY_STOP exit for every position at the close / last price."""
         out: list[Signal] = []
         for pos in portfolio.positions:
-            if pos.symbol not in prices:
-                continue
-            px = prices[pos.symbol]
             bar = (bars or {}).get(pos.symbol)
+            px = bar.close if bar else (prices.get(pos.symbol) or pos.current_price)
+            if not px:
+                continue
             o, h, l = (bar.open, bar.high, bar.low) if bar else (px, px, px)
-            hit = check_protective_exit(open_=o, high=h, low=l, stop_loss_price=pos.stop_loss_price,
-                                        take_profit_price=pos.take_profit_price,
-                                        trail_level=trailing_level(pos.highest_price or pos.avg_entry_price, pos.trailing_stop_pct))
+            if self._control.emergency_stopped:
+                hit = ExitHit(ExitReason.EMERGENCY_STOP, px)
+            else:
+                hit = check_protective_exit(
+                    open_=o, high=h, low=l, stop_loss_price=pos.stop_loss_price, take_profit_price=pos.take_profit_price,
+                    trail_level=trailing_level(pos.highest_price, pos.trailing_stop_pct, pos.avg_entry_price),
+                    max_loss_price=max_loss_level(pos.avg_entry_price, pos.quantity, self._max_loss_pct.get(pos.symbol), portfolio.starting_capital))
             if hit:
                 out.append(Signal(symbol=pos.symbol, action=Action.SELL, source=AgentMode.MANUAL if pos.strategy.startswith("MANUAL:") else AgentMode.AUTO,
                                   strategy=pos.strategy, reason=f"{hit.reason.value} hit at {hit.price:.6g}",
@@ -423,7 +434,17 @@ class FallbackExplainer:
             txt += f" Order status: {decision.execution.status.value}."
         return txt
 
-    def summarize_state(self, status: StatusSnapshot) -> str:
+    def summarize_state(self, status: StatusSnapshot, *, performance: Optional[PerformanceSummary] = None,
+                        alerts: Optional[list[Alert]] = None) -> str:
+        txt = self._summary(status)
+        if performance is not None:
+            txt += (f" Performance: return {performance.total_return_pct:+.2f}%, max drawdown {performance.max_drawdown_pct:.2f}%, "
+                    f"{performance.num_trades} closed trade(s), win rate {performance.win_rate_pct:.0f}%.")
+        if alerts:
+            txt += f" Latest alert: [{alerts[0].level.value}] {alerts[0].message}."
+        return txt
+
+    def _summary(self, status: StatusSnapshot) -> str:
         p = status.portfolio
         c = status.control
         state = "EMERGENCY STOPPED" if c.emergency_stopped else "PAUSED" if c.paused else "running"
@@ -452,5 +473,6 @@ class FallbackExplainer:
             d["exit"]["stop_loss_pct"] = float(m.group(1))
         return ManualStrategy.model_validate(d)
 
-    def answer(self, question: str, status: StatusSnapshot) -> str:
-        return self.summarize_state(status)
+    def answer(self, question: str, status: StatusSnapshot, *, performance: Optional[PerformanceSummary] = None,
+               alerts: Optional[list[Alert]] = None) -> str:
+        return self.summarize_state(status, performance=performance, alerts=alerts)
