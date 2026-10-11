@@ -32,6 +32,10 @@ LIVE switch is opt-in, and the caps default to tiny amounts (25 USDT per order).
    the remaining daily limit.
 4. **Fund the wallet.** Deposit USDT for trading plus BNB for gas. Keep at least `RISK_LIVE_MIN_BNB` (default 0.002 BNB)
    above the gas reserve.
+   **Wallet funding:** about **70 USDT minimum** (100 USDT is comfortable) and **~0.005 BNB** for gas. Smaller wallets
+   can't meet the token minimum order (10 USDT, 20 USDT for Ondo tokens) plus the fee buffer, so every BUY is blocked
+   (`/api/wallet` → `limits.min_wallet_usdt` once risk reports it). The agent keeps 0.002 BNB in reserve
+   (`BINANCE_BNB_GAS_RESERVE`) and stops with `insufficient_gas` below it.
 5. **Daily limit facts:**
    - The **daily quota resets at 00:00 UTC = 05:30 IST**.
    - The `exit_quota_shortfall` warning (alert `LIVE_LIMIT_EXIT_QUOTA_SHORTFALL`) means the remaining quota could not
@@ -76,7 +80,7 @@ BINANCE_LIVE_MAX_ORDER_USDT=25       # Bot 4 executor hard cap (independent seco
 LOOP_AUTOSTART=true                  # on start: resume the saved agent, else Auto (AUTO_EXECUTE) on DEFAULT_AGENT_SYMBOL
 DEFAULT_AGENT_SYMBOL=NVDAB           # bStock, trades 24/7
 LOOP_INTERVAL_SECONDS=60
-STATE_DIR=./logs                     # agent_state.LIVE.json (agent, open lots, emergency stop) survives restarts
+STATE_DIR=./logs                     # agent_state.live.json (agent, open lots, emergency stop) survives restarts
 # LIVE_ALLOWED_TOKENS=NVDAB,TSLAon   # optional: restrict the agent's tokens
 # BINANCE_ENABLE_XSTOCK=true         # xStock (...x) is off by default (no BSC liquidity)
 # BAW_INTENT_FILE=~/.teamwork/baw_intents.json   # order-intent journal (in-flight orders survive restarts)
@@ -135,4 +139,4 @@ happens for 3 intervals. Drop `--backend-only` / `-BackendOnly` to also run the 
 ## 5. Back to SIM
 
 Stop the process. Then set `TRADING_MODE=SIM`, or remove one of the switches. LIVE state lives in its own file
-(`agent_state.LIVE.json`), so SIM never resumes into LIVE and the reverse is also true.
+(`agent_state.live.json`), so SIM never resumes into LIVE and the reverse is also true.

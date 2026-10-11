@@ -647,7 +647,8 @@ class TradingLoop:
 
     def _update_market_context(self, sym: str, pf) -> None:
         """Bot 2 live engine: per-order cap from risk, and set_market_context(symbol, {status, reference_price_only,
-        priceImpactPercent, equity}) from token status + a probe quote; None when nothing is known."""
+        min_order_usdt, priceImpactPercent, equity}) from token status + a probe quote; None when nothing is known.
+        min_order_usdt is get_token_status(sym).min_order_usdt (None when unavailable), the same floor risk uses."""
         eng = getattr(self.c.engine, "_primary", None) or self.c.engine
         cfg = getattr(eng, "live_config", None)
         if cfg is not None and hasattr(cfg, "max_order_usdt"):
@@ -668,10 +669,15 @@ class TradingLoop:
             try:
                 st = fn(sym)
                 d = st if isinstance(st, dict) else (st.model_dump() if hasattr(st, "model_dump") else vars(st))
-                ctx["status"] = d.get("trading_status", d.get("status"))
+                status = d.get("trading_status", d.get("status"))
+                ctx["status"] = getattr(status, "value", status)  # enum -> 'OFFHOURS' (str(enum) is 'TradingStatus.X')
                 ctx["reference_price_only"] = bool(d.get("reference_price_only", False))
+                mo = d.get("min_order_usdt")
+                ctx["min_order_usdt"] = float(mo) if mo is not None else None  # same minimum risk reads
             except Exception:
-                pass
+                ctx["min_order_usdt"] = None
+        else:
+            ctx["min_order_usdt"] = None
         if self._cooldown(sym):
             ctx["status"] = "closed"
         else:

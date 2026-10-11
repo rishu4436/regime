@@ -158,7 +158,7 @@ are unchanged except where noted (positions always carry `pending`).
 | GET | `/api/loop` | `LoopState` + `heartbeat: {last_tick_at, seconds_since_tick, restarts, last_error}` |
 
 `limits` = Bot 3's `risk.live_limits(portfolio, LiveContext)` keys as-is (`limit_source`, `wallet_limits`,
-`risk_limits`, `exit_quota_shortfall_usdt`, ...) plus always: `daily_limit_usdt`, `daily_used_usdt` (settled fills +
+`risk_limits`, `exit_quota_shortfall_usdt`, `min_wallet_usdt`, ...; every key passes through, new ones included) plus always: `daily_limit_usdt`, `daily_used_usdt` (settled fills +
 in-flight buys), `daily_remaining_usdt`, `per_order_cap_usdt`, `allowed_tokens`, `tradable_tokens`, `warnings` (list,
 default `[]`, passed through unchanged; a new code raises alert `LIVE_LIMIT_<CODE>`, e.g. `exit_quota_shortfall`,
 `wallet_limits_stale`).
@@ -206,7 +206,9 @@ explainer receives, so LIVE explanations carry the BscScan link.
   alert `WALLET_SESSION_EXPIRED` is raised (re-scan the QR with `baw`, then resume).
 - Bot 2 live engine `STAY_OUT` codes (`live_below_min_order`, `live_illiquid_family`, `live_token_paused`,
   `live_price_impact`, `insufficient_data`, stale data) are logged no-trade decisions. Before each evaluation the app calls
-  `engine.set_market_context(symbol, {status, reference_price_only, priceImpactPercent, equity})` and sets
+  `engine.set_market_context(symbol, {status, reference_price_only, min_order_usdt, priceImpactPercent, equity})`
+  (`status` as a plain string such as `OFFHOURS`; `min_order_usdt` = `get_token_status(symbol).min_order_usdt`, the same
+  floor risk applies, `null` if unavailable; `priceImpactPercent` / `equity` omitted when unknown) and sets
   `live_config.max_order_usdt` from `risk.live_limits()['per_order_cap_usdt']`. Engine and risk agree on price impact:
   > 1.0 % blocks, exactly 1.0 % is allowed.
 

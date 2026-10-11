@@ -565,7 +565,8 @@ def test_engine_market_context_and_price_impact_passthrough():
     d = _buy(first_buy_tick(c, ex))
     assert d["execution"]["status"] == "FILLED"
     sym, ctx = eng.seen[0]
-    assert sym == SYM and ctx == {"status": "trading", "reference_price_only": False, "priceImpactPercent": 0.35, "equity": 200.0}
+    assert sym == SYM and ctx == {"status": "trading", "reference_price_only": False, "min_order_usdt": None,
+                                   "priceImpactPercent": 0.35, "equity": 200.0}
     assert eng.live_config.max_order_usdt == 25.0  # from risk.live_limits()['per_order_cap_usdt']
     assert risk.contexts[1].price_impact_pct == 0.35 and risk.contexts[1].token_status is not None
     eng2, ex2 = SpyEngine(), ImpactEx()
@@ -927,3 +928,70 @@ def test_live_status_exposes_cooldowns_and_in_flight_orders():
     (p,) = st["chain_pending"]
     assert p["client_order_id"] == cid and p["symbol"] == SYM and p["notional"] > 0 and p["since"] and p["held_exit"] is None
     assert c.get("/api/system").json()["live"]["chain_pending"][0]["client_order_id"] == cid
+
+
+# ---------------------------------------------------------------- small-wallet follow-up: limits pass-through + min order
+def test_wallet_limits_pass_through_every_live_limits_key_incl_min_wallet_usdt():
+    """/api/wallet limits carries every key risk.live_limits() returns, incl. future ones (Bot 3 min_wallet_usdt)."""
+    extra = {"min_wallet_usdt": 70.0, "fee_buffer_usdt": 1.5, "future_key": {"nested": [1, 2]}}
+
+    class MinWalletRisk(ContextRisk):
+        def live_limits(self, portfolio=None, context=None):
+            return {**super().live_limits(portfolio, context), **extra}
+
+    from backend.contracts import ControlState
+    risk = MinWalletRisk(control=ControlState(trading_mode=TradingMode.LIVE), live_allowed=True)
+    c, _ = live_client(risk=risk)
+    lim = c.get("/api/wallet").json()["limits"]
+    rl = risk.live_limits()
+    for k, v in rl.items():
+        assert k in lim, k
+        if k not in ("daily_used_usdt", "daily_remaining_usdt", "warnings"):  # app-merged usage fields
+            assert lim[k] == v, (k, lim[k], v)
+    assert lim["min_wallet_usdt"] == 70.0
+
+
+class _StatusEx(FakeLiveExchange):
+    def __init__(self, status, **kw):
+        super().__init__(**kw)
+        self._status = status
+
+    def get_token_status(self, symbol):
+        if isinstance(self._status, Exception):
+            raise self._status
+        return self._status
+
+
+@pytest.mark.parametrize("status,expected", [
+    ({"trading_status": "TRADING", "min_order_usdt": 20, "reference_price_only": False}, 20.0),
+    ({"trading_status": "TRADING", "min_order_usdt": None}, None),
+    (RuntimeError("status endpoint down"), None),
+])
+def test_market_context_carries_token_min_order(status, expected):
+    """The loop passes get_token_status(sym).min_order_usdt to engine.set_market_context (None if unavailable)."""
+    c, ex = live_client(ex=_StatusEx(status))
+    loop = c.app.state.st.loop
+    seen = {}
+
+    class Eng:
+        def set_market_context(self, sym, ctx):
+            seen[sym] = ctx
+
+    loop.c.engine = Eng()
+    loop._update_market_context(SYM, loop.book.portfolio())
+    assert "min_order_usdt" in seen[SYM] and seen[SYM]["min_order_usdt"] == expected
+    if not isinstance(status, Exception):
+        assert seen[SYM]["status"] == "TRADING"
+
+
+def test_market_context_status_enum_is_plain_string():
+    """Bot 4 TokenStatus.trading_status is a str-Enum; the engine must get 'OFFHOURS', not 'TradingStatus.OFFHOURS'."""
+    try:
+        from backend.exchange.status import TradingStatus
+    except Exception:
+        pytest.skip("Bot 4 TradingStatus not importable")
+    c, ex = live_client(ex=_StatusEx({"trading_status": TradingStatus.OFFHOURS, "min_order_usdt": 20.0}))
+    loop, seen = c.app.state.st.loop, {}
+    loop.c.engine = type("E", (), {"set_market_context": lambda self, s, ctx: seen.__setitem__(s, ctx)})()
+    loop._update_market_context(SYM, loop.book.portfolio())
+    assert seen[SYM]["status"] == "OFFHOURS" and seen[SYM]["min_order_usdt"] == 20.0
