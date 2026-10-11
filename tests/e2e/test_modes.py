@@ -60,4 +60,8 @@ def test_paper_uses_exchange_factory():
         comps = build_components(s)
     except NotImplementedError:
         pytest.skip("PAPER client not implemented yet (Bot 4)")
+    except Exception as e:  # Bot 4's PAPER client needs Binance credentials; refusing loudly at startup is correct
+        if "BINANCE_API_KEY" in str(e):
+            pytest.skip(f"PAPER needs Binance keys: {e}")
+        raise
     assert comps.exchange.mode == TradingMode.PAPER
