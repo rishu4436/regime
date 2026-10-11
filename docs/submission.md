@@ -51,19 +51,16 @@ limits you set.
   registered on-chain yet**.
   <!-- If Rishu registers before submitting, replace the line above with the registration tx / agent id. -->
 
-## Proof: an autonomous trade on mainnet
+## Proof: autonomous trades on mainnet
 
-On 11 Oct 2026, Regime bought 10 USDT of NVDAB on its own with real funds. It decided at 09:25:39 IST and the swap
-filled at 09:25:53 IST.
+**Headline:** on 11 Oct 2026 at 12:01 IST, Regime bought 10 USDT of NVDAB on its own with real funds, in Auto mode
+with the Grid strategy.
 
-**Transaction:** [0x228c02688cd2a8170b38dba6abfdb4f95fca9e9e22ae6bed6a191d0b88a19f22 on BscScan](https://bscscan.com/tx/0x228c02688cd2a8170b38dba6abfdb4f95fca9e9e22ae6bed6a191d0b88a19f22)
+**Transaction:** [0x187fdc3e1023e1ecd37af1dc7bed4176a13e75e39a0b35727681538c0690bf7f on BscScan](https://bscscan.com/tx/0x187fdc3e1023e1ecd37af1dc7bed4176a13e75e39a0b35727681538c0690bf7f)
 
-The reason it logged for that trade:
-
-> Market regime sideways (Flat SMA50 (slope -0.12%) and low volatility (0.60%)); sideways market with the Balanced
-> style selects Grid (preferred preset). Grid: price in the bottom grid cell 1 of 5 (1 = bottom, 5 = top) of range
-> 229.2-235.5; size raised to the token minimum (10.00 USDT). Conditions met: price in the bottom grid cell. Live risk
-> checks passed ($10.00).
+**Earlier trade:** Regime's first mainnet trade was a 10 USDT NVDAB buy at 09:25 IST the same day
+([0x228c02688cd2a8170b38dba6abfdb4f95fca9e9e22ae6bed6a191d0b88a19f22 on BscScan](https://bscscan.com/tx/0x228c02688cd2a8170b38dba6abfdb4f95fca9e9e22ae6bed6a191d0b88a19f22)).
+The README shows the plain-English reason Regime logged for it.
 
 ## Safety
 
