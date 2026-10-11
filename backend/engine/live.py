@@ -163,7 +163,9 @@ def entry_blockers(
 
 
 # ---------------------------------------------------------------- market context (optional, from the loop)
-PAUSED_STATUSES = frozenset({"paused", "pause", "closed"})
+# Statuses (normalised: lower-case, '-', '_' and spaces removed) that refuse NEW buys. Bot 3's values are
+# trading / off-hours / closed / no liquidity; Binance statusInfo uses offhours / closed / pause.
+PAUSED_STATUSES = frozenset({"paused", "pause", "closed", "offhours", "noliquidity"})
 PAUSED_REASONS = frozenset({"ASSET_PAUSED", "MARKET_PAUSED", "MAINTENANCE", "MARKET_MAINTENANCE", "UNSUPPORTED"})
 
 
@@ -181,8 +183,12 @@ def normalize_market_context(ctx: Optional[Mapping[str, Any]]) -> Optional[dict]
     if ctx is None:
         return None
     status = ctx.get("status", ctx.get("marketStatus"))
+    norm = None
+    if status is not None:
+        norm = "".join(ch for ch in str(status).lower() if ch not in "-_ ")
     return {
-        "status": str(status).lower() if status is not None else None,
+        "status": norm,
+        "reference_price_only": bool(ctx.get("reference_price_only", ctx.get("referencePriceOnly", False))),
         "open_state": ctx.get("openState", ctx.get("open_state")),
         "reason_code": (str(ctx.get("reasonCode", ctx.get("reason_code")) or "").upper() or None),
         "price_impact_pct": _num(ctx.get("price_impact_pct", ctx.get("priceImpactPercent"))),
@@ -196,9 +202,14 @@ def market_blockers(symbol: str, ctx: Optional[dict], cfg: LiveSafetyConfig) -> 
         return []
     out = []
     st, rc = ctx.get("status"), ctx.get("reason_code")
-    if st in PAUSED_STATUSES or ctx.get("open_state") is False or rc in PAUSED_REASONS:
+    ref_only = ctx.get("reference_price_only")
+    if st in PAUSED_STATUSES or ctx.get("open_state") is False or rc in PAUSED_REASONS or ref_only:
         out.append(
-            ("live_token_paused", f"{symbol} not tradable now (status {st}, openState {ctx.get('open_state')}, {rc})")
+            (
+                "live_token_paused",
+                f"{symbol} not tradable now (status {st}, openState {ctx.get('open_state')}, {rc}"
+                f"{', reference price only' if ref_only else ''})",
+            )
         )
     imp = ctx.get("price_impact_pct")
     if imp is not None and imp > cfg.impact_max_pct:

@@ -86,10 +86,12 @@ class DefaultStrategyEngine:
             self.set_market_context(sym, ctx)
 
     def set_market_context(self, symbol: str, ctx: Optional[Mapping[str, Any]]) -> None:
-        """Latest market info for ``symbol`` (``None`` clears it). Keys: ``status`` ('open'|'offhours'|'paused'|
-        'closed'; Binance ``statusInfo`` keys marketStatus/openState/reasonCode also accepted), ``price_impact_pct``
-        (from a probe quote), ``reference_price``, ``equity`` (USDT hint). Applies to BUYs only:
-        paused/closed -> STAY_OUT 'live_token_paused'; impact > 2% -> STAY_OUT 'live_price_impact'; > 1% -> size x0.5.
+        """Latest market info for ``symbol`` (``None`` clears it). Keys: ``status`` ('trading'|'open'|'off-hours'|
+        'closed'|'no liquidity'|'paused'; Binance ``statusInfo`` marketStatus/openState/reasonCode also accepted),
+        ``reference_price_only``, ``price_impact_pct`` or ``priceImpactPercent`` (percent units, from a quote),
+        ``reference_price``, ``equity`` (USDT hint). Applies to BUYs only: off-hours / closed / no liquidity /
+        paused / reference_price_only -> STAY_OUT 'live_token_paused'; impact > 2% -> STAY_OUT 'live_price_impact';
+        impact > 1% -> size x0.5. SELLs are never blocked.
         """
         norm = normalize_market_context(ctx)
         if norm is None:
