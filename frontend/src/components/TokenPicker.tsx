@@ -34,7 +34,10 @@ export function useTokenRows(): TokenRow[] {
         return { symbol: t.symbol, label: known?.label ?? `${t.symbol}${t.name ? ` (${t.name})` : ""}`, status: statusOf(t), price: t.price ?? null, fromBackend: true,
           name: t.name ?? null, type: t.type ?? t.token_type ?? null, volume_24h: t.volume_24h ?? null, liquidity: t.liquidity ?? null, narrative: t.narrative ?? null };
       });
-      const all = [...merged, ...fallback.filter((f) => !seen.has(f.symbol))];
+      // full list is ~680 rows: tradable first, then by DEX volume, closed/not-tradable last
+      const rank = (r: TokenRow) => (blocked(r) ? 2 : r.status?.tradable === false || (r.status?.trading_status && r.status.trading_status !== "TRADING") ? 1 : 0);
+      const all: TokenRow[] = [...merged, ...(fallback as TokenRow[]).filter((f) => !seen.has(f.symbol))]
+        .sort((a, b) => rank(a) - rank(b) || (b.volume_24h ?? 0) - (a.volume_24h ?? 0));
       cache = { at: Date.now(), rows: all }; setRows(all);
     }).catch(() => {});
     return () => { off = true; };

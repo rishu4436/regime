@@ -40,7 +40,7 @@ export class HttpApi implements ApiClient {
 
   health() { return this.get<{ status: string; contracts_version?: string; trading_mode?: string }>("/health"); }
   system() { return this.get<SystemInfo>("/api/system"); }
-  getTokens(q = "") { return this.get<TokenInfo[]>(`/api/tokens?q=${enc(q)}`); }
+  getTokens(q = "") { return this.get<TokenInfo[]>(`/api/tokens?all=1&q=${enc(q)}`); }
   getCandles(symbol: string, timeframe: Timeframe = "1h", limit = 200, opts?: { history?: boolean }) {
     return this.get<Candle[]>(`/api/candles/${enc(symbol)}?timeframe=${timeframe}&limit=${limit}${opts?.history ? "&history=true" : ""}`);
   }
