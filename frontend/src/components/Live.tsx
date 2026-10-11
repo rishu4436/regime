@@ -163,7 +163,7 @@ export function AutonomyMonitor({ status, refresh }: { status: StatusSnapshot | 
       {ask === "stop" && (
         <ConfirmDialog title="Emergency stop?" danger confirmLabel="Stop the agent" busy={busy} onCancel={() => setAsk(null)}
           onConfirm={() => run(() => api.emergencyStop("Emergency stop by user", false), "Emergency stop engaged")}>
-          The agent stops opening trades immediately. Open positions are closed on the next bar at that bar's close (exit reason EMERGENCY_STOP).
+          The agent stops opening trades immediately. Open positions are closed on the next bar at that bar's close, logged as an emergency stop.
         </ConfirmDialog>
       )}
       {ask === "reset" && (

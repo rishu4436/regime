@@ -97,7 +97,7 @@ export function TradingLimitsCard({ refresh }: { refresh?: () => void }) {
         {err && <div className="banner red" role="alert" style={{ marginBottom: 0 }}><span className="grow">{err}</span></div>}
         <div>
           <span className="lbl">Order size</span>
-          <Segmented size="sm" value={draft.order_mode} onChange={(v) => set("order_mode", v)} options={[{ value: "strategy", label: "Strategy decides" }, { value: "fixed", label: "Fixed USDT" }, { value: "pct", label: "% of wallet" }]} />
+          <Segmented size="sm" value={draft.order_mode} onChange={(v) => { setDraft({ ...draft, order_mode: v, ...(v === "fixed" && draft.order_usdt == null ? { order_usdt: 25 } : {}), ...(v === "pct" && draft.order_pct == null ? { order_pct: 2 } : {}), ...(v === "strategy" ? { order_usdt: data.order_usdt, order_pct: data.order_pct } : {}) }); setErr(null); }} options={[{ value: "strategy", label: "Strategy decides" }, { value: "fixed", label: "Fixed USDT" }, { value: "pct", label: "% of wallet" }]} />
           <div style={{ marginTop: 8 }}>
             {draft.order_mode === "fixed"
               ? <NumberInput value={draft.order_usdt ?? 25} min={1} step={5} suffix="USDT" onChange={(v) => set("order_usdt", v ?? 1)} />

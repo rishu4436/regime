@@ -271,7 +271,9 @@ export const strategyLabel = (s?: string | null) => {
   if (s.startsWith("MANUAL:")) return `${s.slice(7)} (manual)`;
   return STRATEGY_NAMES[s] ?? s;
 };
+const CONDITION_NAMES: Record<string, string> = { close_above_ema: "price above EMA", ema_above_sma: "EMA above SMA", macd_above_signal: "MACD above its signal line" };
 /** Replace raw engine names (regimes, presets, styles) inside a reason with labels; "->" becomes "picks". */
 export const humanReason = (r?: string | null) => !r ? "" : r
   .replace(/\s*->\s*/g, " picks ")
+  .replace(/\b[a-z]+(?:_[a-z]+)+\b/g, (w) => CONDITION_NAMES[w] ?? w)
   .replace(/\b[A-Z][A-Z_]{2,}\b/g, (w) => REGIME_NAMES[w] ?? STRATEGY_NAMES[w] ?? STYLE_NAMES[w] ?? w);
