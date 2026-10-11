@@ -120,7 +120,7 @@ def test_persists_across_restart_and_reset(tmp_path):
     assert c2.app.state.st.settings.live_max_order_usdt == 200
     ex = c2.app.state.st.loop.c.exchange
     if callable(getattr(ex, "live_limits", None)):  # Bot 4: per-order cap + exit cap that fits a full token position
-        assert ex.live_limits()["max_order_usdt"] == 200 and ex.live_limits()["max_sell_usdt"] == 500
+        assert ex.live_limits()["max_order_usdt"] == 200 and ex.live_limits()["max_sell_usdt"] == 1000
     eng = c2.app.state.st.loop.c.engine
     eng = getattr(eng, "_primary", None) or eng
     if hasattr(eng, "set_live_limits"):  # Bot 2's engine follows the same per-order cap
@@ -228,3 +228,25 @@ def test_exchange_refusal_changes_nothing(tmp_path, monkeypatch):
     assert d["is_default"] is True and d["max_order_usdt"] == 25
     assert not (tmp_path / "limits.json").exists()
     assert ex.live_limits()["max_order_usdt"] == 25
+
+
+def test_sell_cap_has_headroom_and_never_shrinks():
+    """Bot 3's bug: a full per-token position that gained value, or caps lowered while holding, must still exit."""
+    from backend.app.limits import apply_exchange
+
+    class Ex:
+        def __init__(self):
+            self.lim = {"max_order_usdt": 25.0, "max_sell_usdt": 50.0}
+        def set_live_limits(self, max_order_usdt, max_sell_usdt=None):
+            self.lim = {"max_order_usdt": max_order_usdt, "max_sell_usdt": max_sell_usdt}
+        def live_limits(self):
+            return dict(self.lim)
+
+    ex = Ex()
+    apply_exchange(ex, {"max_order_usdt": 200, "max_per_token_usdt": 500, "max_total_usdt": 1000})
+    assert ex.live_limits()["max_sell_usdt"] >= 550  # 500 bought, now worth 550
+    apply_exchange(ex, {"max_order_usdt": 25, "max_per_token_usdt": 50, "max_total_usdt": 50})  # reset while holding
+    assert ex.live_limits()["max_sell_usdt"] == 1000 and ex.live_limits()["max_order_usdt"] == 25
+    fresh = Ex()
+    apply_exchange(fresh, {"max_order_usdt": 25, "max_per_token_usdt": 50, "max_total_usdt": 50})
+    assert fresh.live_limits()["max_sell_usdt"] >= 55  # default 50 position worth 55
