@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { CONTRACTS_VERSION, DEFAULT_INITIAL_CAPITAL, PresetNameValues, type AutoConfig } from "./contracts";
 import { API_MODE } from "./api";
 import { MOCK_SCENARIO, setMockScenario } from "./api/mock";
@@ -14,7 +14,8 @@ import { BacktestView } from "./views/BacktestView";
 import { Dashboard } from "./views/Dashboard";
 import { ManualBuilder } from "./views/ManualBuilder";
 
-const LS_KEY = "teamwork.strategy.v1";
+// v2: activation defaults to AUTO_EXECUTE everywhere; older saved drafts (CONFIRMATION default) are dropped
+const LS_KEY = "teamwork.strategy.v2";
 function loadStrategy(): FullStrategy {
   try { const raw = localStorage.getItem(LS_KEY); return raw ? fillStrategy(JSON.parse(raw)) : defaultStrategy(); } catch { return defaultStrategy(); }
 }
@@ -36,12 +37,7 @@ function Shell() {
   const { status, error, refresh, alertsVersion, tick } = useStatus();
   const live = useLiveState(status, tick);
   const mode = live.isLive ? "LIVE" : status?.control.trading_mode ?? live.system?.trading_mode;
-  // autonomous LIVE: activations default to AUTO_EXECUTE (inside the hard caps); confirmation is opt-in
-  useEffect(() => {
-    if (!live.isLive) return;
-    setAutoCfg((c) => ({ ...c, activation: "AUTO_EXECUTE" }));
-    setStrategyState((st) => ({ ...st, activation: "AUTO_EXECUTE" }));
-  }, [live.isLive]);
+  // the agent is autonomous in every mode: activations default to AUTO_EXECUTE; confirmation is an explicit opt-in toggle
   const pendingCount = (status?.recent_decisions ?? []).filter((d) => d.execution?.status === "PENDING_CONFIRMATION").length;
   const meta = TABS.find((t) => t.id === tab) ?? TABS[0];
   const go = (t: Tab) => setTab(t);
@@ -49,7 +45,7 @@ function Shell() {
   const setStrategy = (st: FullStrategy) => { setStrategyState(st); try { localStorage.setItem(LS_KEY, JSON.stringify(st)); } catch { /* private mode */ } };
   const [capital, setCapital] = useState(DEFAULT_INITIAL_CAPITAL);
   const [run, setRun] = useState<BacktestRun | null>(null);
-  const [autoCfg, setAutoCfg] = useState<AutoConfig>({ symbol: "NVDAB", style: "BALANCED", enabled_presets: [...PresetNameValues], capital: DEFAULT_INITIAL_CAPITAL, timeframe: "1h", activation: "CONFIRMATION" });
+  const [autoCfg, setAutoCfg] = useState<AutoConfig>({ symbol: "NVDAB", style: "BALANCED", enabled_presets: [...PresetNameValues], capital: DEFAULT_INITIAL_CAPITAL, timeframe: "1h", activation: "AUTO_EXECUTE" });
 
   const nav = TABS.map((t) => (
     <button key={t.id} className={`nav-item${tab === t.id ? " active" : ""}`} onClick={() => setTab(t.id)}>

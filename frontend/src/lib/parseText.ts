@@ -14,7 +14,7 @@ export function parseStrategyText(text: string, defaultSymbol = "NVDAB"): Manual
   const style: TraderStyle | undefined = /patient|accumulat|long[- ]term/.test(t) ? "PATIENT" : /active|scalp|aggressive/.test(t) ? "ACTIVE" : /balanced|swing/.test(t) ? "BALANCED" : undefined;
   const hasRules = /rsi|sma|ema|macd|bollinger|\bbb\b|volume|breakout|take profit|stop loss|trailing/.test(t);
   if (/\bauto\b(?![- ]?execut)|auto mode|agent decide|you decide|pick for me/.test(t) || (style && !hasRules)) {
-    return { symbol, style: style ?? "BALANCED", capital: capital ?? 10000, activation: /auto[- ]?execute|without asking/.test(t) ? "AUTO_EXECUTE" : "CONFIRMATION" };
+    return { symbol, style: style ?? "BALANCED", capital: capital ?? 10000, activation: /\b(confirm|ask me|approve|approval)\b/.test(t) && !/without (asking|confirm)/.test(t) ? "CONFIRMATION" : "AUTO_EXECUTE" };
   }
 
   const s = defaultStrategy();
@@ -53,6 +53,7 @@ export function parseStrategyText(text: string, defaultSymbol = "NVDAB"): Manual
   if (cool != null) s.risk.cooldown_bars = cool;
   if (/market hours|us session|trading hours/.test(t)) s.filters.market_hours.enabled = true;
   if (/(above[- ]average|high|min(?:imum)?) volume (filter|only)|only .*high volume/.test(t)) s.filters.min_volume.enabled = true;
+  if (/\b(confirm|ask me|approve|approval)\b/.test(t) && !/without (asking|confirm)/.test(t)) s.activation = "CONFIRMATION";
   if (/auto[- ]?execute|without (asking|confirmation)/.test(t)) s.activation = "AUTO_EXECUTE";
   return s;
 }

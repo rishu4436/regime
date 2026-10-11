@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import type { Decision, ExecutionResult, StatusSnapshot } from "../contracts";
 import { api } from "../api";
-import type { LiveExecutionFields } from "../api/types";
+import type { ChainPending, LiveCooldown, LiveExecutionFields } from "../api/types";
 import { cls, time, usd } from "../lib/format";
 import { ago, allowedTokensText, balAmount, balAsset, balValue, bscAddr, bscTx, dur, limitsOf, shortHex, stricter, useLive } from "../lib/live";
 import { conditionLabel, controlReason, exchangeCodeLabels, isExitQueued, strategyLabel } from "../lib/strategy";
@@ -109,7 +109,7 @@ export function TxLink({ exec }: { exec?: (ExecutionResult & LiveExecutionFields
 /** 24/7 monitor: is the agent running on its own, since when, heartbeat, and the kill switches. */
 export function AutonomyMonitor({ status, refresh }: { status: StatusSnapshot | null; refresh: () => void }) {
   const toast = useToast();
-  const { loop, hb, now, isLive, refresh: refreshLive } = useLive();
+  const { loop, hb, now, isLive, gate, refresh: refreshLive } = useLive();
   const [ask, setAsk] = useState<null | "stop" | "reset">(null);
   const [busy, setBusy] = useState(false);
   if (!status || !loop) return <Card><Skeleton h={70} /></Card>;
@@ -154,6 +154,7 @@ export function AutonomyMonitor({ status, refresh }: { status: StatusSnapshot | 
         <div><span className="lbl">Next tick</span><b>{loop.running ? (nextIn == null ? "—" : nextIn === 0 ? "now" : `in ${nextIn}s`) : "—"}</b><span className="faint small">every {loop.interval_seconds}s</span></div>
         <div><span className="lbl">Execution</span><b>{c.confirmation_mode ? "asks before entries" : "autonomous"}</b><span className="faint small">{isLive ? "real funds" : c.trading_mode}</span></div>
       </div>
+      <InFlight cooldowns={gate?.cooldowns} pending={gate?.chain_pending} />
       {loop.heartbeat?.last_error && <div className="banner amber" style={{ margin: "12px 0 0" }}><span className="grow small"><b>Last loop error:</b> {loop.heartbeat.last_error}</span></div>}
       {hb.stale && <div className="banner red" style={{ margin: "12px 0 0" }}><span className="grow"><b>No tick for {ago(hb.lastTick, now).replace(" ago", "")}.</b> The loop says it is running but hasn't produced a cycle; check the backend logs.</span></div>}
       {auto && <div className="banner red" style={{ margin: "12px 0 0" }}><span className="grow"><b>Automatic emergency stop:</b> {controlReason(c.reason)}. No new entries until you reset it.</span></div>}
@@ -342,5 +343,52 @@ export function ActivityFeed({ decisions, confirmMode = false }: { decisions: De
         })}
       </div>
     </Card>
+  );
+}
+
+/** API.md v0.7 /api/live/status: chain_pending -> "N swap(s) settling on-chain"; cooldowns -> per-token chips with time left. */
+export function InFlight({ cooldowns, pending }: { cooldowns?: LiveCooldown[] | null; pending?: ChainPending[] | null }) {
+  const [now, setNow] = useState(Date.now());
+  const cds = (Array.isArray(cooldowns) ? cooldowns : []).filter((c) => c && c.symbol);
+  const live = cds.filter((c) => { const t = Date.parse(c.until); return !Number.isFinite(t) || t > now; });
+  const pend = Array.isArray(pending) ? pending.filter(Boolean) : [];
+  useEffect(() => {
+    if (!cds.length) return;
+    const t = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, [cds.length]);
+  if (!live.length && !pend.length) return null;
+  const left = (until: string) => {
+    const t = Date.parse(until);
+    if (!Number.isFinite(t)) return until;
+    const s = Math.max(0, Math.round((t - now) / 1000));
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    return h ? `${h}h ${m}m` : m ? `${m}m ${String(sec).padStart(2, "0")}s` : `${sec}s`;
+  };
+  const total = pend.reduce((a, p) => a + (Number(p.notional) || 0), 0);
+  return (
+    <div className="inflight">
+      {pend.length > 0 && (
+        <div className="inflight-row">
+          <span className="pill warn" title={pend.map((p) => `${p.symbol}${p.notional != null ? ` ${usd(p.notional)}` : ""}${p.since ? ` since ${time(p.since)}` : ""}${p.held_exit ? " (exit queued until fill)" : ""}`).join("\n")}>
+            <span className="spin" style={{ width: 10, height: 10 }} /> {pend.length} swap{pend.length > 1 ? "s" : ""} settling on-chain
+          </span>
+          <span className="small muted">
+            {total > 0 ? `${usd(total)} in flight · ` : ""}
+            {pend.map((p, i) => <span key={p.client_order_id ?? p.order_id ?? i}>{i ? ", " : ""}{p.symbol}{p.tx_hash ? <> <TxLink exec={{ tx_hash: p.tx_hash } as ExecutionResult & LiveExecutionFields} /></> : null}{p.held_exit ? " (exit queued)" : ""}</span>)}
+          </span>
+        </div>
+      )}
+      {live.length > 0 && (
+        <div className="inflight-row">
+          <span className="lbl" style={{ margin: 0 }}>Cooldowns</span>
+          {live.map((c) => (
+            <span key={`${c.symbol}-${c.until}`} className="chip warn" title={[c.code != null ? conditionLabel(String(c.code)) : null, c.reason].filter(Boolean).join(" · ")}>
+              ⏳ {c.symbol} · {left(c.until)} left{c.code != null ? <span className="faint"> · {conditionLabel(String(c.code))}</span> : null}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

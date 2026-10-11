@@ -212,7 +212,7 @@ export function ManualBuilder({ strategy: s, setStrategy, capital, setCapital, r
             <div className="field-grid">
               <div><span className="lbl">Starting capital</span><NumberInput value={capital} min={1} step={500} suffix="USDT" onChange={(v) => setCapital(n(v, DEFAULT_INITIAL_CAPITAL))} /></div>
               <div><span className="lbl">When live</span>
-                <Segmented value={s.activation} onChange={(v) => up((d) => { d.activation = v; })} options={[{ value: "CONFIRMATION", label: "Confirm" }, { value: "AUTO_EXECUTE", label: "Auto" }]} /></div>
+                <Segmented value={s.activation} onChange={(v) => up((d) => { d.activation = v; })} options={[{ value: "AUTO_EXECUTE", label: "Autonomous" }, { value: "CONFIRMATION", label: "Ask me first" }]} /></div>
             </div>
             <button className="btn block lg" style={{ marginTop: 16 }} disabled={busy != null} onClick={runBacktest}>{busy === "bt" ? <span className="spin" /> : "▶"} Run backtest</button>
             <div className="field-grid" style={{ marginTop: 8 }}>
