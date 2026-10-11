@@ -32,14 +32,19 @@ export function ManualBuilder({ strategy: s, setStrategy, capital, setCapital, r
   const toast = useToast();
   const [busy, setBusy] = useState<"bt" | "act" | "nl" | "save" | null>(null);
   const [saved, setSaved] = useState<ManualStrategy[]>([]);
-  const loadSaved = () => api.listStrategies().then(setSaved).catch(() => setSaved([]));
+  // keep what we have if the list call fails (and say so) instead of silently emptying the dropdown
+  const loadSaved = (justSaved?: ManualStrategy) => api.listStrategies()
+    .then((list) => setSaved(justSaved && !list.some((x) => x.id === justSaved.id) ? [...list, justSaved] : list))
+    .catch((err) => { if (justSaved) setSaved((cur) => [...cur.filter((x) => x.id !== justSaved.id), justSaved]); toast(`Couldn't load saved strategies: ${err instanceof Error ? err.message : err}`, "error"); });
   useEffect(() => { loadSaved(); }, []);
   const save = async () => {
     setBusy("save");
     try {
       const out = s.id ? await api.updateStrategy(s.id, toContract(s, true)) : await api.saveStrategy(toContract(s));
       setStrategy({ ...fillStrategy(out), id: out.id, created_at: out.created_at });
-      toast(`Saved "${out.name}"${out.version && out.version > 1 ? ` (v${out.version})` : ""}`, "success"); loadSaved();
+      // show it in the dropdown right away, then re-sync with the backend
+      setSaved((cur) => [...cur.filter((x) => x.id !== out.id), out]);
+      toast(`Saved "${out.name}"${out.version && out.version > 1 ? ` (v${out.version})` : ""}. Pick it any time under Saved strategies`, "success"); loadSaved(out);
     } catch (err) { toast(err instanceof Error ? err.message : String(err), "error"); } finally { setBusy(null); }
   };
   const remove = async () => {
@@ -131,6 +136,7 @@ export function ManualBuilder({ strategy: s, setStrategy, capital, setCapital, r
                     catch (err) { toast(err instanceof Error ? err.message : String(err), "error"); }
                   }}>
                     <option value="">+ New (unsaved)</option>
+                    {s.id && !saved.some((x) => x.id === s.id) && <option value={s.id}>{s.name} · not on this backend, save again</option>}
                     {saved.map((x) => <option key={x.id} value={x.id}>{x.name} · {x.symbol}{x.version && x.version > 1 ? ` · v${x.version}` : ""}</option>)}
                   </select>
                   <button className="btn ghost" disabled={busy != null} onClick={save}>{busy === "save" ? <span className="spin" /> : s.id ? "Update" : "Save"}</button>
