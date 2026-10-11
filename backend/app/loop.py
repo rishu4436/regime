@@ -1257,6 +1257,11 @@ class TradingLoop:
                 except Exception:
                     log.exception("could not restore the default limits")
                 self._alert(AlertLevel.WARNING, "LIMITS", f"saved trading limits ignored ({e}); using the safe defaults")
+        else:  # no limits.json: still give exits the 2x per-token SELL cap from the start (Bot 4 / Bot 3)
+            try:
+                limitsmod.apply_exchange(self.c.exchange, limitsmod.panel(self._limits_call("get", wallet_daily=None)))
+            except Exception:
+                log.exception("could not apply the default SELL cap to the exchange")
 
     def _wallet_limits_for_risk(self) -> Any:
         """The real wallet's limits (LIVE only): the SIM client's simulated 100 USDT quota must not block a SIM demo."""
@@ -1288,6 +1293,12 @@ class TradingLoop:
         with self.lock:
             out = self._limits_call("get")
             out["is_default"] = limitsmod.panel(out) == limitsmod.panel(out.get("defaults") or {})
+            fn = getattr(self.c.exchange, "live_limits", None)  # read-only: the exchange's current exit (SELL) cap
+            try:
+                sell = (fn() if callable(fn) else {}).get("max_sell_usdt")
+                out["max_sell_usdt"] = float(sell) if sell is not None else None
+            except Exception:
+                out["max_sell_usdt"] = None
             return out
 
     def set_limits(self, raw: dict) -> dict:

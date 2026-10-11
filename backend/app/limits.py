@@ -24,7 +24,7 @@ log = logging.getLogger("backend.app.limits")
 
 FIELDS = ("order_mode", "order_usdt", "order_pct", "max_order_usdt", "max_total_usdt", "max_per_token_usdt",
           "daily_loss_usdt", "daily_buy_usdt")
-READ_ONLY = frozenset({"wallet_daily_limit_usdt", "defaults", "notes", "is_default", "updated_at"})
+READ_ONLY = frozenset({"wallet_daily_limit_usdt", "defaults", "notes", "is_default", "updated_at", "max_sell_usdt"})
 ENGINE_DEFAULT_SIZE_PCT = 2.0  # Bot 2 LiveSafetyConfig.max_size_pct (Auto live sizes: never above 2% of equity)
 
 
@@ -191,9 +191,16 @@ def apply_engine(engine: Any, d: Mapping[str, Any]) -> str:
 def apply_exchange(exchange: Any, d: Mapping[str, Any]) -> str:
     cap = float(d["max_order_usdt"])
     # exits must always fit: the SELL cap covers a full position in one token (Bot 3 / Bot 4 formula)
-    sell = max(2 * cap, float(d.get("max_per_token_usdt") or d.get("max_total_usdt") or 0.0))
+    # 2x headroom: a full position that has gained value must still close in one order (Bot 3, 2026-10-11)
+    sell = max(2 * cap, 2 * float(d.get("max_per_token_usdt") or d.get("max_total_usdt") or 0.0))
     fn = getattr(exchange, "set_live_limits", None)
     if callable(fn):
+        cur = getattr(exchange, "live_limits", None)  # never squeeze exits below the current SELL cap
+        try:
+            old = float((cur() if callable(cur) else {}).get("max_sell_usdt") or 0.0)
+        except Exception:
+            old = 0.0
+        sell = max(sell, old)
         from .wiring import supported_kwargs
         kw = supported_kwargs(fn, {"max_order_usdt": cap, "max_sell_usdt": sell})
         fn(**kw) if kw else fn({"max_order_usdt": cap, "max_sell_usdt": sell})

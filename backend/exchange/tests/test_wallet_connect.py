@@ -6,7 +6,7 @@ import json
 from backend.exchange.baw import BawCli, RunResult
 from backend.exchange.wallet_connect import CONNECTED, EXPIRED, FAILED, PENDING, WalletConnect
 
-ADDR = "0xc44edDcFfA4227d38bc92a7cA5990953AA7Ff0cF"
+ADDR = "0xA11CE00000000000000000000000000000000001"
 OTHER = "0x1111111111111111111111111111111111111111"
 
 

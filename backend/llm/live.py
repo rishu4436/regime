@@ -273,6 +273,9 @@ REASON_TEXT: dict[str, str] = {
     "wallet_limits_stale": "warning: the Agentic Wallet's limits were last read more than 15 minutes ago",
     "wallet_session_expired": ("the Agentic Wallet session expired, so live trading is paused until Rishu re-scans the "
                                "QR code in the Binance App"),
+    "order_cap_exceeded": ("the order is larger than the per-order limit set for live trading, so the exchange layer "
+                           "refused it and nothing was sent"),
+    "tx_locked": "the Agentic Wallet is busy with another transaction or an App confirmation, so Regime waits",
     "stale_price": "the latest price data is stale (too old), so Regime will not trade on it",
 }
 
@@ -404,6 +407,27 @@ def has_env_names(text: str) -> bool:
     return bool(ENV_NAME_RE.search(text or ""))
 
 
+_EXIT_LABELS = {"TAKE_PROFIT": "Take-profit", "STOP_LOSS": "Stop-loss", "TRAILING_STOP": "Trailing stop",
+                "RSI_EXIT": "RSI exit", "MACD_EXIT": "MACD exit", "TIME_EXIT": "Time exit",
+                "MANUAL_CLOSE": "Manual close", "EMERGENCY_STOP": "Emergency stop"}
+_EXIT_RE = re.compile(r"^(?P<code>[A-Z][A-Z_]+):\s*(?P<rest>.+)$", re.S)
+
+
+def _exit_text(raw: str) -> Optional[str]:
+    """'TAKE_PROFIT: high 332.57 reached target 332.20 (entry 296.61); filled at 332.20; PnL +12.00%' ->
+    'Take-profit hit: the high of 332.57 reached the 332.20 target (entry 296.61), sold at 332.20, profit/loss +12.00%'."""
+    m = _EXIT_RE.match(raw)
+    if not m or m.group("code") not in _EXIT_LABELS:
+        return None
+    rest = m.group("rest").strip()
+    rest = re.sub(r"\bhigh (\S+) reached target (\S+)", r"the high of \1 reached the \2 target", rest)
+    rest = re.sub(r"\blow (\S+) (?:hit|reached) (?:stop|level) (\S+)", r"the low of \1 hit the \2 stop", rest)
+    rest = re.sub(r"\bfilled at\b", "sold at", rest)
+    rest = re.sub(r"\bPnL\b", "profit/loss", rest)
+    rest = re.sub(r"\s*;\s*", ", ", rest)
+    return f"{_EXIT_LABELS[m.group('code')]} hit: {rest}"
+
+
 def plain_reason(reason: Any, keywords: bool = True) -> str:
     """One reason (code, "Blocked (<check>): <detail>", exchange error, or free text) -> plain language naming the limit.
 
@@ -412,6 +436,9 @@ def plain_reason(reason: Any, keywords: bool = True) -> str:
     raw = _clean(reason or "")
     if not raw:
         return "no reason given"
+    et = _exit_text(raw)
+    if et:
+        return et
     m = _BLOCKED_RE.match(raw)
     if m:
         name, detail = m.group("name"), _clean(m.group("detail"))

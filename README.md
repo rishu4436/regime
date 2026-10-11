@@ -16,11 +16,12 @@ US market hours; xStocks (`…x`) are off by default.
 
 **Status:** explanations use built-in plain-English templates unless `XAI_API_KEY` is set (then xAI Grok writes them,
 with the templates as fallback). The BNB Agent Studio identity (ERC-8004) is prepared in
-[`backend/agent_studio/`](backend/agent_studio/) but not registered on-chain yet.
+[`backend/agent_studio/`](backend/agent_studio/) and can be registered from the Dashboard (**Agent identity** →
+**Register on-chain**, after `pip install -e ".[studio]"`), but it is not registered on-chain yet.
 
 ## Run Regime on your computer
 
-**You need:** [Git](https://git-scm.com/downloads), [Python 3.11+](https://www.python.org/downloads/) and [Node.js 20+](https://nodejs.org/). Check them with `git --version`, `python --version` (`python3 --version` on macOS/Linux) and `node --version`.
+**You need:** [Git](https://git-scm.com/downloads), [Python 3.11+](https://www.python.org/downloads/) and [Node.js 20+](https://nodejs.org/). Check them with `git --version`, `python --version` (`python3 --version` on macOS/Linux) and `node --version`. On Debian/Ubuntu, also install the venv module once: `sudo apt install python3-venv`.
 
 **1. Get the code**
 ```bash
@@ -157,6 +158,7 @@ Every rule above is covered by tests in [`backend/risk/tests/`](backend/risk/tes
 |---|---|
 | ![Trade explanation](docs/screenshots/trade-explanation.png)<br/>**Trade explanation:** every decision with its plain-English reason. | ![Auto mode](docs/screenshots/auto-mode.png)<br/>**Auto mode:** the regime picks one preset for your trading style. |
 | ![Manual strategy builder](docs/screenshots/manual-builder.png)<br/>**Manual builder:** your own entry and exit rules, no code. | ![Backtest](docs/screenshots/backtest.png)<br/>**Backtest:** the same engine run on past candles before going live. |
+| ![Trading limits](docs/screenshots/limits.png)<br/>**Trading limits:** set order size and spending caps from the dashboard. | ![Agent Studio](docs/screenshots/agent-studio.png)<br/>**Agent Studio:** register Regime's public ERC-8004 identity on BNB Chain. |
 
 ## Architecture
 
@@ -213,7 +215,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env                                    # TRADING_MODE=SIM needs no keys
 pytest tests/ && pytest backend/                        # all tests
-uvicorn backend.app.main:app --reload --port 8000       # http://localhost:8000/docs
+LOG_DIR=logs uvicorn backend.app.main:app --reload --port 8000  # http://localhost:8000/docs (LOG_DIR keeps saved data)
 cd frontend && npm ci && VITE_API_MODE=http npm run dev # http://localhost:5173
 ```
 
