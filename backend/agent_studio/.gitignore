@@ -1,0 +1,3 @@
+# Local, per-machine registration output (written by register.py). Never commit.
+agent_identity*.json
+.identity/
