@@ -296,3 +296,14 @@ def test_price_impact_percent_and_unknown():
 ])
 def test_v2_codes(raw, phrase):
     assert phrase in live.plain_reason(raw)
+
+
+def test_slippage_exceeded_code():
+    from backend.llm.live import plain_reason
+    assert "rejected on-chain" in plain_reason("slippage_exceeded")
+
+
+def test_bot4_new_codes():
+    from backend.llm.live import plain_reason
+    assert "maximum" in plain_reason("above_maximum")
+    assert "xStock" in plain_reason("xstock_disabled")

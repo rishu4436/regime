@@ -180,6 +180,10 @@ REASON_TEXT: dict[str, str] = {
     "live_not_enabled": "live trading is not enabled",
     "slippage": "the quote's slippage / price impact is over the cap",
     "price_impact": "the quote's price impact is over the cap",
+    "above_maximum": "the order is above the token's maximum order size",
+    "xstock_disabled": "xStock tokens are excluded in live trading (no usable liquidity on BNB Chain)",
+    "slippage_exceeded": ("the swap was rejected on-chain because the fill would have been worse than the slippage cap "
+                          "(no trade happened)"),
     "exit_quota_reserve": ("part of the Agentic Wallet's daily allowance is kept in reserve so the agent can still sell "
                            "all open positions today"),
     "wallet_exit_reserve": ("part of the Agentic Wallet's daily allowance is kept in reserve so the agent can still sell "
