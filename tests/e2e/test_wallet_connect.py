@@ -68,8 +68,10 @@ def test_non_local_client_gets_403_and_never_starts_baw():
     assert lan.post("/api/wallet/connect").status_code == 403
     proxied = _local(c)  # e.g. a proxy on localhost forwarding a LAN client
     assert proxied.post("/api/wallet/connect", headers={"X-Forwarded-For": "192.168.1.20"}).status_code == 403
-    # Vite proxy on 0.0.0.0: the connection is local but the browser asked for the LAN address
-    assert proxied.post("/api/wallet/connect", headers={"Host": "192.168.1.20:5173"}).status_code == 403
+    assert proxied.post("/api/wallet/connect", headers={"Host": "192.168.1.20:8000"}).status_code == 403
+    # Vite proxy on 0.0.0.0 (UI_HOST): local connection, Host rewritten to localhost, but the page came from the LAN
+    assert proxied.post("/api/wallet/connect", headers={"Origin": "http://192.168.1.20:5173"}).status_code == 403
+    assert proxied.post("/api/wallet/connect", headers={"Origin": "http://localhost:5173"}).status_code == 200
     assert proxied.post("/api/wallet/connect", headers={"Host": "127.0.0.1:5173"}).status_code == 200
 
 

@@ -10,6 +10,7 @@ import logging
 import os
 import sys
 import threading
+from urllib.parse import urlsplit
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -76,10 +77,13 @@ def require_local(request: Request) -> None:
     """Wallet sign-in is localhost-only (the Vite dev proxy also connects from localhost)."""
     host = (request.client.host if request.client else "") or ""
     fwd = [h.strip() for h in (request.headers.get("x-forwarded-for") or "").split(",") if h.strip()]
-    # the Vite proxy keeps the browser's Host header: a LAN visitor (http://192.168.x.y:5173) is refused here too
+    # a LAN visitor talking to the backend directly (Host http://192.168.x.y:8000) is refused
     hh = (request.headers.get("host") or "localhost").strip().lower()
     hh = hh[1:].split("]")[0] if hh.startswith("[") else hh.rsplit(":", 1)[0] if hh.count(":") == 1 else hh
-    if host not in LOCAL_HOSTS or any(h not in LOCAL_HOSTS for h in fwd) or hh not in LOCAL_HOSTS:
+    # Vite's proxy rewrites Host (changeOrigin) but passes the browser's Origin: a page opened from a LAN address is refused
+    origin = (request.headers.get("origin") or "").strip().lower()
+    oh = urlsplit(origin).hostname if origin and origin != "null" else "localhost"
+    if host not in LOCAL_HOSTS or any(h not in LOCAL_HOSTS for h in fwd) or hh not in LOCAL_HOSTS or oh not in LOCAL_HOSTS:
         raise HTTPException(403, "Wallet sign-in only works on the PC running the Regime backend "
                                  "(open the dashboard at http://localhost there).")
 
