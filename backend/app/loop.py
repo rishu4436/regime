@@ -16,7 +16,7 @@ from typing import Any, Optional
 from backend.contracts import (
     Action, ActivationMode, AgentMode, AutoConfig, Candle, ControlState, Decision, EventType, ExecutionPath, ExecutionResult,
     ExitReason, ExitRules, ManualStrategy, OrderRequest, OrderSide, OrderStatus, Regime, RiskVerdict, Signal,
-    Quote, RiskCheck, StatusSnapshot, Timeframe, TradingMode, utc_now,
+    Portfolio, Position, Quote, RiskCheck, StatusSnapshot, Timeframe, TradingMode, utc_now,
 )
 from backend.contracts import AlertLevel
 from backend.monitoring import AlertManager, EventLog, PerformanceTracker, one_prefix
@@ -30,6 +30,9 @@ from .portfolio import Lot, PortfolioBook
 from .settings import Settings
 from .state import AgentStateStore, state_path
 from .wiring import Components, call_with_supported
+
+PENDING_EXIT = "pending_exit"        # exit held while the BUY settles on chain (Bot 1 / Bot 5 code)
+ORDER_IN_FLIGHT = "order_in_flight"  # Bot 4 executor single-flight refusal (verbatim)
 
 
 class AgentStateError(RuntimeError):
@@ -78,7 +81,8 @@ class TradingLoop:
         self.last_error: Optional[str] = None
         self.restarts = 0
         self.cooldowns: dict[str, dict] = {}       # symbol -> {until, code, reason}: exchange off-hours errors (20 min)
-        self.chain_pending: dict[str, dict] = {}   # order_id -> submitted BUY waiting on chain
+        self.chain_pending: dict[str, dict] = {}   # client_order_id -> in-flight BUY (synthetic position)
+        self._settled: set[str] = set()
         self.bus.enrich = self.enrich_payload
         self.wallet_settings = livemod.WalletSettingsProvider(
             comps.exchange, settings.trading_mode, on_error=lambda m: self._alert(AlertLevel.WARNING, "WALLET_SETTINGS", m))
@@ -214,12 +218,18 @@ class TradingLoop:
             self.bus.publish(EventType.PRICE, {"symbol": sym, "price": bar.close, "candle": bar.model_dump(mode="json")})
             out: list[Decision] = []
 
+            # 0) in-flight LIVE buys: reconcile first, so a fill confirmed now is a real lot for the exits below
+            if not self.sim:
+                out.extend(self._poll_chain_pending())
             # 1) protective exits (SL / TP / trailing) - always, even when paused; never need confirmation
             regime = self._detect(window)
-            sigs = call_check_exits(self.c.risk, self.book.portfolio(), {sym: bar.close}, {sym: bar})
+            sigs = call_check_exits(self.c.risk, self._pf(), {sym: bar.close}, {sym: bar})
             used: set[int] = set()
             for sig in sigs:
                 if sig.action == Action.SELL:
+                    if self._is_pending_target(sig):  # never sell a position that is still settling on chain
+                        out.append(self._hold_exit(sig, "risk.check_exits", regime))
+                        continue
                     lot = self._match_lot(sig, bar, used)
                     if lot is not None:
                         used.add(id(lot))
@@ -229,6 +239,9 @@ class TradingLoop:
             # 2) control
             control = self.control()
             if control.emergency_stopped:
+                for p in self._pending_for(None):
+                    if not p.get("held_exit"):
+                        out.append(self._hold_exit(None, "emergency_stop", regime, entry=p))
                 out.append(self._finalize(Decision(
                     mode=self.s.trading_mode, agent_mode=self.agent_mode, symbol=sym, regime=regime, timestamp=now,
                     strategy=self.active_strategy or "NONE", action=Action.STAY_OUT,
@@ -236,8 +249,7 @@ class TradingLoop:
                 return self._end_tick(out)
 
             # 3) strategy (engine) -> 4) risk -> 5) execute / confirm
-            pf = self.book.portfolio()
-            self._poll_chain_pending()
+            pf = self._pf()  # + in-flight buys as synthetic positions (engine and risk both see them)
             if not self.sim:
                 self._update_market_context(sym, pf)
             if self.manual:
@@ -262,7 +274,10 @@ class TradingLoop:
                                                    reason=f"{signal.action.value} not executed: " + _blocked(verdict.reasons), **base)))
             elif signal.action == Action.SELL:
                 lots = self.book.lots_for(sym)
-                out.append(self._exit(lots, signal, exit_reason_of(signal), regime, verdict))
+                if self._pending_for(sym):
+                    out.append(self._hold_exit(signal, "engine", regime))
+                if lots or not self._pending_for(sym):
+                    out.append(self._exit(lots, signal, exit_reason_of(signal), regime, verdict))
             elif verdict.requires_confirmation:  # only when confirmation mode / CONFIRMATION activation is on (LIVE too)
                 d = self._pending_decision(signal, verdict, base)
                 out.append(d)
@@ -419,15 +434,153 @@ class TradingLoop:
         self._alert(AlertLevel.CRITICAL, "WALLET_SESSION_EXPIRED", f"wallet session expired ({str(err)[:120]}); trading paused - "
                     "run `baw auth signin` (scan the QR), then POST /api/control/resume")
 
-    def _poll_chain_pending(self) -> None:
-        """Submitted BUYs waiting on chain: ask the client (duck-typed refresh_execution / get_execution_status)."""
-        if not self.chain_pending:
+    # ------------------------------------------------------------------ in-flight LIVE buys (real-money safety)
+    def _executor(self) -> Any:
+        return getattr(self.c.exchange, "executor", None)
+
+    def _pending_for(self, sym: Optional[str]) -> list[dict]:
+        return [p for p in self.chain_pending.values() if sym is None or p["symbol"] == sym]
+
+    def _add_pending(self, res: ExecutionResult, notional: float, quantity: Optional[float], price: Optional[float],
+                     strategy: str, signal: Optional[Signal] = None, verdict: Optional[RiskVerdict] = None,
+                     base: Optional[dict] = None, decision_id: Optional[str] = None) -> dict:
+        px = price or self.book.prices.get(res.symbol)
+        if not px:
+            try:
+                px = float(self.c.exchange.get_price(res.symbol))
+            except Exception:
+                px = None
+        qty = quantity or (notional / px if px else 0.0)
+        p = {"res": res, "client_order_id": res.client_order_id, "symbol": res.symbol, "notional": float(notional),
+             "quantity": float(qty), "price": float(px or (notional / qty if qty else 0.0)), "strategy": strategy,
+             "signal": signal, "verdict": verdict, "base": base, "decision_id": decision_id, "since": utc_now(),
+             "held_exit": None}
+        self.chain_pending[res.client_order_id] = p
+        return p
+
+    def _sync_intents(self) -> None:
+        """Open BUY intents in Bot 4's journal (~/.teamwork/baw_intents.json, via executor.intents) that the loop does
+        not know about (e.g. after a restart) become in-flight positions too."""
+        intents = getattr(self._executor(), "intents", None)
+        fn = getattr(intents, "open_intents", None)
+        if not callable(fn):
             return
+        try:
+            recs = fn() or []
+        except Exception:
+            return
+        for r in recs:
+            cid = r.get("client_order_id") if isinstance(r, dict) else None
+            if (not cid or cid in self.chain_pending or cid in self._settled or str(r.get("side", "BUY")).upper() != "BUY"
+                    or not r.get("symbol")):
+                continue
+            try:
+                notional = float(r.get("from_qty") or 0.0)
+            except (TypeError, ValueError):
+                notional = 0.0
+            if notional <= 0:
+                continue
+            res = ExecutionResult(client_order_id=cid, symbol=r["symbol"], side=OrderSide.BUY, status=OrderStatus.PENDING_CONFIRMATION,
+                                  path=OrderRequest.model_fields["path"].default, mode=self.s.trading_mode,
+                                  notional=notional, tx_hash=r.get("tx_hash"), error="[intent_open] restored from the intent journal",
+                                  **({"order_id": str(r["order_id"])} if r.get("order_id") else {}))
+            self._add_pending(res, notional, None, None, self.active_strategy or "MANUAL:restored")
+
+    def _synthetic_positions(self) -> list[Position]:
+        out = []
+        for cid, p in self.chain_pending.items():
+            if p["quantity"] <= 0 or p["price"] <= 0:
+                continue
+            x = self._exit_rules()
+            px = p["price"]
+            out.append(Position(id=f"pending-{cid}", symbol=p["symbol"], quantity=p["quantity"], avg_entry_price=px,
+                                opened_at=p["since"], strategy=p["strategy"], current_price=self.book.prices.get(p["symbol"]) or px,
+                                highest_price=px, stop_loss_price=px * (1 - x.stop_loss_pct / 100),
+                                take_profit_price=px * (1 + x.take_profit_pct / 100),
+                                trailing_stop_pct=x.trailing_stop.pct if x.trailing_stop.enabled else None))
+        return out
+
+    def _pf(self) -> Portfolio:
+        """The book + every in-flight BUY as a synthetic open position at its quote amount (cash already committed).
+        Passed to BOTH the engine and risk, so a pending buy counts toward exposure / max positions / no second BUY."""
+        pf = self.book.portfolio()
+        syn = self._synthetic_positions()
+        if not syn:
+            return pf
+        spent = sum(p["notional"] for p in self.chain_pending.values())
+        return pf.model_copy(update={"positions": list(pf.positions) + syn, "cash": max(0.0, pf.cash - spent)})
+
+    def _is_pending_target(self, sig: Signal) -> bool:
+        if sig.position_id:
+            return sig.position_id.startswith("pending-")
+        return bool(self._pending_for(sig.symbol)) and not self.book.lots_for(sig.symbol)
+
+    def _hold_exit(self, sig: Optional[Signal], source: str, regime: Optional[Regime], entry: Optional[dict] = None) -> Decision:
+        """A SELL (engine / check_exits / emergency stop) aimed at a position still settling on chain is held; it is
+        re-evaluated on the real position in the tick the fill is confirmed, and dropped if the buy fails."""
+        if entry is not None:
+            entries = [entry]
+        elif sig is not None and sig.position_id and sig.position_id.startswith("pending-"):
+            entries = [p for p in self.chain_pending.values() if f"pending-{p['client_order_id']}" == sig.position_id]
+        else:
+            entries = self._pending_for(sig.symbol if sig else None)
+        why = (exit_reason_of(sig).value if sig is not None and exit_reason_of(sig) else None) or \
+              ("EMERGENCY_STOP" if source == "emergency_stop" else (sig.reason if sig is not None else "exit"))
+        for p in entries:
+            p["held_exit"] = {"code": PENDING_EXIT, "reason": why, "source": source}
+        sym = entries[0]["symbol"] if entries else (sig.symbol if sig else self.symbol)
+        strategy = (sig.strategy if sig else None) or (entries[0]["strategy"] if entries else "NONE")
+        if sig is None:
+            sig = Signal(symbol=sym, action=Action.SELL, source=self.agent_mode or AgentMode.MANUAL, strategy=strategy,
+                         reason="emergency stop", exit_reason=ExitReason.EMERGENCY_STOP, timestamp=self._now())
+        sig = sig.model_copy(update={"conditions_failed": [*(sig.conditions_failed or []), PENDING_EXIT]})
+        return self._finalize(Decision(
+            mode=self.s.trading_mode, agent_mode=self.agent_mode, symbol=sym, regime=regime, timestamp=self._now(),
+            strategy=strategy, signal=sig, action=Action.STAY_OUT,
+            reason=f"exit held: buy still settling on-chain [{PENDING_EXIT}] ({why} via {source})"))
+
+    def _settle_from_intent(self, res: ExecutionResult, rec: dict, p: dict) -> ExecutionResult:
+        st = str(rec.get("state") or "").upper()
+        upd: dict = {"tx_hash": rec.get("tx_hash") or res.tx_hash}
+        if rec.get("order_id"):
+            upd["order_id"] = str(rec["order_id"])
+        if st == "FINISHED":
+            try:
+                qty = float(rec.get("to_qty") or 0) or p["quantity"]
+            except (TypeError, ValueError):
+                qty = p["quantity"]
+            upd.update(status=OrderStatus.FILLED, filled_quantity=qty, notional=p["notional"],
+                       avg_price=p["notional"] / qty if qty else None, error=None)
+        else:
+            upd.update(status=OrderStatus.FAILED, error=f"[failed] on-chain order {st or 'FAILED'} (reconcile)")
+        return res.model_copy(update=upd)
+
+    def _poll_chain_pending(self) -> list[Decision]:
+        """In-flight BUYs: executor.reconcile() every tick (Bot 4, duck-typed) + client refresh_execution /
+        get_execution_status. FILLED -> the synthetic position becomes the real lot (and an emergency-stop exit held
+        meanwhile sells at once); FAILED -> it is dropped together with any held exit."""
+        out: list[Decision] = []
+        if not self.sim:
+            self._sync_intents()
+        if not self.chain_pending:
+            return out
         ex = self.c.exchange
+        recs: dict[str, dict] = {}
+        rec_fn = getattr(self._executor(), "reconcile", None)
+        if callable(rec_fn):
+            try:
+                for r in rec_fn() or []:
+                    if isinstance(r, dict) and r.get("client_order_id"):
+                        recs[r["client_order_id"]] = r
+            except Exception as e:
+                self.last_error = f"reconcile: {type(e).__name__}: {e}"
         fn = getattr(ex, "refresh_execution", None) or getattr(ex, "get_execution_status", None)
-        for oid, p in list(self.chain_pending.items()):
+        for cid, p in list(self.chain_pending.items()):
             res = p["res"]
-            if callable(fn):
+            rec = recs.get(cid)
+            if rec and str(rec.get("state") or "").upper() in ("FINISHED", "FAILED"):
+                res = self._settle_from_intent(res, rec, p)
+            elif callable(fn):
                 try:
                     res = fn(res)
                 except Exception:
@@ -437,19 +590,59 @@ class TradingLoop:
                     p["alerted"] = True
                     self._alert(AlertLevel.WARNING, "CHAIN_PENDING", f"{res.symbol} BUY still unconfirmed after 30 min (tx {res.tx_hash})", res.symbol)
                 continue
-            self.chain_pending.pop(oid, None)
-            sig, base, did = p["signal"], dict(p["base"], timestamp=self._now()), p["decision_id"]
+            self.chain_pending.pop(cid, None)
+            self._settled.add(cid)
+            sig, did = p["signal"], p["decision_id"] or Decision.model_fields["id"].default_factory()
+            base = dict(p["base"] or dict(mode=self.s.trading_mode, agent_mode=self.agent_mode, symbol=res.symbol,
+                                          regime=self.current_regime, strategy=p["strategy"], signal=sig), timestamp=self._now())
+            self._remember_meta(res)
             livemod.record_execution(self.c.risk, res)
+            held = p.get("held_exit")
+            why = sig.reason if sig else "restored in-flight order"
             if res.status in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED) and res.filled_quantity > 0:
                 self._record_live_buy(res)
                 spent = p["notional"] if res.status == OrderStatus.FILLED else res.notional + res.fee
-                self.book.open_lot(res, spent, sig.strategy, self._exit_rules(), self._now())
-                self._finalize(Decision(id=did, action=Action.BUY, risk_verdict=p["verdict"], execution=res,
-                                        reason=f"confirmed on chain; {sig.reason}", **base))
+                self.book.open_lot(res, spent, p["strategy"], self._exit_rules(), self._now())
+                out.append(self._finalize(Decision(id=did, action=Action.BUY, risk_verdict=p["verdict"], execution=res,
+                                                   reason=f"confirmed on chain; {why}", **base)))
+                self.bus.publish(EventType.EXECUTION, res, decision_id=did)
+                if held and (held.get("source") == "emergency_stop" or self.control().emergency_stopped):
+                    out.append(self.close_symbol(res.symbol, ExitReason.EMERGENCY_STOP))  # sells right away
             else:
-                self._finalize(Decision(id=did, action=Action.STAY_OUT, risk_verdict=p["verdict"], execution=res,
-                                        reason=f"BUY failed on chain ({res.status.value}{': ' + res.error if res.error else ''})", **base))
-            self.bus.publish(EventType.EXECUTION, res, decision_id=did)
+                note = f"; held exit dropped ({held['reason']})" if held else ""
+                out.append(self._finalize(Decision(id=did, action=Action.STAY_OUT, risk_verdict=p["verdict"], execution=res,
+                                                   reason=f"BUY failed on chain ({res.status.value}{': ' + res.error if res.error else ''}){note}", **base)))
+                self.bus.publish(EventType.EXECUTION, res, decision_id=did)
+        return out
+
+    def portfolio_view(self) -> dict:
+        """/api/portfolio and STATUS payloads (Bot 1): positions carry pending / client_order_id / held_exit."""
+        pf = self._pf()
+        d = pf.model_dump(mode="json")
+        by_id = {f"pending-{cid}": p for cid, p in self.chain_pending.items()}
+        for pos in d["positions"]:
+            p = by_id.get(pos["id"])
+            pos["pending"] = p is not None
+            pos["client_order_id"] = p["client_order_id"] if p else None
+            pos["held_exit"] = p.get("held_exit") if p else None
+        return d
+
+    def _remember_meta(self, res: ExecutionResult, quote: Optional[Quote] = None) -> None:
+        m: dict = {}
+        if quote is not None:
+            m["quote_expires_at"] = quote.expires_at.isoformat()
+            imp = livemod.quote_price_impact(quote)
+            if imp is not None:
+                m["price_impact_pct"] = imp
+        extras = livemod.executor_extras(self.c.exchange, res.client_order_id)
+        if extras:
+            m["extras"] = extras
+        if not m:
+            return
+        for k in {res.order_id, res.client_order_id} - {None}:
+            self.exec_meta[k] = {**self.exec_meta.get(k, {}), **m}
+        while len(self.exec_meta) > 5000:
+            self.exec_meta.popitem(last=False)
 
     def _update_market_context(self, sym: str, pf) -> None:
         """Bot 2 live engine: per-order cap from risk, and set_market_context(symbol, {status, reference_price_only,
@@ -502,7 +695,9 @@ class TradingLoop:
             pass
 
     def daily_live_notional(self) -> float:
-        return float((self.state.get("live_bought") or {}).get(utc_now().date().isoformat(), 0.0))
+        """Today's LIVE BUY notional: settled fills + in-flight buys."""
+        done = float((self.state.get("live_bought") or {}).get(utc_now().date().isoformat(), 0.0))
+        return done + sum(p["notional"] for p in self.chain_pending.values())
 
     def _record_live_buy(self, res: ExecutionResult) -> None:
         day = utc_now().date().isoformat()
@@ -547,7 +742,9 @@ class TradingLoop:
                       "daily_limit_usdt": daily, "daily_used_usdt": used,
                       "daily_remaining_usdt": rl.get("daily_remaining_usdt") if rl.get("daily_remaining_usdt") is not None
                       else max(0.0, daily - used),
-                      "allowed_tokens": rl.get("allowed_tokens") or self.allowed_tokens(),
+                      # wallet-side restriction from risk/baw only (None = none); never filled from the exchange list
+                      "allowed_tokens": rl.get("allowed_tokens"),
+                      "tradable_tokens": self.tradable_tokens(),  # app list for activation/UI: exchange tokens
                       "limit_source": rl.get("limit_source") or "app",
                       "warnings": list(rl.get("warnings") or [])}
             self._alert_new_warnings(limits["warnings"])
@@ -573,7 +770,9 @@ class TradingLoop:
                 self._alert(AlertLevel.WARNING, f"LIVE_LIMIT_{code}".upper(), msg or code)
         self._warning_codes = now
 
-    def allowed_tokens(self) -> list[str]:
+    def tradable_tokens(self) -> list[str]:
+        """Tokens the agent may be activated on: the exchange token list (minus xStock in LIVE), or LIVE_ALLOWED_TOKENS.
+        Separate from risk's / the wallet's allowed_tokens."""
         if self.s.live_allowed_tokens:
             return list(self.s.live_allowed_tokens)
         try:
@@ -611,11 +810,15 @@ class TradingLoop:
         return {"live_trading_enabled": self.s.live_trading_enabled, "binance_live_enabled": self.s.binance_live_enabled,
                 "risk_allow_live": allow, "wallet_connected": connected, "can_trade": not reasons, "blocked_reasons": reasons,
                 "cooldowns": self.active_cooldowns(),
-                "chain_pending": [{"order_id": k, "symbol": v["res"].symbol, "tx_hash": v["res"].tx_hash,
-                                   "since": v["since"].isoformat()} for k, v in self.chain_pending.items()]}
+                "chain_pending": [{"order_id": v["res"].order_id, "client_order_id": k, "symbol": v["symbol"],
+                                   "notional": v["notional"], "tx_hash": v["res"].tx_hash, "since": v["since"].isoformat(),
+                                   "held_exit": v.get("held_exit")} for k, v in self.chain_pending.items()]}
 
     def enrich_payload(self, payload: Any) -> Any:
-        return livemod.enrich_payload(payload, self.exec_meta.get)
+        out = livemod.enrich_payload(payload, self.exec_meta.get)
+        if isinstance(out, dict) and isinstance(out.get("portfolio"), dict) and "control" in out:
+            out["portfolio"] = self.portfolio_view()  # STATUS (HTTP + WS): pending flags on positions
+        return out
 
     # ------------------------------------------------------------------ persistence (24/7)
     def _persist(self) -> None:
@@ -676,6 +879,8 @@ class TradingLoop:
                 if fill_price:
                     self._set_sim_price(sym, fill_price)  # SIM: protective exits fill at the stop / target / gap open
                 quote = quote or ex.get_quote(sym, side, notional)  # LIVE BUY: the quote the pre-trade checks approved
+                if self.live:
+                    self._cap_slippage()
                 order = OrderRequest(symbol=sym, side=side, notional=quote.notional, quantity=quantity, quote_id=quote.quote_id,
                                      path=quote.path, mode=mode, decision_id=decision_id)
                 # dispatch on Quote.path: the exchange rejects an order sent to the wrong path (Bot 4)
@@ -688,11 +893,8 @@ class TradingLoop:
             finally:
                 if fill_price and self._bar is not None:
                     self._set_sim_price(sym, self._bar.close)
-        if quote is not None and res.order_id:
-            self.exec_meta[res.order_id] = {"quote_expires_at": quote.expires_at.isoformat()}
-            while len(self.exec_meta) > 5000:
-                self.exec_meta.popitem(last=False)
-        livemod.record_execution(self.c.risk, res)  # Bot 3: LIVE BUY fills count towards the daily notional cap
+        self._remember_meta(res, quote)
+        livemod.record_execution(self.c.risk, res)  # at submission too (incl. PENDING_CONFIRMATION); Bot 3 counts fills
         if not self.sim:
             self.wallet_settings.invalidate()  # wallet quota changed: re-read baw settings before the next trade
             if res.error and livemod.is_session_expired(res.error):
@@ -700,8 +902,22 @@ class TradingLoop:
         if self.live and side == OrderSide.BUY and res.status in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED):
             self._record_live_buy(res)
         self.bus.publish(EventType.EXECUTION, res, decision_id=decision_id)
-        self._publish_alerts(self.alerts.on_execution(res))
+        if not (livemod.is_waiting_on_chain(res) or livemod.result_reason(res) == ORDER_IN_FLIGHT):
+            self._publish_alerts(self.alerts.on_execution(res))  # in flight is not a failure
         return res
+
+    def _cap_slippage(self) -> None:
+        """Bot 4 executor: never slip more than risk allows (the client's execute_* has no slippage arg)."""
+        execu = self._executor()
+        if execu is None or not hasattr(execu, "max_slippage_pct"):
+            return
+        rl = livemod.risk_live_limits(self.c.risk, self.book.portfolio(), None)
+        cap = rl.get("max_slippage_pct") or self.s.live_max_quote_deviation_pct
+        try:
+            cur = execu.max_slippage_pct
+            execu.max_slippage_pct = float(cap) if cur is None else min(float(cur), float(cap))
+        except Exception:
+            pass
 
     def _buy(self, signal: Signal, verdict: RiskVerdict, base: dict, decision_id: Optional[str] = None) -> Decision:
         did = decision_id or Decision.model_fields["id"].default_factory()
@@ -719,15 +935,21 @@ class TradingLoop:
             return self._finalize(Decision(id=did, action=Action.STAY_OUT, risk_verdict=verdict,
                                            reason=f"BUY not executed: no quote ({_quote_error(e)}){note}", **base))
         if self.live:  # Bot 3 pass 2: re-check with the quote for the approved notional and a fresh `now`
-            v2 = self._risk_check(signal, self.book.portfolio(), self.control(), quote=quote)
+            v2 = self._risk_check(signal, self._pf(), self.control(), quote=quote)
             if not v2.approved:
                 return self._finalize(Decision(id=did, action=Action.STAY_OUT, risk_verdict=v2,
                                                reason="BUY not executed: " + _blocked(v2.reasons), **base))
             verdict = v2
         res = self._execute(OrderSide.BUY, signal.symbol, notional, did, quote=quote)
+        if livemod.result_reason(res) == ORDER_IN_FLIGHT:  # Bot 4 single-flight: an earlier order is unresolved
+            sig = base.get("signal")
+            if sig is not None:
+                base = {**base, "signal": sig.model_copy(update={"conditions_failed": [*(sig.conditions_failed or []), ORDER_IN_FLIGHT]})}
+            return self._finalize(Decision(id=did, action=Action.STAY_OUT, risk_verdict=verdict,
+                                           reason=f"BUY not executed: {ORDER_IN_FLIGHT} (an earlier LIVE order is unresolved: {res.error})", **base))
         if not self.sim and livemod.is_waiting_on_chain(res):  # submitted; the lot opens once the chain confirms
-            self.chain_pending[res.order_id] = {"res": res, "notional": notional, "signal": signal, "verdict": verdict,
-                                                "base": base, "decision_id": did, "since": utc_now()}
+            self._add_pending(res, quote.notional if quote else notional, quote.quantity if quote else None,
+                              quote.price if quote else None, signal.strategy, signal, verdict, base, did)
             return self._finalize(Decision(id=did, action=Action.BUY, risk_verdict=verdict, execution=res,
                                            reason=f"BUY submitted, waiting on chain{' (tx ' + res.tx_hash + ')' if res.tx_hash else ''}; {signal.reason}", **base))
         if res.status in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED) and res.filled_quantity > 0:
@@ -798,7 +1020,7 @@ class TradingLoop:
                 return self._finalize(Decision(id=decision_id, action=Action.STAY_OUT, risk_verdict=p.verdict, execution=ex,
                                                reason="confirmation expired; not executed", **base))
             control = self.control()
-            verdict = self._risk_check(p.signal, self.book.portfolio(), control)  # re-check at approval time
+            verdict = self._risk_check(p.signal, self._pf(), control)  # re-check at approval time
             if not verdict.approved:
                 return self._finalize(Decision(id=decision_id, action=Action.STAY_OUT, risk_verdict=verdict,
                                                reason="approved by user but not executed: " + _blocked(verdict.reasons), **base))
@@ -874,6 +1096,8 @@ class TradingLoop:
             if flatten:
                 for sym in sorted({l.position.symbol for l in self.book.lots}):
                     self.close_symbol(sym, ExitReason.EMERGENCY_STOP)
+            for p in self._pending_for(None):  # in-flight buys: sold the moment the fill is confirmed
+                self._hold_exit(None, "emergency_stop", self.current_regime, entry=p)
             return self._control_changed(ctrl)
 
     def _control_changed(self, ctrl: ControlState) -> ControlState:
@@ -936,7 +1160,11 @@ class TradingLoop:
     # ------------------------------------------------------------------ output
     def _finalize(self, d: Decision) -> Decision:
         try:
-            d = d.model_copy(update={"explanation": self.c.explainer.explain_decision(d)})
+            subject = d
+            if self.live and d.execution is not None:  # result + executor extras (explorer_url, route, price impact)
+                from .schemas import DecisionView
+                subject = DecisionView.model_validate(self.enrich_payload(d.model_dump(mode="json")))
+            d = d.model_copy(update={"explanation": self.c.explainer.explain_decision(subject)})
         except Exception:
             pass
         # replace an earlier version of the same decision (confirmation flow) or append

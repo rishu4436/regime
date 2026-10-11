@@ -1,7 +1,7 @@
 """App-only request/response bodies. SystemInfo / LoopState / BacktestRequest / Alert / PerformanceSummary live in backend.contracts (v0.2)."""
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_serializer  # noqa: F401
 
@@ -68,7 +68,7 @@ class PresetsTable(_M):
 # ---------------------------------------------------------------- LIVE / wallet (app-side until the contract has them)
 from datetime import datetime  # noqa: E402
 
-from backend.contracts import Decision, ExecutionResult, LoopState, StatusSnapshot, SystemInfo  # noqa: E402
+from backend.contracts import Decision, ExecutionResult, LoopState, Portfolio, Position, StatusSnapshot, SystemInfo  # noqa: E402
 
 
 class ExecutionView(ExecutionResult):
@@ -78,12 +78,15 @@ class ExecutionView(ExecutionResult):
     route: Optional[str] = None              # 'SWAP' | 'RFQ' (= path)
     quote_expires_at: Optional[str] = None   # expiry of the quote that was executed
     real_funds: Optional[bool] = None        # true in LIVE
+    gas: Optional[Any] = None                # Bot 4 executor extras (real gas from tx-history)
+    price_impact_pct: Optional[float] = None  # percent units, from the executed quote / executor
+    wallet_order_id: Optional[str] = None    # baw market-order id
 
     @model_serializer(mode="wrap")
     def _drop_unset_live_fields(self, handler):
         data = handler(self)
         if isinstance(data, dict):
-            for k in ("explorer_url", "route", "quote_expires_at", "real_funds"):
+            for k in ("explorer_url", "route", "quote_expires_at", "real_funds", "gas", "price_impact_pct", "wallet_order_id"):
                 if data.get(k) is None:
                     data.pop(k, None)
         return data
@@ -94,6 +97,7 @@ class DecisionView(Decision):
 
 
 class StatusView(StatusSnapshot):
+    portfolio: "PortfolioView"
     last_decision: Optional[DecisionView] = None
     recent_decisions: list[DecisionView] = Field(default_factory=list)
 
@@ -147,3 +151,16 @@ class Heartbeat(_M):
 
 class LoopStateView(LoopState):
     heartbeat: Heartbeat
+
+
+class PositionView(Position):
+    """Position + in-flight flags (Bot 1). pending=true: a LIVE BUY submitted but not yet settled on chain (synthetic
+    position at the quote amount, counted by engine and risk); held_exit = {reason, source} while an exit waits for it."""
+    pending: bool = False
+    client_order_id: Optional[str] = None
+    held_exit: Optional[dict] = None
+
+
+class PortfolioView(Portfolio):
+    positions: list[PositionView] = Field(default_factory=list)
+StatusView.model_rebuild()

@@ -475,7 +475,7 @@ class FallbackExplainer:
     def parse_strategy_from_text(self, text: str, default_symbol: Optional[str] = None) -> Union[ManualStrategy, AutoConfig]:
         t = text.lower()
         sym = default_symbol or "NVDAon"
-        for s in ("NVDAon", "TSLAx", "AAPLB", "SPYon", "METAx"):
+        for s in ("NVDAon", "TSLAx", "AAPLB", "SPYon", "METAx", "NVDAB", "TSLAon"):
             if s.lower() in t:
                 sym = s
         if "auto" in t or "style" in t or any(st.value.lower() in t for st in TraderStyle):

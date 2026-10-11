@@ -24,6 +24,7 @@ from backend.monitoring import EventLog
 from .events import EventBus
 from .loop import AgentStateError, TradingLoop
 from .schemas import (
+    PortfolioView,
     AskRequest, ConfirmationModeRequest, EmergencyStopRequest, LoopStartRequest, ManualActivateRequest, ParseRequest,
     ParseResponse, PresetsTable, PresetsTableEntry, ReasonRequest, DecisionView, Heartbeat, LiveStatus, LoopStateView,
     StatusView, SystemInfoView, WalletInfo,
@@ -220,10 +221,10 @@ def create_app(settings: Optional[Settings] = None, components: Optional[Compone
     def status() -> StatusView:
         return StatusView.model_validate(L.enrich_payload(L.status().model_dump(mode="json")))
 
-    @app.get("/api/portfolio", response_model=Portfolio)
-    def portfolio() -> Portfolio:
-        with L.lock:
-            return L.book.portfolio()
+    @app.get("/api/portfolio", response_model=PortfolioView)
+    def portfolio() -> PortfolioView:
+        with L.lock:  # + in-flight LIVE buys flagged pending (Bot 1)
+            return PortfolioView.model_validate(L.portfolio_view())
 
     @app.get("/api/decisions", response_model=list[DecisionView])
     def decisions(limit: int = 50, symbol: Optional[str] = None) -> list[DecisionView]:

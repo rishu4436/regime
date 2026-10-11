@@ -17,7 +17,7 @@ from backend.app.main import create_app
 from backend.app.settings import Settings
 from backend.app.wiring import build_components
 from backend.contracts import (
-    Action, AgentMode, Candle, ExecutionResult, ExecutionPath, OrderSide, OrderStatus, Portfolio, Quote, Signal,
+    Action, AgentMode, Candle, ExitReason, ExecutionResult, ExecutionPath, OrderSide, OrderStatus, Portfolio, Quote, Signal,
     Timeframe, TradingMode, utc_now,
 )
 from backend.mocks import MockExchangeClient
@@ -517,11 +517,14 @@ def test_waiting_on_chain_then_confirmed():
     c, ex = live_client(ex=ChainEx())
     d = _buy(first_buy_tick(c, ex))
     assert d["action"] == "BUY" and "waiting on chain" in d["reason"] and d["execution"]["status"] == "PENDING_CONFIRMATION"
-    assert not c.get("/api/portfolio").json()["positions"] and c.get("/api/live/status").json()["chain_pending"]
+    pos = c.get("/api/portfolio").json()["positions"]
+    assert len(pos) == 1 and pos[0]["pending"] is True and pos[0]["client_order_id"] == d["execution"]["client_order_id"]
+    assert c.get("/api/live/status").json()["chain_pending"]
     oid = d["execution"]["order_id"]
     c.post("/api/control/pause", json={"reason": "no new entries"})
     c.post("/api/loop/tick")
-    assert len(c.get("/api/portfolio").json()["positions"]) == 1
+    pos = c.get("/api/portfolio").json()["positions"]
+    assert len(pos) == 1 and pos[0]["pending"] is False and pos[0]["held_exit"] is None
     assert oid not in [p["order_id"] for p in c.get("/api/live/status").json()["chain_pending"]]
     d2 = c.get(f"/api/decisions/{d['id']}").json()
     assert d2["execution"]["status"] == "FILLED" and "confirmed on chain" in d2["reason"]
@@ -580,11 +583,15 @@ def test_agent_identity_in_system(monkeypatch):
     c, _ = live_client()
     monkeypatch.setitem(sys.modules, "backend.agent_studio", types.SimpleNamespace(get_agent_identity=lambda: None))
     assert c.get("/api/system").json()["agent_identity"] is None
-    ident = {"erc8004_id": "42", "registry": "0xabc", "studio_version": "1.0", "extra": 1}
+    ident = {"erc8004_id": "42", "registry": "0xabc", "studio_version": "1.0", "network": "bsc",
+             "explorer_url": "https://bscscan.com/address/0xabc"}
     monkeypatch.setitem(sys.modules, "backend.agent_studio", types.SimpleNamespace(get_agent_identity=lambda: ident))
     import backend
     monkeypatch.setattr(backend, "agent_studio", sys.modules["backend.agent_studio"], raising=False)
-    assert c.get("/api/system").json()["agent_identity"] == {"erc8004_id": "42", "registry": "0xabc", "studio_version": "1.0"}
+    assert c.get("/api/system").json()["agent_identity"] == ident  # every key passed through
+    monkeypatch.delitem(sys.modules, "backend.agent_studio")
+    monkeypatch.setattr(backend, "agent_studio", None, raising=False)
+    assert c.get("/api/system").json()["agent_identity"] is None
 
 
 # ---------------------------------------------------------------- engine <-> risk agreement on the price-impact block
@@ -636,3 +643,212 @@ def test_engine_and_risk_agree_on_price_impact_threshold(impact):
 
     assert engine_blocks == (impact > 1.0), (impact, sig.reason)
     assert risk_blocks == (impact > 1.0), (impact, [c.model_dump() for c in impact_checks])
+
+
+def test_wallet_allowed_tokens_is_risk_only_and_tradable_tokens_from_exchange():
+    c, _ = live_client()
+    lim = c.get("/api/wallet").json()["limits"]
+    toks = [t["symbol"] for t in c.get("/api/tokens").json()]
+    assert lim["tradable_tokens"] == [t for t in toks if not t.endswith("x")]
+    assert lim["allowed_tokens"] != lim["tradable_tokens"]  # never filled from the exchange list
+
+
+def test_auto_on_nvdab_in_sim():
+    """Default live demo agent is Auto on NVDAB (Bot 4 0770978 lists it); it must also activate and tick in SIM."""
+    c = TestClient(create_app(Settings(sim_seed=SEED)))
+    if "NVDAB" not in [t["symbol"] for t in c.get("/api/tokens").json()]:
+        pytest.skip("exchange token list has no NVDAB (needs bot4 0770978)")
+    r = c.post("/api/auto/activate", json={"symbol": "NVDAB", "capital": 1000, "activation": "AUTO_EXECUTE"})
+    assert r.status_code == 200, r.text
+    ds = []
+    for _ in range(80):
+        ds += c.post("/api/loop/tick").json()
+    assert ds and all(d["symbol"] == "NVDAB" for d in ds)
+    assert c.get("/api/status").json()["active_symbol"] == "NVDAB"
+    assert not [a for a in c.get("/api/alerts").json() if a["code"] == "EXECUTION_FAILED"]
+
+
+# ---------------------------------------------------------------- in-flight LIVE buys (synthetic pending positions)
+class FakeExecutor:
+    """Bot 4 BawExecutor surface used by the app: intents.open_intents(), reconcile(), extras, max_slippage_pct."""
+
+    def __init__(self):
+        self.journal, self.extras, self.max_slippage_pct, self.submitted = {}, {}, 3.0, 0
+        self.intents = self
+
+    def open_intents(self):
+        return [dict(r) for r in self.journal.values() if r["state"] in ("SUBMITTING", "SUBMITTED", "PENDING", "UNKNOWN")]
+
+    def reconcile(self, client_order_id=None):
+        out = []
+        for r in self.journal.values():
+            if r["state"] in ("FINISHED", "FAILED") and not r.get("_seen"):
+                r["_seen"] = True
+                out.append({k: v for k, v in r.items() if k != "_seen"})
+        return out
+
+    def settle(self, cid, state, to_qty=None):
+        self.journal[cid].update(state=state, to_qty=to_qty, order_id="w-1",
+                                 tx_hash=("0x" + "ab" * 32) if state == "FINISHED" else None)
+
+
+class InflightEx(FakeLiveExchange):
+    """LIVE BUYs come back PENDING_CONFIRMATION (outcome unknown) and are journaled; SELLs fill."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.executor = FakeExecutor()
+        self.refuse_in_flight = False
+
+    def _execute(self, order, quote, path):
+        if order.side != OrderSide.BUY:
+            return super()._execute(order, quote, path)
+        cid = order.client_order_id
+        if self.refuse_in_flight:
+            return ExecutionResult(client_order_id=cid, symbol=order.symbol, side=order.side, status=OrderStatus.REJECTED,
+                                   path=path, mode=TradingMode.LIVE, error="[order_in_flight] another LIVE swap is in flight in this process")
+        self.executor.submitted += 1
+        self.executor.journal[cid] = {"client_order_id": cid, "state": "SUBMITTED", "symbol": order.symbol, "side": "BUY",
+                                      "from_qty": str(quote.notional)}
+        self.executor.extras[cid] = {"real_funds": True, "route": "SWAP", "explorer_url": "https://bscscan.com/tx/0xfromextras",
+                                     "gas": {"bnb": 0.00012}, "reason": None}
+        return ExecutionResult(client_order_id=cid, symbol=order.symbol, side=order.side, status=OrderStatus.PENDING_CONFIRMATION,
+                               path=path, mode=TradingMode.LIVE, error="[outcome_unknown] waiting on chain")
+
+
+class SLRisk(ContextRisk):
+    """Stop-loss hit on every position each bar (incl. synthetic pending ones), or flatten on emergency stop."""
+
+    def __init__(self, *a, sl=False, **kw):
+        super().__init__(*a, **kw)
+        self.sl, self.portfolios = sl, []
+
+    def check(self, signal, portfolio, control, context=None):
+        self.portfolios.append(portfolio)
+        return super().check(signal, portfolio, control, context)
+
+    def check_exits(self, portfolio, prices, bars=None):
+        out = []
+        for p in portfolio.positions:
+            why = ExitReason.STOP_LOSS if self.sl else (ExitReason.EMERGENCY_STOP if self.get_control_state().emergency_stopped else None)
+            if why:
+                out.append(Signal(symbol=p.symbol, action=Action.SELL, source=AgentMode.MANUAL, strategy=p.strategy,
+                                  reason=f"{why.value} hit", exit_reason=why, position_id=p.id, price=prices.get(p.symbol)))
+        return out
+
+
+def inflight(sl=False):
+    from backend.contracts import ControlState
+    risk = SLRisk(control=ControlState(trading_mode=TradingMode.LIVE), live_allowed=True)
+    c, ex = live_client(ex=InflightEx(), risk=risk)
+    d = _buy(first_buy_tick(c, ex))
+    assert d["action"] == "BUY" and d["execution"]["status"] == "PENDING_CONFIRMATION"
+    risk.sl = sl
+    return c, ex, risk, d["execution"]["client_order_id"]
+
+
+def _tick(c, ex):
+    ex.advance()
+    return c.post("/api/loop/tick").json()
+
+
+def test_pending_buy_recorded_and_no_second_buy():
+    c, ex, risk, cid = inflight()
+    assert any(r.status == OrderStatus.PENDING_CONFIRMATION for r in risk.recorded)  # record_execution at submission
+    for _ in range(3):
+        assert not [d for d in _tick(c, ex) if d["action"] == "BUY"]
+    assert ex.executor.submitted == 1
+    pos = c.get("/api/portfolio").json()["positions"]
+    assert [(p["pending"], p["client_order_id"], p["held_exit"]) for p in pos] == [(True, cid, None)]
+    st = c.get("/api/status").json()["portfolio"]["positions"]
+    assert st[0]["pending"] is True and st[0]["client_order_id"] == cid
+    assert not [a for a in c.get("/api/alerts").json() if a["code"] == "EXECUTION_FAILED"]
+
+
+def test_pending_buy_counts_toward_exposure_and_positions():
+    c, ex, risk, cid = inflight()
+    loop = c.app.state.st.loop if hasattr(c.app.state, "st") else None
+    risk.portfolios.clear()
+    c.post("/api/manual/activate", json={"strategy": buy_strategy()})
+    _tick(c, ex)
+    seen = [pf for pf in risk.portfolios if pf.positions]
+    pf = (seen or [None])[-1] or (loop._pf() if loop else None)
+    assert pf is not None and [p.id for p in pf.positions] == [f"pending-{cid}"]
+    assert pf.cash < 10_000 - 1  # the quote amount is committed
+    assert c.get("/api/wallet").json()["limits"]["daily_used_usdt"] > 0
+
+
+def test_pending_to_filled_replaces_synthetic_position_with_extras():
+    c, ex, risk, cid = inflight()
+    ex.executor.settle(cid, "FINISHED", to_qty="0.1")
+    ds = _tick(c, ex)
+    conf = next(d for d in ds if "confirmed on chain" in d["reason"])
+    assert conf["execution"]["status"] == "FILLED" and conf["execution"]["explorer_url"] == "https://bscscan.com/tx/0xfromextras"
+    assert conf["execution"]["gas"] == {"bnb": 0.00012} and conf["execution"]["real_funds"] is True
+    pos = c.get("/api/portfolio").json()["positions"]
+    assert len(pos) == 1 and pos[0]["pending"] is False and pos[0]["quantity"] == 0.1
+    assert not c.get("/api/live/status").json()["chain_pending"]
+    assert ex.executor.max_slippage_pct == 1.0  # capped to risk / app slippage cap
+
+
+def test_pending_to_failed_drops_synthetic_position():
+    c, ex, risk, cid = inflight()
+    ex.executor.settle(cid, "FAILED")
+    ds = _tick(c, ex)
+    assert any("BUY failed on chain" in d["reason"] for d in ds)
+    # the failed order is gone (the always-buy test strategy may place a fresh one in the same tick)
+    assert cid not in [p["client_order_id"] for p in c.get("/api/portfolio").json()["positions"]]
+
+
+def test_pending_with_stop_loss_is_held_not_sold():
+    c, ex, risk, cid = inflight(sl=True)
+    ds = _tick(c, ex)
+    held = [d for d in ds if d["reason"].startswith("exit held: buy still settling on-chain")]
+    assert held and "pending_exit" in held[0]["signal"]["conditions_failed"]
+    assert not [d for d in ds if d["action"] == "SELL"] and len(ex.executions) == 0 or all(e.side == OrderSide.BUY for e in ex.executions)
+    pos = c.get("/api/portfolio").json()["positions"][0]
+    assert pos["pending"] and pos["held_exit"] == {"code": "pending_exit", "reason": "STOP_LOSS", "source": "risk.check_exits"}
+
+
+def test_pending_emergency_stop_sells_in_the_tick_the_fill_confirms():
+    c, ex, risk, cid = inflight()
+    c.post("/api/control/emergency-stop", json={"reason": "test", "flatten": True})
+    pos = c.get("/api/portfolio").json()["positions"][0]
+    assert pos["held_exit"]["code"] == "pending_exit" and pos["held_exit"]["source"] == "emergency_stop"
+    ex.executor.settle(cid, "FINISHED", to_qty="0.1")
+    ds = _tick(c, ex)
+    assert any("confirmed on chain" in d["reason"] for d in ds)
+    assert any(d["action"] == "SELL" for d in ds)
+    assert not c.get("/api/portfolio").json()["positions"]
+
+
+def test_pending_failed_drops_held_exit():
+    c, ex, risk, cid = inflight(sl=True)
+    _tick(c, ex)
+    ex.executor.settle(cid, "FAILED")
+    ds = _tick(c, ex)
+    assert any("held exit dropped" in d["reason"] for d in ds) and not [d for d in ds if d["action"] == "SELL"]
+    assert cid not in [p["client_order_id"] for p in c.get("/api/portfolio").json()["positions"]]
+    assert all(e.side == OrderSide.BUY for e in ex.executions)
+
+
+def test_order_in_flight_is_a_normal_stay_out():
+    ex = InflightEx()
+    ex.refuse_in_flight = True
+    c, ex = live_client(ex=ex)
+    d = _buy(first_buy_tick(c, ex))
+    assert d["action"] == "STAY_OUT" and "order_in_flight" in d["reason"] and "order_in_flight" in d["signal"]["conditions_failed"]
+    assert not [a for a in c.get("/api/alerts").json() if a["code"] == "EXECUTION_FAILED"]
+
+
+def test_open_intent_from_journal_becomes_pending_after_restart():
+    ex = InflightEx()
+    ex.executor.journal["restored-1"] = {"client_order_id": "restored-1", "state": "SUBMITTED", "symbol": SYM, "side": "BUY",
+                                         "from_qty": "20"}
+    c, ex = live_client(ex=ex)
+    c.post("/api/manual/activate", json={"strategy": buy_strategy()})
+    ds = _tick(c, ex)
+    assert not [d for d in ds if d["action"] == "BUY"]
+    pos = c.get("/api/portfolio").json()["positions"]
+    assert [(p["client_order_id"], p["pending"]) for p in pos] == [("restored-1", True)]
+    assert ex.executor.submitted == 0

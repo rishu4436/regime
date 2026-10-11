@@ -53,12 +53,18 @@ def enrich_payload(obj: Any, meta: Optional[Callable[[str], Optional[dict]]] = N
     if "client_order_id" in out and "tx_hash" in out and out.get("mode") == TradingMode.LIVE.value:
         out["route"] = out.get("path")
         out["real_funds"] = True
-        m = (meta(out.get("order_id")) if meta and out.get("order_id") else None) or {}
+        m = ((meta(out.get("order_id")) if meta and out.get("order_id") else None)
+             or (meta(out.get("client_order_id")) if meta and out.get("client_order_id") else None) or {})
         if m.get("quote_expires_at"):
             out["quote_expires_at"] = m["quote_expires_at"]
         url = explorer_url(out.get("tx_hash"), out.get("mode"))
         if url:
             out["explorer_url"] = url
+        if m.get("price_impact_pct") is not None:
+            out["price_impact_pct"] = m["price_impact_pct"]
+        for k, v in (m.get("extras") or {}).items():  # Bot 4 executor extras win over app-computed values
+            if k in ("explorer_url", "route", "real_funds", "gas", "price_impact_pct", "wallet_order_id") and v is not None:
+                out[k] = v
     return out
 
 
@@ -245,6 +251,16 @@ class WalletSettingsProvider:
         self._failing = False
         self.last_error: Optional[str] = None
 
+    def _argv(self) -> tuple[str, ...]:
+        """`baw` resolved like Bot 4 (BAW_CMD / node ...\\agentic-wallet\\dist\\index.js on Windows / PATH)."""
+        if self.cmd and self.cmd[0] == "baw":
+            try:
+                from backend.exchange.baw import resolve_baw_command  # type: ignore
+                return tuple(resolve_baw_command()) + tuple(self.cmd[1:])
+            except Exception:
+                pass
+        return self.cmd
+
     @staticmethod
     def _run(cmd: tuple[str, ...]) -> str:
         import subprocess
@@ -264,7 +280,7 @@ class WalletSettingsProvider:
             return (r if isinstance(r, dict) else (r.model_dump() if hasattr(r, "model_dump") else dict(r))), True
         if self.mode != TradingMode.LIVE:
             return None, False
-        out = json.loads(self.runner(self.cmd))
+        out = json.loads(self.runner(self._argv()))
         if isinstance(out, dict) and isinstance(out.get("data"), dict):  # tolerate {"success":..,"data":{..}} wrappers
             out = out["data"]
         return out, False
@@ -348,7 +364,32 @@ def is_session_expired(err: Any) -> bool:
     if err is None:
         return False
     names = f"{type(err).__name__} {getattr(err, 'code', '')} {err}".upper()
-    return "WALLET_SESSION_EXPIRED" in names or "SESSIONEXPIRED" in names.replace("_", "") or "SESSION EXPIRED" in names
+    return ("WALLET_SESSION_EXPIRED" in names or "SESSIONEXPIRED" in names.replace("_", "") or "SESSION EXPIRED" in names
+            or "[WALLET_NOT_READY]" in names or "WALLETNOTREADY" in names.replace("_", ""))
+
+
+def result_reason(res: Any) -> Optional[str]:
+    """Bot 4 executor reason code ('[reason] message' error prefix); uses backend.exchange's result_reason if present."""
+    try:
+        from backend.exchange.baw_executor import result_reason as rr  # type: ignore
+        r = rr(res)
+        if r:
+            return r
+    except Exception:
+        pass
+    import re as _re
+    m = _re.match(r"^\[([a-z_]+)\]", str(getattr(res, "error", None) or ""))
+    return m.group(1) if m else None
+
+
+def executor_extras(exchange: Any, client_order_id: Optional[str]) -> dict:
+    """Bot 4: exchange.executor.extras[client_order_id] (explorer_url, route, real_funds, gas, ...); {} if absent."""
+    ex = getattr(exchange, "executor", None)
+    extras = getattr(ex, "extras", None)
+    if not client_order_id or not isinstance(extras, dict):
+        return {}
+    v = extras.get(client_order_id)
+    return dict(v) if isinstance(v, dict) else {}
 
 
 def is_waiting_on_chain(res: Any) -> bool:
@@ -358,7 +399,7 @@ def is_waiting_on_chain(res: Any) -> bool:
 
 
 def agent_identity() -> Optional[dict]:
-    """Bot 5's backend/agent_studio get_agent_identity() -> {erc8004_id, registry, studio_version}; None if absent."""
+    """Bot 5's backend/agent_studio get_agent_identity() passed through (all keys); None on None / ImportError."""
     try:
         from backend import agent_studio  # type: ignore[attr-defined]
         fn = getattr(agent_studio, "get_agent_identity", None)
@@ -369,5 +410,5 @@ def agent_identity() -> Optional[dict]:
         return None
     if ident is None:
         return None
-    d = ident if isinstance(ident, dict) else (ident.model_dump() if hasattr(ident, "model_dump") else vars(ident))
-    return {k: d.get(k) for k in ("erc8004_id", "registry", "studio_version")}
+    d = ident if isinstance(ident, dict) else (ident.model_dump(mode="json") if hasattr(ident, "model_dump") else vars(ident))
+    return dict(d)  # all keys as-is (erc8004_id, registry, studio_version, network, explorer_url, ...)
