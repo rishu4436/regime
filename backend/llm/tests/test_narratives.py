@@ -250,3 +250,10 @@ def test_rank_tokens_with_narrative_of_and_wording():
     # the Grok-backed callable is a drop-in too
     res2 = rank_tokens(tokens, candles, "ANY", 5, narrative_of=make_narrative_of(FakeClient(enabled=False)))
     assert len(res2.picks) >= 4
+
+
+def test_watchlist_risk_codes_are_plain():
+    from backend.llm import live
+    for code in ("live_token_exposure", "reserved_orders"):
+        txt = live.REASON_TEXT[code]
+        assert "_" not in txt and len(txt) > 20

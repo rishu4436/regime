@@ -217,6 +217,8 @@ REASON_TEXT: dict[str, str] = {
     "live_quote_notional": "the quote amount is over the size risk allowed or the per-order cap",
     "live_order_cap": f"the per-order cap ({AGENT})",
     "live_max_exposure": "the max open exposure cap for live trading",
+    "live_token_exposure": "the max amount Regime may hold in one token is reached",
+    "reserved_orders": "other buys approved in this same check already use the remaining room under the caps",
     "live_daily_notional": f"the daily live buying cap ({AGENT})",
     "wallet_per_tx_cap": f"the per-transaction limit ({WALLET})",
     "wallet_daily_limit": f"the daily spending limit ({WALLET})",
