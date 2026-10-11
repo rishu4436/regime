@@ -54,6 +54,7 @@ class AutoPickConfig:
     blocked_families: frozenset = LiveSafetyConfig().blocked_families  # xStock: ~no liquidity on BSC
     momentum_cap_pct: float = 10.0  # +/-10% over MOMENTUM_BARS maps to the full momentum score
     min_volume_24h_usdt: float = 0.0  # a token whose known 24h volume is <= this (0 = no trades) can't be picked
+    max_stale_hours: float = 24.0  # newest candle this much older than the freshest candidate's -> not picked
     liquidity_floor_usdt: float = 1_000.0  # log scale: 1k USDT 24h volume -> 0, 10M -> full liquidity score
     liquidity_full_usdt: float = 10_000_000.0
     weight_momentum: float = 40.0
@@ -146,8 +147,11 @@ def score_token(
     meta: Optional[Mapping[str, Any]] = None,
     narrative: str = ANY,
     cfg: Optional[AutoPickConfig] = None,
+    freshest: Optional[Any] = None,
 ) -> tuple[Optional[TokenPick], Optional[str]]:
-    """Score one token (0-100). Returns (pick, None), or (None, why it can't be picked)."""
+    """Score one token (0-100). Returns (pick, None), or (None, why it can't be picked). ``freshest``: the newest
+    candle time among all candidates; a token whose own newest candle is more than ``cfg.max_stale_hours`` older is
+    skipped (listed as trading but not actually trading)."""
     cfg = cfg or AutoPickConfig()
     meta = meta or {}
     why = _blocker(symbol, meta, cfg)
@@ -157,6 +161,13 @@ def score_token(
     ra = detect_regime(clean)
     if ra.features.get("insufficient_data"):
         return None, f"not enough price history ({len(clean)} bars, {MIN_BARS} needed) or market closed"
+    if freshest is not None and clean:
+        try:
+            age_h = (freshest - clean[-1].timestamp).total_seconds() / 3600
+        except TypeError:  # naive vs aware timestamps: can't compare, don't exclude
+            age_h = 0.0
+        if age_h > cfg.max_stale_hours:
+            return None, f"no new price for {age_h:.0f} hours (newest candle {clean[-1].timestamp:%Y-%m-%d %H:%M}), so it isn't really trading"
     f = ra.features
     closes = [c.close for c in clean]
     n = min(MOMENTUM_BARS, len(closes) - 1)
@@ -167,9 +178,9 @@ def score_token(
 
     vol_usdt = _num(_first(meta, "volume_24h", "volume24h"))
     liq_usdt = _num(meta.get("liquidity"))
-    if vol_usdt is None:  # fall back to the candles' own quote volume (last 24 bars, close x volume)
+    if vol_usdt is None:  # fall back to the candles' own volume (last 24 bars); live candle volume is already USD
         recent = clean[-24:]
-        vol_usdt = sum(c.close * c.volume for c in recent) or None
+        vol_usdt = sum(c.volume for c in recent) or None
     depth = max([v for v in (vol_usdt, liq_usdt) if v is not None], default=None)
     if depth is None or depth <= 0:
         liquidity = 0.0
@@ -245,6 +256,18 @@ def candidate_tokens(
     return out[: max(0, int(limit))]
 
 
+def _freshest(candles_by_symbol: Mapping[str, Sequence[Candle]]):
+    """Newest candle time across all candidates: the reference for 'stale' (no wall clock, so SIM replays work)."""
+    ts = []
+    for cs in candles_by_symbol.values():
+        if cs:
+            ts.append(cs[-1].timestamp)
+    try:
+        return max(ts) if ts else None
+    except TypeError:
+        return None
+
+
 def rank_tokens(
     tokens: Sequence[Any],
     candles_by_symbol: Mapping[str, Sequence[Candle]],
@@ -261,6 +284,7 @@ def rank_tokens(
     if not 1 <= int(max_tokens) <= MAX_WATCHLIST:
         raise ValueError(f"max_tokens must be between 1 and {MAX_WATCHLIST}")
     want = normalize_narrative(narrative)
+    freshest = _freshest(candles_by_symbol)
     ranked: list[TokenPick] = []
     skipped: list[dict] = []
     seen: set[str] = set()
@@ -279,7 +303,8 @@ def rank_tokens(
         tag = normalize_narrative(tag or meta.get("narrative"))
         if want != ANY and tag != want:
             continue  # other narratives are simply not candidates; not reported as skipped
-        pick, why = score_token(sym, candles_by_symbol.get(sym), meta, tag if tag != ANY else want, cfg)
+        pick, why = score_token(sym, candles_by_symbol.get(sym), meta, tag if tag != ANY else want, cfg,
+                                freshest=freshest)
         if pick is None:
             skipped.append({"symbol": sym, "reason": why})
         else:
