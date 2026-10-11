@@ -96,7 +96,7 @@ export class MockApi implements ApiClient {
     return { live_allowed: true, per_order_cap_usdt: LIVE_CAP, daily_loss_cap_usdt: LIVE_DAILY_LOSS, daily_notional_cap_usdt: LIVE_DAILY_NOTIONAL,
       daily_limit_usdt: LIVE_DAILY_NOTIONAL, max_exposure_usdt: LIVE_EXPOSURE, max_slippage_pct: 1, stale_after_s: 900, bnb_gas_reserve: LIVE_GAS_RESERVE,
       fee_buffer_usdt: 1, market_hours_utc: null, daily_used_usdt: this.dailyNotional, daily_loss_usdt: loss, open_exposure_usdt: exposure,
-      daily_remaining_usdt: Math.max(0, LIVE_DAILY_NOTIONAL - this.dailyNotional), limit_source: { per_order_cap_usdt: "risk", daily_limit_usdt: "risk" },
+      daily_remaining_usdt: Math.max(0, LIVE_DAILY_NOTIONAL - this.dailyNotional), warnings: exposure > Math.max(0, LIVE_DAILY_NOTIONAL - this.dailyNotional) ? [`Exit reserve: ${Math.max(0, LIVE_DAILY_NOTIONAL - this.dailyNotional).toFixed(2)} USDT of daily quota left can't cover selling all open positions (${exposure.toFixed(2)} USDT)`] : [], limit_source: { per_order_cap_usdt: "risk", daily_limit_usdt: "risk" },
       allowed_tokens: TOKENS.map((t) => t.symbol), wallet: { daily_limit_usdt: 200, per_order_cap_usdt: 50, allowed_tokens: null } };
   }
   private gate(): LiveGate {
@@ -407,7 +407,7 @@ export class MockApi implements ApiClient {
   private done(r: ExecutionResult, decisionId?: string) {
     if (LIVE && r.status === "FILLED") { // demo hash: not on chain
       const tx = "0x" + hex(64);
-      r = { ...r, tx_hash: tx, explorer_url: `https://bscscan.com/tx/${tx}`, route: r.path, quote_expires_at: new Date(Date.now() + 30_000).toISOString(), real_funds: true } as ExecutionResult;
+      r = { ...r, tx_hash: tx, explorer_url: `https://bscscan.com/tx/${tx}`, route: r.path, quote_expires_at: new Date(Date.now() + 30_000).toISOString(), real_funds: true, price_impact_pct: +(0.05 + Math.random() * 0.35).toFixed(2) } as ExecutionResult;
       this.bnb = Math.max(0, this.bnb - 0.00025);
       if (r.side === "BUY") this.dailyNotional += r.notional ?? 0;
     }

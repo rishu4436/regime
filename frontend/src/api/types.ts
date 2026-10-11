@@ -34,6 +34,8 @@ export interface LiveLimits {
   /** Which side set each effective cap (bot3/live 53907b5): "risk" (agent) or "wallet". */
   limit_source?: { per_order_cap_usdt?: "risk" | "wallet" | string; daily_limit_usdt?: "risk" | "wallet" | string } | null;
   allowed_tokens?: string[] | null;
+  /** Risk warnings for the UI, e.g. the exit-reserve warning (remaining daily quota can't cover selling all positions). */
+  warnings?: string[] | null;
   /** The wallet's own limits (Agentic Wallet / Binance App), if it exposes them: the stricter one applies. */
   wallet?: { per_order_cap_usdt?: number | null; daily_limit_usdt?: number | null; allowed_tokens?: string[] | null } | null;
 }
@@ -61,7 +63,7 @@ export interface LiveGate {
   blocked_reasons: string[];
 }
 /** ExecutionResult as the LIVE backend sends it (extra optional fields until they are in the contract). */
-export interface LiveExecutionFields { tx_hash?: string | null; explorer_url?: string | null; route?: string | null; quote_expires_at?: string | null; real_funds?: boolean | null }
+export interface LiveExecutionFields { price_impact_pct?: number | null; tx_hash?: string | null; explorer_url?: string | null; route?: string | null; quote_expires_at?: string | null; real_funds?: boolean | null }
 /** LoopState extras requested for the 24/7 monitor (optional; the UI falls back to what it observes). */
 export interface LoopHeartbeat { started_at?: string | null; last_tick_at?: string | null; next_tick_at?: string | null }
 

@@ -142,6 +142,7 @@ export function CapsPanel({ status, decisions }: { status: StatusSnapshot | null
   return (
     <Card title="Hard caps" extra={<span className="pill">{L.per_order_cap_usdt != null ? "enforced by risk (Bot 3)" : "not reported"}</span>}>
       {!wallet && walletEndpoint === false && <div className="small muted" style={{ marginBottom: 8 }}>Caps come from <code>GET /api/wallet</code> → <code>limits</code>, which this backend doesn't serve yet.</div>}
+      {(L.warnings ?? []).filter(Boolean).map((w) => <div key={w} className="banner amber" style={{ marginBottom: 10 }}><span className="grow small">⚠ {w}</span></div>)}
       <div className="meters">
         <Meter label={<>Per order{src("per_order_cap_usdt", L.per_order_cap_usdt, W?.per_order_cap_usdt)}</>} used={lastBuy?.execution?.notional ?? null} cap={orderCap} hint={<>last buy{lastBuy ? ` ${time(lastBuy.timestamp)}` : ": none yet"}{which(L.per_order_cap_usdt, W?.per_order_cap_usdt)}</>} />
         <Meter label="Daily loss → auto e-stop" used={loss} cap={L.daily_loss_cap_usdt} warnAt={0.6}
@@ -265,6 +266,7 @@ export function ActivityFeed({ decisions }: { decisions: Decision[] }) {
                     {ex.notional ? <span>{usd(ex.notional)}</span> : null}
                     {ex.avg_price ? <span className="muted">@ {usd(ex.avg_price)}</span> : null}
                     {ex.fee ? <span className="faint">fee {usd(ex.fee, 4)}</span> : null}
+                    {ex.price_impact_pct != null ? <span className={Math.abs(ex.price_impact_pct) >= 1 ? "neg" : "faint"} title="Price impact / slippage vs the reference price">impact {ex.price_impact_pct.toFixed(2)}%</span> : null}
                     <TxLink exec={ex} />
                     {ex.error && <span className={cls(-1)}>{ex.error}</span>}
                   </div>
