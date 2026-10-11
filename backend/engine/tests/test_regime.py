@@ -58,3 +58,11 @@ def test_deterministic_and_uses_candle_time():
     a, b = detect_regime(cs), detect_regime(cs)
     assert a.model_dump() == b.model_dump()
     assert a.timestamp == cs[-1].timestamp
+
+
+def test_sixty_bars_is_enough_for_regime():
+    """The app's replay starts with 60 warm-up bars; regime must classify them (SMA50 now and 10 bars ago exist)."""
+    assert MIN_BARS == 60
+    ra = detect_regime(flat(60))
+    assert ra.features.get("insufficient_data", 0.0) == 0.0
+    assert detect_regime(flat(59)).features["insufficient_data"] == 1.0

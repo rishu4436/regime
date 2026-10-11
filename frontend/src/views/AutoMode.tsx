@@ -6,7 +6,7 @@ import { RegimeBadge } from "../components/Badges";
 import { Card, NumberInput, Segmented, Skeleton, Toggle, useToast } from "../components/ui";
 import { PRESET_INFO, REGIME_INFO, STYLE_INFO } from "../lib/auto";
 import type { PresetsTable } from "../api/types";
-import { strategyLabel, TOKENS, isXStock } from "../lib/strategy";
+import { strategyLabel, humanReason, TOKENS, isXStock } from "../lib/strategy";
 import { useLive } from "../lib/live";
 import { TokenStatusBadge } from "../components/Live";
 
@@ -97,7 +97,7 @@ export function AutoMode({ config: c, setConfig, status, onActivated, tick }: Pr
           {ra && <div className="small muted" style={{ marginTop: 12 }}>{ra.reason} · confidence {Math.round(ra.confidence * 100)}%</div>}
           {sel && <div className="small muted" style={{ marginTop: 4 }}>{sel.reason}</div>}
           {isActive && <div className="summary-box" style={{ marginTop: 14 }}>
-            <b>Live:</b> {strategyLabel(status?.active_strategy)} · {status?.last_decision?.reason ?? "waiting for the next bar"}
+            <b>Live:</b> {strategyLabel(status?.active_strategy)} · {status?.last_decision?.reason ? humanReason(status.last_decision.reason) : "waiting for the next bar"}
           </div>}
         </Card>
         <Card title="Regime × style → preset"
@@ -125,7 +125,7 @@ export function AutoMode({ config: c, setConfig, status, onActivated, tick }: Pr
                 </tbody>
               </table>
             )}
-            {table && <div className="note" style={{ padding: "0 4px" }}>All presets enabled. Cells dimmed when you've disabled that preset; the agent then stays out instead.</div>}
+            {table && <div className="note" style={{ padding: "0 4px" }}>All presets enabled. Cells dimmed when you've disabled that preset; the agent then falls back to plain DCA if it's enabled, otherwise stays out (paused regimes always stay out). DCA and Smart DCA never sell on a signal: their exits come from risk's take-profit and stop-loss safety rails.</div>}
           </div>
         </Card>
         <Card title="Preset agents">

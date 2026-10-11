@@ -26,7 +26,7 @@ stale copy can never un-pause the agent (`manager.py`).
 | Open exposure | 50 USDT (`RISK_LIVE_MAX_EXPOSURE_USDT`) | shrinks the order |
 | Slippage / price impact | 1 % (`RISK_LIVE_MAX_SLIPPAGE_PCT`) | blocks |
 | Stale data | 900 s (`RISK_LIVE_MAX_DATA_AGE_S`) | blocks; missing timestamp also blocks |
-| Minimum order | max(10 USDT, token minimum) | blocks |
+| Minimum order | max(10 USDT, token minimum from Bot 4's `get_token_status`) | in LIVE the order is **raised** to it if every hard cap allows; else blocks |
 | BNB gas reserve | 0.002 BNB (`RISK_LIVE_MIN_BNB`), plus a 1 USDT fee buffer | blocks / shrinks |
 
 **Three switches, all required.** `LIVE_TRADING_ENABLED=true` (app), `BINANCE_LIVE_ENABLED=true` (exchange) and
@@ -36,7 +36,15 @@ stale copy can never un-pause the agent (`manager.py`).
 ## 3. Size caps vs hard gates
 
 - **Caps only shrink.** Cash, exposure, per-order, daily-notional and wallet caps each log "reduced from X to Y" and
-  never increase an order. If the result falls under the minimum order, `min_order_notional` blocks the buy.
+  never increase an order. If the result falls under the minimum order, `min_order_notional` blocks the buy - except
+  in LIVE (`bot3/live-fixes`): the order is **raised to the minimum** when it still fits every hard cap (per-order caps,
+  wallet balance minus fee buffer, open-exposure room, daily notional room, wallet quota and exit reserve). The bump may
+  override the %-of-equity size rule (15%) but never a hard cap; it's logged as "raised from X to Y USDT to meet the
+  token minimum". Without it, a strategy-through-risk test showed 30 and 100 USDT wallets could never trade in LIVE.
+  `live_limits()` reports `min_wallet_usdt` (minimum order + fee buffer) so the UI can warn "wallet too small".
+- **Daily loss in LIVE** is governed by the absolute 25 USDT cap; the 5%-of-capital rule is skipped there
+  (`use_pct_daily_loss_in_live=False`) and still applies in SIM/PAPER. Max open positions defaults to 3 unless a
+  strategy sets it.
 - **Hard gates block outright:** stale data, a bad or expired quote, price impact, token status, gas reserve, blocked
   symbols, pause and emergency stop.
 - **Exits are never blocked.** Protective sells (stop-loss, take-profit, trailing, max-loss, emergency) pass every LIVE
@@ -78,7 +86,7 @@ Exchange-side details are in [exchange.md](exchange.md). Here is only how each o
 | 2 | **Unclear whether `dailyLimit` counts sells.** The docs never exempt them. An ended bStock campaign said bStock trades didn't consume the limit. | A stop-loss could be rejected once the quota is used up. We added the exit-quota reserve, which roughly halves buy capacity. Still unverified on mainnet. | Document it, or exempt sells (or at least exits) from the daily limit. |
 | 3 | **Wallet limits are in USD**, our caps in USDT. | Treated 1:1. A stablecoin depeg would quietly skew the stricter-of-two comparison. | Report limits in the asset traded, or give the FX rate used. |
 | 4 | **Ondo off-hours:** tradable on a short list of names, but zero-volume bars that behave like a reference price. | `live_token_status` blocks a buy when the token isn't `trading` or is `reference_price_only`. | One status field that says "reference price only" for each token. |
-| 5 | **Ondo's 20 USD minimum** shows up only as error **40375**; no field gives it. | With a 25 USDT cap, wallet shrinking can push an Ondo buy below 20. Risk now uses `max(10, token minimum)`, but the 20 is hard-coded from the error text. | Add `minOrderUsd` to token or market status. |
+| 5 | **Ondo's 20 USD minimum** shows up only as error **40375**; no field gives it. | With a 25 USDT cap, wallet shrinking can push an Ondo buy below 20. Risk uses `max(10, token_status.min_order_usdt)`; the token value comes from Bot 4's `get_token_status`, whose 20 for Ondo is itself inferred from the error text. | Add `minOrderUsd` to token or market status. |
 | 6 | **`priceImpactPercent`** comes as a string (`"0.0001"`) and isn't always present. | Risk takes it as an optional float (`LiveContext.price_impact_pct`) and falls back to quote vs reference price when it's missing. | Always return a numeric field. |
 | 7 | **Market hours vs 24/7:** bStock trades 24/7, Ondo 24/5 plus off-hours, and US hours shift with EDT/EST. | We switched the US-hours guard **off by default** (`7f33dd9`) and gate on each token's own status instead. Holidays were never modelled. | A per-asset `isTradableNow` flag next to the session. |
 | 8 | **Candle `timestamp` is the bar's open time.** | A 1h bar's open is always more than 900 s old, so a naive stale-data check blocks everything. Risk uses the fetch time, or `bar.timestamp + bar_interval` (the close). | Include the close time (or an `isClosed` flag) in candle rows. |

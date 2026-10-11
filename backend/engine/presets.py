@@ -109,6 +109,16 @@ def select(
                 + (f", size x{mult:g}" if mult != 1.0 else ""),
             )
     names = ", ".join(p.value for p in prefs)
+    if PresetName.DCA in enabled_set:
+        # Last fallback: the user enabled DCA but none of the presets this regime/style prefers (e.g. only DCA on
+        # ACTIVE, whose table never lists DCA). Run plain DCA at this regime's size multiplier. Pause regimes
+        # (empty preference list, handled above) still pause.
+        return (
+            PresetName.DCA,
+            mult,
+            f"{regime.value} + {style.value} -> DCA (last fallback: none of the suitable presets ({names}) is "
+            "enabled)" + (f", size x{mult:g}" if mult != 1.0 else ""),
+        )
     return None, 0.0, f"{regime.value} + {style.value}: none of the suitable presets ({names}) is enabled; staying out"
 
 
@@ -247,7 +257,7 @@ def evaluate_preset(
             return PresetDecision(Action.STAY_OUT, "Grid: flat range", failed=["range"])
         step = (hi - lo) / sp.grid_levels
         level = int(min(max((close - lo) / step, 0), sp.grid_levels - 1e-9))  # 0 = bottom cell
-        pos = f"cell {level + 1}/{sp.grid_levels} of range {lo:.4g}-{hi:.4g}"
+        pos = f"cell {level + 1} of {sp.grid_levels} (1 = bottom, {sp.grid_levels} = top) of range {lo:.4g}-{hi:.4g}"
         if holding and level >= sp.grid_levels - 1:
             return PresetDecision(
                 Action.SELL, f"Grid: price in the top grid {pos}", ["top_cell"], exit_reason=ExitReason.TAKE_PROFIT
@@ -259,6 +269,12 @@ def evaluate_preset(
                 Action.STAY_OUT,
                 f"Grid: price broke below the range ({close:.4g} < {lo:.4g}), not catching it",
                 failed=["in_range"],
+            )
+        if level >= sp.grid_levels - 1:
+            return PresetDecision(
+                Action.STAY_OUT,
+                f"Grid: price at the top of the range, {pos}; buys only in the bottom cell",
+                failed=["bottom_cell"],
             )
         return PresetDecision(Action.STAY_OUT, f"Grid: price mid-range, {pos}", failed=["bottom_cell"])
 

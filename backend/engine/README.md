@@ -149,7 +149,7 @@ wins:
 | 5 | MILD_UPTREND | close > SMA50 and slope ≥ 0.75% |
 | 6 | SIDEWAYS | everything else |
 
-With fewer than 61 candles the result is SIDEWAYS with confidence 0.1. The thresholds were tuned on 1h mock candles
+With fewer than 60 candles the result is SIDEWAYS with confidence 0.1. The thresholds were tuned on 1h mock candles
 and classify 99% of 480 seeded mock series correctly.
 
 ### Auto mode: style mapping (first ENABLED preset wins; none → stay out)
@@ -161,6 +161,10 @@ and classify 99% of 480 seeded mock series correctly.
 | OVERSOLD_PULLBACK | Smart DCA › Buy the Dip › DCA | Buy the Dip › Smart DCA | Buy the Dip |
 | HIGH_VOLATILITY | DCA › Smart DCA (×0.5) | **pause** | Grid (×0.5) |
 | DOWNTREND | DCA (×0.25, minimal) | **pause** | **pause** |
+
+**DCA last fallback:** if none of the presets in a regime's list is enabled but DCA is (e.g. only DCA enabled with
+ACTIVE, whose lists never contain DCA), plain DCA runs at that regime's size multiplier, with "last fallback" in the
+reason. Pause regimes (no list) still pause, and every `live_safe` gate and cap still applies.
 
 BUY size = `BASE_SIZE_PCT[style]` (5 / 10 / 15 %) × multiplier, applied to `AutoConfig.capital`. SELL targets the
 **oldest** position in the symbol (`position_id`, 100% of it, `price` = close). `exit_reason` maps each preset onto the
@@ -241,7 +245,7 @@ irregular: hourly bars are missing off-hours and at weekends, DEX volume is ofte
   - Dead bars (high == low and volume == 0, i.e. a closed or illiquid market) are ignored. If more than 50% of the
     last 20 bars are dead, the result is SIDEWAYS at confidence 0.2 with `features["insufficient_data"]=1`, so a
     flat closed-market stretch is never read as a trend.
-  - Fewer than 61 active bars gives the same insufficient-data result.
+  - Fewer than 60 active bars gives the same insufficient-data result.
   - Volatility uses only returns between contiguous bars (gap <= 1.5 bars), so overnight and weekend gaps are not
     counted as volatility.
   - Percent thresholds are multiplied by `clamp(sqrt(bar_hours), 0.25, 5)`. 1h is x1, 4h is x2 and 1d is about x4.9,
@@ -322,8 +326,11 @@ New `LiveSafetyConfig` fields:
 1. proposed % ×0.25, capped at 2%
 2. thin-liquidity ×0.5 (volume families only)
 3. notional on min(equity, hint)
-4. below the family's min order → bump to the floor, but only if the floor ≤ `max_order_usdt` and the floor ≤ the
-   equity basis. Otherwise STAY_OUT `live_below_min_order`.
+4. below the minimum order → raise it to the floor, as risk does. The floor is the market context's
+   `min_order_usdt` / `minOrderUsdt` when present, otherwise the family default. The engine only refuses
+   (STAY_OUT `live_below_min_order`) when the floor can never be met: the floor > `max_order_usdt`, or a *known*
+   equity (engine equity/capital > 0, context `equity`, or `equity_hint_usdt`) is below the floor. With unknown
+   equity it buys at the floor (`proposed_size_pct` 0) and leaves the final say to risk.
 5. Never above `max_order_usdt` (25 USDT).
 
 `proposed_size_pct` is always `notional / equity × 100`.
@@ -338,6 +345,9 @@ New `LiveSafetyConfig` fields:
   size change.
 - `reference_price`
 - `equity`
+- `min_order_usdt` or `minOrderUsdt`: the token's minimum order (e.g. `get_token_status().min_order_usdt`).
+  Strings are parsed with `float()`; `None`, unparseable or negative values are ignored. It overrides the family
+  default, and `0` means no floor.
 
 Effects on BUYs only (SELLs are never blocked):
 - off-hours, closed, no liquidity, paused, `openState=false`, a reasonCode of ASSET_PAUSED / MARKET_PAUSED /

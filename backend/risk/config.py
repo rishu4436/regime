@@ -32,7 +32,8 @@ class SymbolRiskRules(BaseModel):
 
 class RiskConfig(BaseModel):
     """Static limits for DefaultRiskManager. Defaults are conservative and mirror the reference simulator where it has
-    an equivalent (size 15%, max 1 open position, cooldown 5 bars, TP 12%, SL 6%, trailing 4% off by default)."""
+    an equivalent (size 15%, cooldown 5 bars, TP 12%, SL 6%, trailing 4% off by default). Max open positions defaults to
+    ``default_max_open_positions`` (3) whenever the PositionRiskRules in force did not set it explicitly."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -46,6 +47,9 @@ class RiskConfig(BaseModel):
         default=5.0, gt=0, description="Block new entries once Portfolio.daily_pnl <= -X% of starting_capital. None = off")
     max_trades_per_day: Optional[int] = Field(default=None, ge=1, description="Block new entries once trades_today >= N")
     min_order_notional: float = Field(default=10.0, ge=0, description="Orders below this USDT amount are blocked")
+    default_max_open_positions: int = Field(default=3, ge=1, description=(
+        "Used when the PositionRiskRules in force (RiskConfig.position_rules or a symbol/ManualStrategy override) did not "
+        "set max_open_positions explicitly - the contract model's own default (1) is ignored by risk"))
 
     allow_live: bool = Field(default=False, description="LIVE BUYs are blocked unless explicitly enabled here")
     live: LiveRiskProfile = Field(default_factory=LiveRiskProfile, description="Extra limits applied automatically in LIVE")
@@ -81,7 +85,13 @@ class RiskConfig(BaseModel):
         return cls(**data)
 
     def rules_for(self, symbol: str) -> tuple[PositionRiskRules, ExitRules, Optional[ActivationMode]]:
+        """Rules in force for ``symbol``. If the chosen PositionRiskRules never set ``max_open_positions`` explicitly
+        (pydantic ``model_fields_set``), it is replaced with ``default_max_open_positions``."""
         o = self.symbol_rules.get(symbol)
         if o is None:
-            return self.position_rules, self.exit_rules, None
-        return (o.position_rules or self.position_rules, o.exit_rules or self.exit_rules, o.activation)
+            prules, erules, act = self.position_rules, self.exit_rules, None
+        else:
+            prules, erules, act = o.position_rules or self.position_rules, o.exit_rules or self.exit_rules, o.activation
+        if "max_open_positions" not in prules.model_fields_set:
+            prules = prules.model_copy(update={"max_open_positions": self.default_max_open_positions})
+        return prules, erules, act

@@ -116,7 +116,7 @@ AGENT = "set by the agent's risk limits"
 # code -> plain-language reason. "{d}" is not used; details (numbers) are appended in parentheses by plain_reason.
 REASON_TEXT: dict[str, str] = {
     # --- Bot 3 risk check names
-    "trading_mode": "live trading is not enabled (LIVE_TRADING_ENABLED, BINANCE_LIVE_ENABLED and RISK_ALLOW_LIVE must all be true)",
+    "trading_mode": "live trading is not enabled (the live-trading switches in the agent's settings are off)",
     "emergency_stop": "the emergency stop is active, so no new buys are made",
     "paused": "the agent is paused",
     "max_open_positions": "the maximum number of open positions is reached",
@@ -294,10 +294,22 @@ def _code_text(code: str, detail: str) -> Optional[str]:
     return REASON_TEXT.get(code)
 
 
-def plain_reason(reason: Any) -> str:
+# Env-var / config names must never reach user text (e.g. RISK_ALLOW_LIVE, allow_live=False).
+ENV_NAME_RE = re.compile(r"\b(?:[A-Z][A-Z0-9]*_)+(?:ENABLED|DISABLED|LIVE|KEY|SECRET|TOKEN|MODE|URL)\b(?:\s*=\s*\w+)?"
+                         r"|\ballow_live\s*=\s*\w+")
+# Check names whose detail only repeats config plumbing: the plain text alone is shown.
+NO_DETAIL = frozenset({"trading_mode", "live_disabled", "live_not_enabled"})
+
+
+def has_env_names(text: str) -> bool:
+    return bool(ENV_NAME_RE.search(text or ""))
+
+
+def plain_reason(reason: Any, keywords: bool = True) -> str:
     """One reason (code, "Blocked (<check>): <detail>", exchange error, or free text) -> plain language naming the limit.
 
-    Numbers from the original detail are kept in parentheses so the exact limit is visible."""
+    Numbers from the original detail are kept in parentheses so the exact limit is visible (unless the detail only
+    carries config / env-var names). ``keywords=False`` leaves unknown free text as-is (SIM / PAPER wording)."""
     raw = _clean(reason or "")
     if not raw:
         return "no reason given"
@@ -305,6 +317,8 @@ def plain_reason(reason: Any) -> str:
     if m:
         name, detail = m.group("name"), _clean(m.group("detail"))
         text = _code_text(name, detail) or _keyword_text(detail) or name.replace("_", " ")
+        if name in NO_DETAIL or has_env_names(detail):
+            detail = ""
         return f"{text} ({detail})" if detail else text
     key = raw.lower().replace("-", "_").replace(" ", "_")
     if key in REASON_TEXT:
@@ -319,7 +333,9 @@ def plain_reason(reason: Any) -> str:
         rest = _clean(re.sub(r"^[A-Z0-9_]+:\s*", "", m3.group("rest")))
         text = EXCHANGE_CODE_TEXT[int(m3.group("code"))]
         return f"{text} ({rest}; Binance code {m3.group('code')})" if rest else f"{text} (Binance code {m3.group('code')})"
-    kw = _keyword_text(raw)
+    kw = _keyword_text(raw) if keywords else None
+    if has_env_names(raw):
+        return kw or "live trading is not enabled (the live-trading switches in the agent's settings are off)"
     return f"{kw} ({raw})" if kw else raw
 
 
@@ -330,10 +346,10 @@ def _keyword_text(text: str) -> Optional[str]:
     return None
 
 
-def plain_reasons(reasons: Any) -> list[str]:
+def plain_reasons(reasons: Any, keywords: bool = True) -> list[str]:
     out: list[str] = []
     for r in reasons or []:
-        t = plain_reason(r)
+        t = plain_reason(r, keywords)
         if t not in out:
             out.append(t)
     return out

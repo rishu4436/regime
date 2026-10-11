@@ -2,6 +2,8 @@
 Bot 4's clients REJECT an order sent to the wrong path; this mock does the same."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -12,6 +14,8 @@ from backend.contracts import ExecutionPath, ExecutionResult, ManualStrategy, Or
 from backend.mocks import MockExchangeClient
 
 from .helpers import SEED, tick_until, trading_strategy
+
+WEEKDAY = datetime(2026, 10, 14, 15, 0, tzinfo=timezone.utc)  # Wed 15:00 UTC: every SIM token is TRADING
 
 
 class PathStrictMock(MockExchangeClient):
@@ -58,6 +62,11 @@ def test_every_token_executes_on_whatever_path_it_was_quoted(symbol):
     bStock -> SWAP; the plain mock quotes SWAP). Whatever the installed SIM client quotes, the fill must be on it."""
     s = Settings(sim_seed=SEED)
     comps = build_components(s)
+    if callable(getattr(comps.exchange, "set_trading_status", None)):  # Bot 4 SIM client: Ondo is off-hours (no fills,
+        try:                                                             # 40367) on Sat/Sun UTC -> pin a weekday clock
+            comps = build_components(s, exchange=type(comps.exchange)(seed=SEED, n_candles=s.sim_replay_bars, clock=lambda: WEEKDAY))
+        except TypeError:
+            pass
     ex = comps.exchange
     quoted: list[ExecutionPath] = []
     orig = ex.get_quote

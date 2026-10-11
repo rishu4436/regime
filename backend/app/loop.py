@@ -213,6 +213,7 @@ class TradingLoop:
                 return []
             self.ticks += 1
             bar = self._bar = window[-1]
+            self._sync_explainer_limits()
             now = self._now()
             self._set_sim_price(sym, bar.close)
             self.book.on_bar(sym, bar, now)
@@ -269,16 +270,26 @@ class TradingLoop:
             if cd:
                 out.append(self._finalize(Decision(action=Action.STAY_OUT, reason=f"BUY not executed: {cd}", **base)))
                 return self._end_tick(out)
+            waiting = self._pending_buy_for(sym) if signal.action == Action.BUY else None
+            if waiting is not None:  # one confirmation per symbol/agent at a time: no stale approval queue
+                out.append(self._finalize(Decision(action=Action.STAY_OUT, reason=(
+                    f"BUY not executed: awaiting your approval of the pending BUY ({waiting.decision.id}); "
+                    f"no new order until you approve or reject it"), **base)))
+                return self._end_tick(out)
             verdict = self._risk_check(signal, pf, control)  # LIVE BUY: pass 1 with LiveContext (no quote yet)
             if not verdict.approved:
                 out.append(self._finalize(Decision(action=Action.STAY_OUT, risk_verdict=verdict,
                                                    reason=f"{signal.action.value} not executed: " + _blocked(verdict.reasons), **base)))
             elif signal.action == Action.SELL:
                 lots = self.book.lots_for(sym)
+                if signal.position_id:  # the engine targeted one lot: sell only that one (others exit on their own signal)
+                    lots = [l for l in lots if l.position.id == signal.position_id] or lots
                 if self._pending_for(sym):
                     out.append(self._hold_exit(signal, "engine", regime))
-                if lots or not self._pending_for(sym):
-                    out.append(self._exit(lots, signal, exit_reason_of(signal), regime, verdict))
+                if not lots and not self._pending_for(sym):
+                    out.append(self._exit([], signal, exit_reason_of(signal), regime, verdict))
+                for lot in lots:  # one Decision + execution per lot, so the log replays to the real book
+                    out.append(self._exit([lot], signal, exit_reason_of(signal), regime, verdict))
             elif verdict.requires_confirmation:  # only when confirmation mode / CONFIRMATION activation is on (LIVE too)
                 d = self._pending_decision(signal, verdict, base)
                 out.append(d)
@@ -647,7 +658,8 @@ class TradingLoop:
 
     def _update_market_context(self, sym: str, pf) -> None:
         """Bot 2 live engine: per-order cap from risk, and set_market_context(symbol, {status, reference_price_only,
-        priceImpactPercent, equity}) from token status + a probe quote; None when nothing is known."""
+        min_order_usdt, priceImpactPercent, equity}) from token status + a probe quote; None when nothing is known.
+        min_order_usdt is get_token_status(sym).min_order_usdt (None when unavailable), the same floor risk uses."""
         eng = getattr(self.c.engine, "_primary", None) or self.c.engine
         cfg = getattr(eng, "live_config", None)
         if cfg is not None and hasattr(cfg, "max_order_usdt"):
@@ -668,10 +680,15 @@ class TradingLoop:
             try:
                 st = fn(sym)
                 d = st if isinstance(st, dict) else (st.model_dump() if hasattr(st, "model_dump") else vars(st))
-                ctx["status"] = d.get("trading_status", d.get("status"))
+                status = d.get("trading_status", d.get("status"))
+                ctx["status"] = getattr(status, "value", status)  # enum -> 'OFFHOURS' (str(enum) is 'TradingStatus.X')
                 ctx["reference_price_only"] = bool(d.get("reference_price_only", False))
+                mo = d.get("min_order_usdt")
+                ctx["min_order_usdt"] = float(mo) if mo is not None else None  # same minimum risk reads
             except Exception:
-                pass
+                ctx["min_order_usdt"] = None
+        else:
+            ctx["min_order_usdt"] = None
         if self._cooldown(sym):
             ctx["status"] = "closed"
         else:
@@ -748,9 +765,12 @@ class TradingLoop:
                 usd = amt if asset == livemod.QUOTE_ASSET else (amt * prices[asset] if asset in prices else None)
                 rows.append({"symbol": asset, "amount": round(amt, 10), "usd_value": None if usd is None else round(usd, 8)})
             wl = self.wallet_settings.get() if self.live else None
+            focus = self.symbol or self.s.default_agent_symbol  # active (or default) token: its minimum drives min_wallet_usdt
             ctx = livemod.make_live_context(wallet_limits=wl, balances=bal if connected else None,
-                                            daily_live_notional_usdt=self.daily_live_notional())
+                                            daily_live_notional_usdt=self.daily_live_notional(),
+                                            token_status=self._risk_token_status(focus))
             rl = livemod.risk_live_limits(self.c.risk, pf, ctx)
+            per_token = self._per_token_limits(wl, bal if connected else None)
             used = rl.get("daily_used_usdt")
             if used is None:
                 used = (rl.get("risk_limits") or {}).get("daily_used_usdt")
@@ -767,6 +787,10 @@ class TradingLoop:
                       "limit_source": rl.get("limit_source") or "app",
                       "warnings": list(rl.get("warnings") or [])}
             self._alert_new_warnings(limits["warnings"])
+            self._sync_explainer_limits(limits)
+            limits["limits_symbol"] = focus
+            if per_token:
+                limits["per_token"] = per_token
             limits.setdefault("daily_loss_cap_usdt", self.s.live_max_daily_loss_usdt)
             limits.setdefault("max_exposure_usdt", self.s.live_max_exposure_usdt)
             return {
@@ -774,6 +798,53 @@ class TradingLoop:
                 "chain_id": livemod.BSC_CHAIN_ID, "connected": connected, "balances": rows,
                 "bnb_gas_reserve": rl.get("bnb_gas_reserve", self.s.live_min_bnb), "limits": limits, "updated_at": utc_now(),
             }
+
+    def _risk_token_status(self, symbol: Optional[str]) -> Any:
+        """Bot 4 token status for `symbol` as Bot 3's TokenStatus (None when unknown / unconvertible)."""
+        if not symbol:
+            return None
+        try:
+            return livemod.to_token_status(self.token_status(symbol))
+        except Exception:
+            return None
+
+    def _per_token_limits(self, wallet_limits: Any, balances: Optional[dict]) -> dict:
+        """limits.per_token = {symbol: {min_order_usdt, min_wallet_usdt, min_wallet_usdt_note}} for every tradable token,
+        from risk.min_wallet_info(LiveContext(token_status=...)) when risk has it, else Bot 4's min_order_usdt only."""
+        fn = getattr(self.c.risk, "min_wallet_info", None)
+        out: dict = {}
+        for sym in self.tradable_tokens():
+            raw = self.token_status(sym)
+            if raw is None:
+                continue
+            row: dict = {"min_order_usdt": raw.get("min_order_usdt")}
+            if callable(fn):
+                try:
+                    ctx = livemod.make_live_context(wallet_limits=wallet_limits, balances=balances,
+                                                    token_status=livemod.to_token_status(raw))
+                    row.update(dict(fn(ctx)))
+                except Exception:
+                    pass
+            out[sym] = row
+        return out
+
+    def _sync_explainer_limits(self, limits: Optional[dict] = None) -> None:
+        """Bot 5 set_live_limits(risk.live_limits()) so explanations can give small-wallet / gas hints (duck-typed)."""
+        fn = getattr(self.c.explainer, "set_live_limits", None)
+        if not callable(fn):
+            return
+        try:
+            if limits is None:
+                ctx = livemod.make_live_context(wallet_limits=self.wallet_settings.get() if self.live else None,
+                                                daily_live_notional_usdt=self.daily_live_notional(),
+                                                token_status=self._risk_token_status(self.symbol))
+                limits = dict(livemod.risk_live_limits(self.c.risk, self.book.portfolio(), ctx))
+                limits.setdefault("per_order_cap_usdt", self.s.live_max_order_usdt)  # app caps when risk has none
+                limits.setdefault("daily_limit_usdt", self.s.live_max_daily_notional_usdt)
+                limits.setdefault("bnb_gas_reserve", self.s.live_min_bnb)
+            fn(limits)
+        except Exception:
+            pass
 
     def _alert_new_warnings(self, warnings: list) -> None:
         """Bot 3 live_limits warnings [{code, message}] -> one ALERT per newly appearing code."""
@@ -1022,6 +1093,12 @@ class TradingLoop:
         return self._finalize(Decision(id=did, action=Action.STAY_OUT, execution=last,
                                        reason=f"{tag} exit not filled ({last.status.value if last else '-'}), retrying next bar", **base))
 
+    def _pending_buy_for(self, sym: str) -> Optional[Pending]:
+        """The pending (awaiting approval) BUY for this symbol under the current agent, if any."""
+        return next((p for p in self.pending.values()
+                     if p.decision.symbol == sym and p.decision.action == Action.BUY
+                     and p.decision.agent_mode == self.agent_mode), None)
+
     def _pending_decision(self, signal: Signal, verdict: RiskVerdict, base: dict) -> Decision:
         did = Decision.model_fields["id"].default_factory()
         notional = verdict.adjusted_notional or signal.proposed_notional
@@ -1119,7 +1196,22 @@ class TradingLoop:
             return self._control_changed(self.c.risk.reset_emergency_stop())
 
     def set_confirmation_mode(self, enabled: bool) -> ControlState:
+        """The toggle also sets the active agent's activation (OFF -> AUTO_EXECUTE, ON -> CONFIRMATION), so a strategy
+        activated with CONFIRMATION doesn't keep requiring approval after the user switched confirmation off."""
         with self.lock:
+            act = ActivationMode.CONFIRMATION if enabled else ActivationMode.AUTO_EXECUTE
+            if self.manual is not None and self.manual.activation != act:
+                self.manual = self.manual.model_copy(update={"activation": act})
+                hook = getattr(self.c.risk, "apply_manual_strategy", None)  # risk reads activation per symbol
+                if callable(hook):
+                    try:
+                        hook(self.manual)
+                    except Exception as e:
+                        self._alert(AlertLevel.WARNING, "CONFIRMATION_MODE", f"risk could not apply the new activation: {e}")
+                self.state.update(agent={"kind": "manual", "strategy": self.manual.model_dump(mode="json")})
+            elif self.auto is not None and self.auto.activation != act:
+                self.auto = self.auto.model_copy(update={"activation": act})
+                self.state.update(agent={"kind": "auto", "config": self.auto.model_dump(mode="json")})
             return self._control_changed(self.c.risk.set_confirmation_mode(enabled))
 
     def emergency_stop(self, reason: str = "", flatten: bool = False) -> ControlState:

@@ -21,6 +21,8 @@ class ReplayFeed:
         self.exchange, self.total, self.window, self.warmup = exchange, total_bars, window, warmup
         self._series: dict[tuple[str, Timeframe], list[Candle]] = {}
         self._cursor: dict[tuple[str, Timeframe], int] = {}
+        self._active: dict[str, Timeframe] = {}  # symbol -> timeframe of the last next_window
+        self._clock: dict[str, object] = {}  # symbol -> timestamp of the bar the replay last pinned (any timeframe)
         self._lock = threading.RLock()
         if self.has_replay:
             self._prebuild()
@@ -34,6 +36,7 @@ class ReplayFeed:
         for sym in symbols:
             for tf in Timeframe:
                 self.series(sym, tf)
+        self._cursor.clear()  # cursors are set on first use (so a later timeframe resumes at the replay clock)
 
     def reset(self, symbol: str, timeframe: Timeframe) -> None:
         with self._lock:
@@ -44,9 +47,40 @@ class ReplayFeed:
         """Duck-typed: Bot 4's SimulatedBinanceClient pins candles/prices/quotes to a bar via set_replay_index(i)."""
         return callable(getattr(self.exchange, "set_replay_index", None))
 
-    def _total(self, symbol: str) -> int:
+    def _total(self, symbol: str, timeframe: Timeframe = Timeframe.H1) -> int:
         n_bars = getattr(self.exchange, "n_bars", None)
-        return int(n_bars(symbol)) if callable(n_bars) else self.total  # replay indices refer to the client's series
+        if not callable(n_bars):
+            return self.total
+        try:  # Bot 4 aea22d1: n_bars(symbol, timeframe) - finer timeframes have more bars over the same span
+            return int(n_bars(symbol, timeframe))
+        except TypeError:
+            return int(n_bars(symbol))  # replay indices refer to the client's series
+
+    def _fetch(self, symbol: str, timeframe: Timeframe) -> list[Candle]:
+        full = getattr(self.exchange, "get_full_candles", None)  # ignores the pin (safe while the loop is pinned)
+        if callable(full):
+            try:
+                return list(full(symbol, timeframe))
+            except TypeError:
+                pass
+        return list(self.exchange.get_candles(symbol, timeframe, limit=self._total(symbol, timeframe)))
+
+    def _resume_index(self, symbol: str, timeframe: Timeframe) -> Optional[int]:
+        """Timeframe switch: the bar of `timeframe` at the replay clock of `symbol` (Bot 4 index_at), else None."""
+        t = self._clock.get(symbol)
+        fn = getattr(self.exchange, "index_at", None)
+        if t is None or not callable(fn):
+            return None
+        try:
+            return int(fn(symbol, timeframe, t))
+        except Exception:
+            return None
+
+    def _pin(self, i: int, timeframe: Timeframe) -> None:
+        try:
+            self.exchange.set_replay_index(i, timeframe)  # Bot 4 aea22d1: the pin is a time, shared by every timeframe
+        except TypeError:
+            self.exchange.set_replay_index(i)  # older client: H1 index only
 
     def series(self, symbol: str, timeframe: Timeframe) -> list[Candle]:
         """Full cached history (oldest first). Built on first use; with a replay client that is feed construction."""
@@ -55,9 +89,10 @@ class ReplayFeed:
             if k not in self._series:
                 # Only reached lazily for clients without set_replay_index (nothing to race with) or for a symbol that
                 # was not in the token list at start-up (then the client's current view is the best we can get).
-                self._series[k] = list(self.exchange.get_candles(symbol, timeframe, limit=self._total(symbol)))
+                self._series[k] = self._fetch(symbol, timeframe)
             if k not in self._cursor:
-                self._cursor[k] = min(self.warmup, len(self._series[k])) - 1
+                j = self._resume_index(symbol, timeframe)
+                self._cursor[k] = j if j is not None and 0 <= j < len(self._series[k]) else min(self.warmup, len(self._series[k])) - 1
             return self._series[k]
 
     def history(self, symbol: str, timeframe: Timeframe, limit: Optional[int] = None) -> list[Candle]:
@@ -74,12 +109,18 @@ class ReplayFeed:
         with self._lock:
             s = self.series(symbol, timeframe)
             k = (symbol, timeframe)
+            if self._active.get(symbol, timeframe) != timeframe:  # timeframe switch: resume at the same replay time
+                j = self._resume_index(symbol, timeframe)
+                if j is not None and 0 <= j < len(s):
+                    self._cursor[k] = j
+            self._active[symbol] = timeframe
             if self._cursor[k] + 1 >= len(s):
                 return None  # replay finished
             self._cursor[k] += 1
             i = self._cursor[k]
             if self.has_replay:
-                self.exchange.set_replay_index(i)  # candles end at bar i; price / quotes / fills use bar i close
+                self._pin(i, timeframe)  # candles end at bar i; price / quotes / fills use bar i close
+            self._clock[symbol] = s[i].timestamp
             return s[max(0, i + 1 - self.window):i + 1]
 
     def position(self, symbol: str, timeframe: Timeframe) -> tuple[int, int]:

@@ -113,6 +113,28 @@ class ResilientExplainer(_PerCallFallback):
 
     def summarize_state(self, status, **kw): return self._opt("summarize_state", (status,), kw)
     def parse_strategy_from_text(self, text, default_symbol=None): return self.__getattr__("parse_strategy_from_text")(text, default_symbol)
+
+    def parse_strategy_with_notes(self, text, default_symbol=None):
+        """(strategy, notes): Bot 5's parse_strategy_with_notes when present, else parse_strategy_from_text + []."""
+        p = getattr(self._primary, "parse_strategy_with_notes", None) if self._primary is not None else None
+        if callable(p):
+            try:
+                out, notes = p(text, default_symbol)
+                return out, [str(n) for n in (notes or [])]
+            except Exception as e:  # same per-call fallback as parse_strategy_from_text
+                if not isinstance(e, NotImplementedError):
+                    log.exception("%s.parse_strategy_with_notes failed, using fallback", type(self._primary).__name__)
+        return self.parse_strategy_from_text(text, default_symbol), []
+
+    def set_live_limits(self, limits):
+        """Forward risk.live_limits() to every implementation that takes it (Bot 5 set_live_limits)."""
+        for impl in (self._primary, self._fallback):
+            fn = getattr(impl, "set_live_limits", None)
+            if callable(fn):
+                try:
+                    fn(limits)
+                except Exception:
+                    log.exception("%s.set_live_limits failed", type(impl).__name__)
     def answer(self, question, status, **kw): return self._opt("answer", (question, status), kw)
 
 
