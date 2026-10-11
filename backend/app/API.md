@@ -125,7 +125,11 @@ Client → server (optional): `{"type": "ping"}` → server replies with a `STAT
 ## Modes
 `TRADING_MODE=SIM` (default; offline mocks, the loop replays seeded candles bar by bar, `SIM_SEED`, default 42),
 `PAPER` (real market data, simulated fills), `LIVE` (refused at startup unless `LIVE_TRADING_ENABLED=true` **and**
-`BINANCE_API_KEY` / `BINANCE_API_SECRET` are set). The mode is fixed per process and reported in
+`BINANCE_LIVE_ENABLED=true` **and** `BINANCE_API_KEY` / `BINANCE_API_SECRET` are set; the startup error names each missing
+item, e.g. `missing: BINANCE_LIVE_ENABLED=true, BINANCE_API_SECRET`). PAPER/LIVE quotes for xStock tokens (`...x`) are RFQ
+and need `BINANCE_WALLET_ADDRESS`; without it Bot 4's client refuses the quote (40001) and the decision shows
+`BUY not filled (FAILED: QuoteUnavailable ...)`. The execution path is whatever the exchange quotes per token/route
+(SIM: Ondo + xStock → RFQ, bStock → SWAP); the UI should not assume a path per token. The mode is fixed per process and reported in
 `/api/system`, `ControlState.trading_mode` and every `Decision.mode`.
 
 ## Reason texts (exactly one prefix)
@@ -141,6 +145,7 @@ The loop executes on the path the exchange quoted: `Quote.path == RFQ` → `exec
 (the exchange rejects an order sent to the wrong path). `ExecutionResult.path` shows which one was used.
 
 ## Changelog
+- v0.6: LIVE needs both `LIVE_TRADING_ENABLED=true` and `BINANCE_LIVE_ENABLED=true` (+ keys); no per-token path assumptions.
 - v0.5: `GET /api/candles/{symbol}?history=true`; `/api/backtest` always uses the cached full history (no longer drifts with the replay).
 - v0.4: SIM market data never passes the loop's replay bar; agent switch rejects pending confirmations; single-prefix reason texts.
 - v0.3: `GET /api/auto/presets-table`, `POST /api/positions/by-id/{position_id}/close`; emergency-stop exits at bar
