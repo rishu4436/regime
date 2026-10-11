@@ -196,7 +196,10 @@ class DefaultStrategyEngine:
             return Signal(
                 action=Action.STAY_OUT,
                 conditions_failed=["cooldown"],
-                reason=f"Cooldown: {since} bars since last exit (need > {r.cooldown_bars})",
+                reason=(
+                    f"Cooldown: {since} {'bar' if since == 1 else 'bars'} since the last exit "
+                    f"(needs more than {r.cooldown_bars})"
+                ),
                 **base,
             )
         if len(cs) < self.warmup_bars + 1:
