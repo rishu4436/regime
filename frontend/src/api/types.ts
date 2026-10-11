@@ -135,6 +135,8 @@ export interface TradingLimits {
 /** GET /api/settings/limits: current limits + the wallet's own daily limit (final cap) + the safe defaults. */
 export interface TradingLimitsResponse extends TradingLimits {
   wallet_daily_limit_usdt?: number | null;
+  /** read-only: the exchange's cap for one sell order (2x per-token), so a whole position can close in one order */
+  max_sell_usdt?: number | null;
   defaults?: TradingLimits | null;
   updated_at?: string | null;
 }

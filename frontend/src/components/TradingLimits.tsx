@@ -129,6 +129,7 @@ export function TradingLimitsCard({ refresh }: { refresh?: () => void }) {
         <div className="note" style={{ marginTop: 0 }}>
           Only changeable on the PC running Regime. The wallet's own daily limit in the Binance App stays the final cap{walletCap != null ? ` (${usd(walletCap)} today)` : ""}.
           Saving doesn't clear an emergency stop.
+          {data.max_sell_usdt != null && <> Biggest single sell: <b>{usd(data.max_sell_usdt)}</b>, so a whole position can close in one order.</>}
         </div>
       </div>
       {confirm && (
