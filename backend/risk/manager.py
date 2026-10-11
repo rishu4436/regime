@@ -286,6 +286,7 @@ class DefaultRiskManager:
             "stale_after_s": lp.max_data_age_seconds,
             "bnb_gas_reserve": lp.min_gas_reserve,
             "fee_buffer_usdt": lp.fee_buffer_usdt,
+            **self.min_wallet_info(context),
             "market_hours_utc": (f"{lp.market_open_utc:%H:%M}-{lp.market_close_utc:%H:%M}"
                                  + (" Mon-Fri" if lp.market_weekdays_only else "")) if lp.market_hours_enabled else None,
             "daily_used_usdt": eff["daily_used"],
@@ -294,6 +295,27 @@ class DefaultRiskManager:
             "daily_loss_usdt": self.daily_loss_usdt(portfolio) if portfolio is not None else None,
             "open_exposure_usdt": sum(self._position_value(p) for p in portfolio.positions) if portfolio is not None else None,
         }
+
+    def min_wallet_info(self, context: Optional[LiveContext] = None) -> dict:
+        """Smallest stablecoin balance at which a minimum-size LIVE BUY can pass: effective minimum order
+        (max(min_order_notional, context.token_status.min_order_usdt)) + fee_buffer_usdt. ``min_wallet_usdt`` is None
+        when that minimum is above the effective per-order cap (no wallet size can ever buy). The swap fee itself
+        (~0.1%) is on top. Keys: min_order_usdt, min_wallet_usdt, min_wallet_usdt_note."""
+        cfg, lp = self._config, self._config.live
+        ts = context.token_status if context else None
+        tmin = ts.min_order_usdt if ts else None
+        min_order = max(cfg.min_order_notional, tmin or 0.0)
+        token_bound = tmin is not None and tmin > cfg.min_order_notional
+        per = self._effective_caps(context)
+        src = f"token minimum {_fmt(tmin)} USDT" if token_bound else f"minimum order {_fmt(min_order)} USDT"
+        if min_order > per["per_order"] + 1e-9:
+            return {"min_order_usdt": min_order, "min_wallet_usdt": None, "min_wallet_usdt_note": (
+                f"The {src} is above the per-order cap of {_fmt(per['per_order'])} USDT (set by {per['per_order_src']}) "
+                "- no LIVE BUY of this token can pass at any wallet size")}
+        mw = min_order + lp.fee_buffer_usdt
+        return {"min_order_usdt": min_order, "min_wallet_usdt": mw, "min_wallet_usdt_note": (
+            f"{src} + fee buffer {_fmt(lp.fee_buffer_usdt)} USDT = {_fmt(mw)} USDT (plus the swap fee)"
+            + (" - token minimum used" if token_bound else ""))}
 
     def exit_quota_shortfall_usdt(self, portfolio: Optional[Portfolio], context: Optional[LiveContext]) -> Optional[float]:
         """How much of the open exposure the wallet could NOT sell today: max(0, open exposure - wallet quota left).
@@ -316,6 +338,15 @@ class DefaultRiskManager:
             out.append({"code": "exit_quota_shortfall", "message": (
                 f"Wallet daily quota left ({_fmt(left)} USDT) is below open positions ({_fmt(left + short)} USDT) - "
                 "not every position can be sold today")})
+        if context is not None and context.balances is not None:
+            info = self.min_wallet_info(context)
+            stable = self._balance(context, self._config.live.quote_asset)
+            if info["min_wallet_usdt"] is None:
+                out.append({"code": "token_min_above_cap", "message": info["min_wallet_usdt_note"]})
+            elif stable < info["min_wallet_usdt"]:
+                out.append({"code": "wallet_too_small", "message": (
+                    f"Wallet {self._config.live.quote_asset} {_fmt(stable)} is below {_fmt(info['min_wallet_usdt'])} USDT "
+                    f"needed for a minimum-size LIVE BUY ({info['min_wallet_usdt_note']})")})
         if wl is not None and wl.fetched_at is not None:
             age = (self._now(context) - as_utc(wl.fetched_at)).total_seconds()
             if age > self.WALLET_LIMITS_STALE_S:
@@ -528,6 +559,10 @@ class DefaultRiskManager:
 
         if cfg.daily_loss_limit_pct is None:
             checks.append(RiskCheck(name="daily_loss_limit", passed=True, detail="Daily loss limit off"))
+        elif live and not lp.use_pct_daily_loss_in_live:
+            checks.append(RiskCheck(name="daily_loss_limit", passed=True, detail=(
+                f"LIVE uses the daily loss cap of {_fmt(lp.max_daily_loss_usdt)} USDT instead "
+                f"(the {cfg.daily_loss_limit_pct}%-of-capital rule applies in SIM/PAPER)")))
         else:
             limit = portfolio.starting_capital * cfg.daily_loss_limit_pct / 100.0
             ok = portfolio.daily_pnl > -limit
@@ -549,6 +584,7 @@ class DefaultRiskManager:
         equity = self._equity(portfolio)
         gates_ok = all(c.passed for c in checks)
         notional = 0.0
+        hard_ceiling = float("inf")  # min of the HARD caps (never exceeded, even by the LIVE min-order bump)
         if equity <= 0:
             checks.append(RiskCheck(name="position_size", passed=False, detail="Portfolio equity is zero - cannot size an order"))
         else:
@@ -567,8 +603,10 @@ class DefaultRiskManager:
                 f"{src}; size {pct:.2f}% of equity {_fmt(equity)} = {_fmt(notional)} USDT"
                 + (f" (capped at max {base_pct}%)" if want_pct > base_pct else ""))))
 
-            def cap(name: str, limit: float, what: str) -> None:
-                nonlocal notional
+            def cap(name: str, limit: float, what: str, hard: bool = False) -> None:
+                nonlocal notional, hard_ceiling
+                if hard:
+                    hard_ceiling = min(hard_ceiling, max(limit, 0.0))
                 if notional > limit:
                     checks.append(RiskCheck(name=name, passed=True,
                                             detail=f"{what}: reduced from {_fmt(notional)} to {_fmt(max(limit, 0))} USDT"))
@@ -576,7 +614,7 @@ class DefaultRiskManager:
                 else:
                     checks.append(RiskCheck(name=name, passed=True, detail=f"{what}: {_fmt(notional)} USDT fits"))
 
-            cap("cash_available", portfolio.cash, f"Cash available {_fmt(portfolio.cash)} USDT")
+            cap("cash_available", portfolio.cash, f"Cash available {_fmt(portfolio.cash)} USDT", hard=True)
             token_exp = sum(self._position_value(p) for p in portfolio.positions if p.symbol == signal.symbol)
             token_lim = equity * cfg.max_token_exposure_pct / 100.0
             cap("max_token_exposure", token_lim - token_exp,
@@ -590,46 +628,62 @@ class DefaultRiskManager:
                 max_loss = portfolio.starting_capital * prules.max_loss_per_trade_pct / 100.0
                 sl = erules.stop_loss_pct / 100.0
                 cap("max_loss_per_trade", max_loss / sl,
-                    f"Max loss per trade {prules.max_loss_per_trade_pct}% = {_fmt(max_loss)} USDT at a {erules.stop_loss_pct}% stop")
+                    f"Max loss per trade {prules.max_loss_per_trade_pct}% = {_fmt(max_loss)} USDT at a {erules.stop_loss_pct}% stop",
+                    hard=True)
             else:
                 checks.append(RiskCheck(name="max_loss_per_trade", passed=True, detail="Max loss per trade off"))
 
             if live:
-                cap("live_order_cap", lp.max_order_notional_usdt, f"LIVE per-order cap {_fmt(lp.max_order_notional_usdt)} USDT")
+                cap("live_order_cap", lp.max_order_notional_usdt, f"LIVE per-order cap {_fmt(lp.max_order_notional_usdt)} USDT", hard=True)
                 cap("live_max_exposure", lp.max_open_exposure_usdt - total_exp,
-                    f"LIVE open exposure {_fmt(total_exp)} USDT, cap {_fmt(lp.max_open_exposure_usdt)} USDT")
+                    f"LIVE open exposure {_fmt(total_exp)} USDT, cap {_fmt(lp.max_open_exposure_usdt)} USDT", hard=True)
                 used = self.daily_live_notional_used(ctx)
                 cap("live_daily_notional", lp.max_daily_notional_usdt - used,
-                    f"LIVE bought today {_fmt(used)} USDT, daily cap {_fmt(lp.max_daily_notional_usdt)} USDT")
+                    f"LIVE bought today {_fmt(used)} USDT, daily cap {_fmt(lp.max_daily_notional_usdt)} USDT", hard=True)
                 wl = ctx.wallet_limits
                 if wl is not None:
                     if wl.per_tx_limit_usdt is not None:
                         cap("wallet_per_tx_cap", wl.per_tx_limit_usdt,
-                            f"Wallet per-transaction limit {_fmt(wl.per_tx_limit_usdt)} USDT")
+                            f"Wallet per-transaction limit {_fmt(wl.per_tx_limit_usdt)} USDT", hard=True)
                     wleft = wl.daily_remaining_usdt()
                     if wleft is not None:
                         cap("wallet_daily_limit", wleft,
                             f"Wallet daily limit {self._opt(wl.daily_limit_usdt)}, used {self._opt(wl.daily_used_usdt)}, "
-                            f"left {_fmt(wleft)} USDT")
+                            f"left {_fmt(wleft)} USDT", hard=True)
                         if lp.reserve_wallet_quota_for_exits:
                             cap("wallet_exit_reserve", (wleft - total_exp) / 2.0, (
                                 f"Wallet daily quota left {_fmt(wleft)} USDT also pays for SELLs: keeping "
                                 f"{_fmt(total_exp)} USDT of it to sell open positions plus the same amount as this buy to "
                                 f"sell it later, so the buy is at most (left - open exposure) / 2"
-                                f" = {_fmt(max((wleft - total_exp) / 2.0, 0.0))} USDT"))
+                                f" = {_fmt(max((wleft - total_exp) / 2.0, 0.0))} USDT"), hard=True)
                 if ctx.balances is not None:
                     stable = self._balance(ctx, lp.quote_asset)
                     cap("live_wallet_balance", stable - lp.fee_buffer_usdt,
-                        f"Wallet {lp.quote_asset} {_fmt(stable)} minus fee buffer {_fmt(lp.fee_buffer_usdt)}")
+                        f"Wallet {lp.quote_asset} {_fmt(stable)} minus fee buffer {_fmt(lp.fee_buffer_usdt)}", hard=True)
 
             tmin = ctx.token_status.min_order_usdt if (live and ctx.token_status) else None
             min_n = max(cfg.min_order_notional, tmin or 0.0)
-            ok = notional >= max(min_n, 1e-9)
             token_bound = tmin is not None and tmin > cfg.min_order_notional
-            checks.append(RiskCheck(name="min_order_notional", passed=ok, detail=(
-                f"Order {_fmt(notional)} USDT, minimum {_fmt(min_n)} USDT"
-                + (f" ({signal.symbol} token minimum)" if token_bound else "")
-                + ("" if ok else (" - below token minimum order" if token_bound else " - too small")))))
+            what_min = f"the {signal.symbol} token minimum" if token_bound else "the minimum order"
+            bump_note = ""
+            if live and lp.bump_to_min_order and 0 < min_n and notional < min_n:
+                # LIVE: raise to the minimum if it still fits every HARD ceiling (it may override the %-of-equity rules)
+                if min_n <= hard_ceiling * (1 + 1e-9) + 1e-9:
+                    bump_note = (f"raised from {_fmt(notional)} to {_fmt(min_n)} USDT to meet {what_min} "
+                                 f"(LIVE bump; within every hard cap, tightest {_fmt(hard_ceiling)} USDT)")
+                    notional = min_n
+                else:
+                    bump_note = (f"cannot raise to {_fmt(min_n)} USDT: a hard cap allows at most "
+                                 f"{_fmt(max(hard_ceiling, 0.0))} USDT")
+            ok = notional >= max(min_n, 1e-9) - 1e-9
+            if ok and bump_note.startswith("raised"):
+                detail = f"Order {bump_note}"
+            else:
+                detail = (f"Order {_fmt(notional)} USDT, minimum {_fmt(min_n)} USDT"
+                          + (f" ({signal.symbol} token minimum)" if token_bound else "")
+                          + ("" if ok else (" - below token minimum order" if token_bound else " - too small"))
+                          + (f"; {bump_note}" if bump_note else ""))
+            checks.append(RiskCheck(name="min_order_notional", passed=ok, detail=detail))
             if live:
                 self._live_quote_checks(signal, ctx, notional, checks)
                 if ctx.quote is not None and ctx.balances is not None:
@@ -698,7 +752,7 @@ class DefaultRiskManager:
             verb = signal.action.value
             reasons = [f"Approved {verb} {signal.symbol} for {_fmt(notional)} USDT ({size_pct:.2f}% of equity)"
                        + (" - awaiting user confirmation" if requires_confirmation else "")]
-            reasons += [c.detail for c in checks if "reduced" in c.detail]
+            reasons += [c.detail for c in checks if "reduced" in c.detail or "raised from" in c.detail]
         else:
             reasons = [f"Blocked ({c.name}): {c.detail}" for c in checks if not c.passed]
         return RiskVerdict(signal_id=signal.id, approved=approved, reasons=reasons, checks=checks,

@@ -79,10 +79,15 @@ def test_live_blocked_by_default(rm):
 
 
 def test_max_open_positions(rm):
+    # default is RiskConfig.default_max_open_positions = 3 (contract default 1 is not explicit -> overridden)
+    three = [pos(), pos("AAPLon"), pos("MSFTon")]
+    assert rm.check(buy("TSLAx"), make_portfolio(cash=7000, positions=three[:2]), ctl()).approved
+    v = rm.check(buy("TSLAx"), make_portfolio(cash=6000, positions=three), ctl())
+    assert not v.approved and "limit 3 - limit reached" in names(v)["max_open_positions"].detail
+    # an explicit value always wins over the risk default
+    rm.set_config(RiskConfig(position_rules=PositionRiskRules(max_open_positions=1)))
     v = rm.check(buy("TSLAx"), make_portfolio(cash=9000, positions=[pos()]), ctl())
-    assert not v.approved and "limit reached" in names(v)["max_open_positions"].detail
-    rm.set_config(RiskConfig(position_rules=PositionRiskRules(max_open_positions=3)))
-    assert rm.check(buy("TSLAx"), make_portfolio(cash=9000, positions=[pos()]), ctl()).approved
+    assert not v.approved and "limit 1" in names(v)["max_open_positions"].detail
 
 
 @pytest.mark.parametrize("bars,ok", [(None, True), (0, False), (5, False), (6, True)])
@@ -190,8 +195,10 @@ def test_apply_manual_strategy_rules(rm):
     p = make_portfolio(cash=9000, positions=[pos()], bars_since_exit={"TSLAx": 3})
     v = rm.check(buy("TSLAx"), p, ctl())
     assert v.approved and v.adjusted_notional == pytest.approx(1000) and not v.requires_confirmation
-    # NVDAon still on global defaults (max 1 position)
-    assert not rm.check(buy("NVDAon"), p, ctl()).approved
+    # NVDAon still on global defaults (max 3 positions, 1 open) -> allowed; with 3 open -> blocked
+    assert rm.check(buy("NVDAon"), p, ctl()).approved
+    p3 = make_portfolio(cash=7000, positions=[pos(), pos("AAPLon"), pos("MSFTon")])
+    assert not rm.check(buy("NVDAon"), p3, ctl()).approved
     rm.set_symbol_rules("TSLAx", SymbolRiskRules(activation=ActivationMode.CONFIRMATION))
     assert rm.check(buy("TSLAx"), make_portfolio(), ctl()).requires_confirmation
     rm.set_symbol_rules("TSLAx", None)

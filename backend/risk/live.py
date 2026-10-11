@@ -57,6 +57,14 @@ class LiveRiskProfile(BaseModel):
         default=True, description="Shrink LIVE BUYs so the wallet's daily quota (which counts SELLs) can still sell everything")
     require_wallet_limits: bool = Field(
         default=False, description="True = LIVE BUY blocked unless LiveContext.wallet_limits (the wallet's own caps) is supplied")
+    bump_to_min_order: bool = Field(default=True, description=(
+        "LIVE only: a sized BUY below the effective minimum (max(min_order_notional, token min_order_usdt)) is raised to "
+        "that minimum when it still fits every hard ceiling (per-order caps, wallet balance - fee buffer, LIVE exposure, "
+        "daily notional, wallet daily quota and exit reserve, cash). It may override the %-of-equity size/exposure rules, "
+        "never a hard cap"))
+    use_pct_daily_loss_in_live: bool = Field(default=False, description=(
+        "False = in LIVE the %-of-capital daily_loss_limit check is skipped (shown as passed) because the absolute "
+        "max_daily_loss_usdt cap governs; True = enforce both"))
 
 
 # Key names accepted by WalletLimits.from_baw. DOCUMENTED = in the official `baw wallet settings --json` reference

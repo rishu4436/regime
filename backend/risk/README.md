@@ -75,14 +75,20 @@ never un-pause the agent.
 | Signal | Checks (in order) |
 |---|---|
 | `STAY_OUT` | `signal_action` (failed) - never approved |
-| `BUY` | `signal_action`, `trading_mode` (LIVE blocked unless `allow_live`), `emergency_stop`, `paused`, `max_open_positions` (`len(positions) < max`, simulator gate), `cooldown` (`bars_since_exit[symbol] > cooldown_bars`, missing = no recent exit), `daily_loss_limit` (`daily_pnl > -X% * starting_capital`, default 5%), `max_trades_per_day` (off by default), then sizing: `position_size`, `cash_available`, `max_token_exposure` (default 30% of equity), `max_total_exposure` (default 60%), `max_loss_per_trade` (OFF by default), `min_order_notional` (default 10 USDT), and `confirmation` (if approved) |
+| `BUY` | `signal_action`, `trading_mode` (LIVE blocked unless `allow_live`), `emergency_stop`, `paused`, `max_open_positions` (`len(positions) < max`, simulator gate; default **3**, see below), `cooldown` (`bars_since_exit[symbol] > cooldown_bars`, missing = no recent exit), `daily_loss_limit` (`daily_pnl > -X% * starting_capital`, default 5%; **skipped in LIVE**, see below), `max_trades_per_day` (off by default), then sizing: `position_size`, `cash_available`, `max_token_exposure` (default 30% of equity), `max_total_exposure` (default 60%), `max_loss_per_trade` (OFF by default), `min_order_notional` (default 10 USDT), and `confirmation` (if approved) |
 | `SELL` | `signal_action`, `trading_mode`, `emergency_stop` (always passes — closing is allowed), `paused` (passes unless `allow_exits_when_paused=False`), `open_position` (must hold the symbol), `sell_size` (full position unless `proposed_notional` is smaller), `confirmation` |
 
 **Sizing (BUY):** desired size = `signal.proposed_notional` if > 0, else `signal.proposed_size_pct` if > 0, else
 `position_size_pct` (default 15%, simulator) — always capped at `position_size_pct` of **equity**. Then reduced (never
 increased) by cash, per-token exposure, total exposure (exposure valued at `current_price`, else entry price) and, if
 enabled, max-loss-per-trade (`notional <= starting_capital * max_loss% / stop_loss%`). Each reduction is a passed check
-with "reduced from X to Y"; if the result is below `min_order_notional` the verdict is blocked.
+with "reduced from X to Y"; if the result is below `min_order_notional` the verdict is blocked (in LIVE it is first
+raised to the minimum if every hard cap allows it - see "LIVE min-order bump").
+
+**Default max open positions = 3.** The contract's `PositionRiskRules.max_open_positions` defaults to 1. Risk uses
+`RiskConfig.default_max_open_positions` (3) whenever the rules in force did not set the field **explicitly**
+(pydantic `model_fields_set`) - for `RiskConfig.position_rules` and for a symbol / ManualStrategy override alike.
+An explicit value (e.g. a ManualStrategy JSON carrying `"max_open_positions": 1`) always wins. Applied in `rules_for`.
 
 **Confirmation:** `requires_confirmation = approved and (control.confirmation_mode or symbol activation == CONFIRMATION)`.
 Protective SELLs (`exit_reason` in STOP_LOSS / TAKE_PROFIT / TRAILING_STOP / MAX_LOSS / EMERGENCY_STOP, i.e. what
@@ -187,9 +193,24 @@ blocked by a LIVE guard and never wait.
 | `require_wallet_balances` | True | — | `live_gas_reserve` |
 | `quote_asset` / `fee_buffer_usdt` | USDT / 1.0 | `RISK_LIVE_FEE_BUFFER_USDT` | `live_wallet_balance` (reduces), `live_wallet_quote` |
 | `gas_asset` / `min_gas_reserve` | BNB / 0.002 | `RISK_LIVE_MIN_BNB` | `live_gas_reserve` |
+| `bump_to_min_order` | True | - | LIVE min-order bump (below) |
+| `use_pct_daily_loss_in_live` | False | - | `daily_loss_limit` (the %-of-capital rule) in LIVE |
 
 Size caps only **reduce** the order (each logged as "reduced from X to Y"); if it ends below `min_order_notional`
-(10 USDT) the BUY is blocked. The other guards block outright.
+(10 USDT) the BUY is blocked - unless the LIVE min-order bump applies. The other guards block outright.
+
+**LIVE min-order bump** (`bump_to_min_order=True`, LIVE only): if the sized BUY is below the effective minimum
+`max(min_order_notional, token_status.min_order_usdt)`, it is raised to that minimum **if the minimum fits under every
+hard ceiling**: cash, our per-order cap, wallet per-tx cap, wallet stablecoin balance minus `fee_buffer_usdt`, LIVE open
+exposure room, our daily notional room, wallet daily quota and wallet exit reserve, and max-loss-per-trade if set.
+The **%-of-equity rules** (`position_size_pct` 15%, `max_token_exposure_pct`, `max_total_exposure_pct`) may be overridden
+by the bump; hard caps never are. Logged on `min_order_notional`: "Order raised from X to Y USDT to meet the NVDAon token
+minimum ..." (also in `reasons`). If it doesn't fit: blocked with "cannot raise to Y USDT: a hard cap allows at most Z".
+Effect: a 30 USDT wallet buys NVDAB at 10 (29 after the fee buffer), a 100 USDT wallet buys Ondo tokens at 20.
+
+**%-of-capital daily loss in LIVE:** with `use_pct_daily_loss_in_live=False` (default) the `daily_loss_limit` check
+passes in LIVE with "LIVE uses the daily loss cap of X USDT instead" - the absolute `max_daily_loss_usdt` cap governs.
+SIM / PAPER unchanged.
 
 Semantics:
 - **Daily loss** = `-(Portfolio.daily_pnl + Σ unrealized)` where unrealized = `qty * (current_price - entry)` (or
@@ -227,6 +248,11 @@ risk.live_limits(portfolio, ctx)                             # -> dict for GET /
 `live_limits()` returns `live_allowed, per_order_cap_usdt, daily_loss_cap_usdt, daily_notional_cap_usdt,
 max_exposure_usdt, max_slippage_pct, stale_after_s, bnb_gas_reserve, fee_buffer_usdt, market_hours_utc,
 daily_used_usdt, daily_loss_usdt, open_exposure_usdt`. The last two are `None` without a portfolio.
+Also `min_order_usdt`, `min_wallet_usdt` = smallest stablecoin balance at which a minimum-size LIVE BUY can pass
+(`max(min_order_notional, ctx.token_status.min_order_usdt) + fee_buffer_usdt`, swap fee on top; `None` if that minimum
+is above the effective per-order cap) and `min_wallet_usdt_note` (explains it, says when a token minimum was used).
+`warnings` adds `wallet_too_small` (ctx balance below `min_wallet_usdt`) and `token_min_above_cap`. For the UI's
+"wallet too small" banner.
 
 ### Wallet limits, token status, token minimums, blocked symbols (LIVE BUYs only)
 
@@ -278,7 +304,8 @@ a plain dict works). Check `live_token_status` blocks unless `trading_status == 
 False, e.g. "NVDAon is off-hours - price is reference only - no LIVE BUY". Missing → informational pass.
 
 **Token minimum order:** in LIVE the minimum is `max(min_order_notional (10), token_status.min_order_usdt)` (Ondo: 20 USD).
-Below it, `min_order_notional` fails with "below token minimum order".
+Below it the LIVE bump raises the order to it when the hard caps allow; otherwise `min_order_notional` fails with
+"below token minimum order".
 
 **Blocked symbols:** `LiveRiskProfile.blocked_symbol_suffixes = ["x"]` (case-sensitive `endswith`). Check
 `live_symbol_allowed` blocks e.g. `TSLAx` (xStocks have no liquidity on BNB Chain); `NVDAX`/`NVDAon` pass. Set `[]` to disable.
