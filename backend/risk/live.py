@@ -39,7 +39,7 @@ class LiveRiskProfile(BaseModel):
     require_quote: bool = Field(
         default=False, description="True = LIVE BUY is approved only when a quote is supplied in LiveContext")
 
-    market_hours_enabled: bool = True
+    market_hours_enabled: bool = False  # off by default: on-chain tokenized stocks trade 24/7
     market_open_utc: time = Field(default=time(13, 30), description="US regular session in UTC (EDT). EST is 14:30-21:00")
     market_close_utc: time = time(20, 0)
     market_weekdays_only: bool = True

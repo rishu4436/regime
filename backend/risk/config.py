@@ -73,8 +73,9 @@ class RiskConfig(BaseModel):
             v = os.getenv(env, "").strip()
             if v:
                 live[field] = float(v)
-        if os.getenv("RISK_LIVE_MARKET_HOURS", "").strip().lower() == "false":
-            live["market_hours_enabled"] = False
+        mh = os.getenv("RISK_LIVE_MARKET_HOURS", "").strip().lower()
+        if mh in ("true", "false"):
+            live["market_hours_enabled"] = mh == "true"
         data = {"allow_live": allow, "live": LiveRiskProfile(**live)}
         data.update(overrides)
         return cls(**data)

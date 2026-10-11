@@ -182,7 +182,7 @@ blocked by a LIVE guard and never wait.
 | `max_quote_age_seconds` | 30 (quote TTL) | — | `live_quote` |
 | `max_slippage_pct` | 1.0 | `RISK_LIVE_MAX_SLIPPAGE_PCT` | `live_slippage` |
 | `require_quote` | False | — | `live_quote` |
-| `market_hours_enabled` / `market_open_utc` / `market_close_utc` / `market_weekdays_only` | True / 13:30 / 20:00 / True | `RISK_LIVE_MARKET_HOURS=false` | `live_market_hours` |
+| `market_hours_enabled` / `market_open_utc` / `market_close_utc` / `market_weekdays_only` | False (24/7) / 13:30 / 20:00 / True | `RISK_LIVE_MARKET_HOURS=true` to enable | `live_market_hours` |
 | `market_hours_exempt_symbols` | [] | — | `live_market_hours` |
 | `require_wallet_balances` | True | — | `live_gas_reserve` |
 | `quote_asset` / `fee_buffer_usdt` | USDT / 1.0 | `RISK_LIVE_FEE_BUFFER_USDT` | `live_wallet_balance` (reduces), `live_wallet_quote` |

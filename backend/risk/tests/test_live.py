@@ -124,12 +124,17 @@ def test_from_env_numeric_overrides(monkeypatch):
     assert lp.max_daily_notional_usdt == 100
 
 
+def test_market_hours_env_opt_in(monkeypatch):
+    monkeypatch.setenv("RISK_LIVE_MARKET_HOURS", "true")
+    assert RiskConfig.from_env().live.market_hours_enabled
+
+
 def test_live_profile_defaults():
     lp = LiveRiskProfile()
     assert (lp.max_order_notional_usdt, lp.max_daily_loss_usdt, lp.max_daily_notional_usdt, lp.max_open_exposure_usdt,
             lp.max_data_age_seconds, lp.max_slippage_pct, lp.fee_buffer_usdt, lp.min_gas_reserve) == (
         25, 25, 100, 50, 900, 1.0, 1.0, 0.002)
-    assert lp.market_hours_enabled and lp.market_open_utc == time(13, 30) and lp.market_close_utc == time(20, 0)
+    assert not lp.market_hours_enabled and lp.market_open_utc == time(13, 30) and lp.market_close_utc == time(20, 0)
     assert lp.require_wallet_balances and not lp.require_quote
     assert not hasattr(lp, "allow_unconfirmed_live")
 
@@ -279,10 +284,10 @@ def test_market_hours(now, ok):
 def test_market_hours_guard_in_check(clock):
     sat = T0 + timedelta(days=5)
     c = ctx(now=sat, data_timestamp=sat, quote=None)
-    v = live_rm(clock).check(lbuy(), lpf(), lctl(), context=c)
+    assert live_rm(clock).check(lbuy(), lpf(), lctl(), context=c).approved  # 24/7 by default
+    v = live_rm(clock, market_hours_enabled=True).check(lbuy(), lpf(), lctl(), context=c)
     assert not v.approved and "weekend" in names(v)["live_market_hours"].detail
-    assert live_rm(clock, market_hours_enabled=False).check(lbuy(), lpf(), lctl(), context=c).approved
-    assert live_rm(clock, market_hours_exempt_symbols=["NVDAon"]).check(lbuy(), lpf(), lctl(), context=c).approved
+    assert live_rm(clock, market_hours_enabled=True, market_hours_exempt_symbols=["NVDAon"]).check(lbuy(), lpf(), lctl(), context=c).approved
 
 
 # ------------------------------------------------------------------ quote guards
@@ -336,6 +341,7 @@ def test_live_limits_dict(clock):
         "per_order_cap_usdt": 25, "daily_loss_cap_usdt": 25, "daily_notional_cap_usdt": 100, "max_exposure_usdt": 50,
         "max_slippage_pct": 1.0, "stale_after_s": 900, "bnb_gas_reserve": 0.002}
     assert d["daily_used_usdt"] == 30 and d["daily_loss_usdt"] == pytest.approx(5) and d["open_exposure_usdt"] == pytest.approx(27)
-    assert d["live_allowed"] and d["market_hours_utc"] == "13:30-20:00 Mon-Fri"
+    assert d["live_allowed"] and d["market_hours_utc"] is None
+    assert live_rm(clock, market_hours_enabled=True).live_limits()["market_hours_utc"] == "13:30-20:00 Mon-Fri"
     bare = DefaultRiskManager(config=RiskConfig()).live_limits()
     assert bare["daily_loss_usdt"] is None and bare["daily_used_usdt"] == 0 and not bare["live_allowed"]
