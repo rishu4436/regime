@@ -197,6 +197,47 @@ def _money(x: float) -> str:
     return f"{x:.0f}"
 
 
+def candidate_tokens(
+    tokens: Sequence[Any],
+    narrative: Optional[str] = ANY,
+    narrative_of: Optional[Callable[[str], Optional[str]]] = None,
+    limit: int = 20,
+    cfg: Optional[AutoPickConfig] = None,
+) -> list[dict]:
+    """Cheap pre-filter BEFORE fetching candles: from the full token list (hundreds of rows) keep only tokens that
+    match ``narrative`` and can be traded now, then the ``limit`` most liquid by 24h volume (then liquidity).
+    Fetch candles only for these and pass them to ``rank_tokens``, so Auto-pick never makes hundreds of
+    candle requests per refresh. Order is stable (ties break on symbol)."""
+    cfg = cfg or AutoPickConfig()
+    want = normalize_narrative(narrative)
+    out: list[dict] = []
+    seen: set[str] = set()
+    for t in tokens:
+        meta = {"symbol": t} if isinstance(t, str) else dict(t)
+        sym = str(meta.get("symbol") or "").strip()
+        if not sym or sym in seen or _blocker(sym, meta, cfg):
+            continue
+        seen.add(sym)
+        if want != ANY:
+            tag = None
+            if narrative_of is not None:
+                try:
+                    tag = narrative_of(sym)
+                except Exception:
+                    tag = None
+            if normalize_narrative(tag or meta.get("narrative")) != want:
+                continue
+        out.append(meta)
+
+    def depth(m: dict) -> tuple:
+        v = _num(_first(m, "volume_24h", "volume24h")) or 0.0
+        liq = _num(m.get("liquidity")) or 0.0
+        return (-v, -liq, m["symbol"])
+
+    out.sort(key=depth)
+    return out[: max(0, int(limit))]
+
+
 def rank_tokens(
     tokens: Sequence[Any],
     candles_by_symbol: Mapping[str, Sequence[Candle]],
@@ -297,6 +338,7 @@ __all__ = [
     "RankResult",
     "normalize_narrative",
     "score_token",
+    "candidate_tokens",
     "rank_tokens",
     "evaluate_watchlist",
 ]

@@ -243,3 +243,21 @@ def test_auto_live_size_uses_real_equity_not_allocated_capital():
     big = Portfolio(starting_capital=10_000, cash=10_000, equity=10_000)
     assert eng.evaluate_auto(AutoConfig(symbol="NVDAB", capital=10_000), cs, big).proposed_notional == pytest.approx(25.0)
     assert DefaultStrategyEngine._auto_basis(AutoConfig(symbol="X", capital=50), port) == 50
+
+
+def test_candidate_tokens_prefilters_the_full_list():
+    from backend.engine.autopick import candidate_tokens
+
+    rows = [{"symbol": f"T{i}B", "volume_24h": i * 1000, "status": "trading", "narrative": "AI & chips"} for i in range(30)]
+    rows += [
+        {"symbol": "CLOSEDon", "status": "closed", "volume_24h": 10**9, "narrative": "AI & chips"},
+        {"symbol": "NVDAx", "tradable": False, "volume_24h": 10**9},
+        {"symbol": "BIGB", "min_order_usdt": 100, "volume_24h": 10**9, "narrative": "AI & chips"},
+        {"symbol": "AAPLB", "volume_24h": 10**8, "narrative": "Big Tech"},
+    ]
+    top = candidate_tokens(rows, "AI_CHIPS", limit=5)
+    assert [r["symbol"] for r in top] == ["T29B", "T28B", "T27B", "T26B", "T25B"]
+    assert [r["symbol"] for r in candidate_tokens(rows, "ANY", limit=1)] == ["AAPLB"]
+    assert [r["symbol"] for r in candidate_tokens(rows, "BIG_TECH", narrative_of=lambda s: None)] == ["AAPLB"]
+    raised = candidate_tokens(rows, "ANY", limit=1, cfg=__import__("backend.engine.autopick", fromlist=["x"]).AutoPickConfig(max_order_usdt=200))
+    assert raised[0]["symbol"] == "BIGB"  # a raised per-order cap makes the 100 USDT minimum buyable
