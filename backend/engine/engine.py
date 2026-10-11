@@ -323,6 +323,14 @@ class DefaultStrategyEngine:
         )
 
     # ------------------------------------------------------------------ auto
+    @staticmethod
+    def _auto_basis(config: AutoConfig, portfolio: Portfolio) -> float:
+        """Auto sizes from the capital allocated to it, but never from more than the portfolio actually has:
+        min(config.capital, portfolio.equity). A 1000+ USDT allocation on a ~110 USDT wallet must not size 2% of
+        1000+ (= the 25 USDT cap) per buy."""
+        eq = portfolio.equity
+        return min(config.capital, eq) if eq and eq > 0 else config.capital
+
     def evaluate_auto(self, config: AutoConfig, candles: Sequence[Candle], portfolio: Portfolio) -> Signal:
         """detect_regime -> select_strategy -> evaluate ONLY the selected preset."""
         base = dict(symbol=config.symbol, source=AgentMode.AUTO)
@@ -375,7 +383,7 @@ class DefaultStrategyEngine:
             size_pct, notional, size_note, blocked = self._size(
                 config.symbol,
                 presets.BASE_SIZE_PCT[config.style] * sel.size_multiplier,
-                config.capital,
+                self._auto_basis(config, portfolio),
                 cs,
                 {**base, "strategy": sel.preset.value, "preset": sel.preset},
                 d.met,

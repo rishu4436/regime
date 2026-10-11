@@ -1,7 +1,7 @@
 // Real client for Bot 6's FastAPI (backend/app). Paths and payloads follow backend/app/API.md exactly.
 import type { Alert, AutoConfig, BacktestRequest, BacktestResult, Candle, ControlState, Decision, Event, LoopState, ManualStrategy,
   PerformanceSummary, Portfolio, RegimeAnalysis, StatusSnapshot, StrategySelection, SystemInfo, Timeframe, TokenInfo, TraderStyle } from "../contracts";
-import { ApiError, type ActivateManualBody, type ApiClient, type LiveGate, type ParseResult, type PresetsTable, type WalletInfo, type WalletConnectStart, type WalletConnectStatus, type WalletReconcileResult, type TradingLimits, type TradingLimitsResponse, type Narrative, type AutoPickResult, type WatchlistInfo } from "./types";
+import { ApiError, type ActivateManualBody, type ApiClient, type LiveGate, type ParseResult, type PresetsTable, type WalletInfo, type WalletConnectStart, type WalletConnectStatus, type WalletReconcileResult, type TradingLimits, type TradingLimitsResponse, type Narrative, type AutoPickResult, type WatchlistInfo, type AgentStudioStatus, type AgentStudioRegisterResult, type X402Price, type X402Job, type X402JobStatus } from "./types";
 
 const enc = encodeURIComponent;
 
@@ -91,6 +91,12 @@ export class HttpApi implements ApiClient {
   getWatchlist() { return this.optional<WatchlistInfo>("/api/watchlist"); }
   getLimits() { return this.optional<TradingLimitsResponse>("/api/settings/limits"); }
   putLimits(body: Partial<TradingLimits>) { return this.req<TradingLimitsResponse>("PUT", "/api/settings/limits", body); }
+  getAgentStudio() { return this.optional<AgentStudioStatus>("/api/agent-studio/status"); }
+  createAgentStudioKey() { return this.post<{ identity_address: string }>("/api/agent-studio/create-key"); }
+  registerAgentStudio(network: string) { return this.post<AgentStudioRegisterResult>("/api/agent-studio/register", { network, confirm_mainnet: true }); }
+  getX402Price(symbol: string) { return this.optional<X402Price>(`/api/x402/price?symbol=${enc(symbol)}`); }
+  startX402Analysis(symbol: string) { return this.post<X402Job>("/api/x402/analyze", { symbol }); }
+  getX402Job(job_id: string) { return this.get<X402JobStatus>(`/api/x402/jobs/${enc(job_id)}`); }
   approve(id: string) { return this.post<Decision>(`/api/confirmations/${enc(id)}/approve`); }
   reject(id: string, reason?: string) { return this.post<Decision>(`/api/confirmations/${enc(id)}/reject`, reason ? { reason } : {}); }
   closePositionById(id: string) { return this.post<Decision>(`/api/positions/by-id/${enc(id)}/close`); }

@@ -10,6 +10,7 @@ import { Controls } from "./Controls";
 import { AlertsPanel, AskAgent } from "./Insights";
 import { ApiError, type PerformanceSummary } from "../api/types";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { StockAgentCard } from "../components/StockAgent";
 import { ActivityFeed, AgentIdentityCard, AutonomyMonitor, CapsPanel, LiveGateCard, TxLink, WalletPanel } from "../components/Live";
 import { useLive } from "../lib/live";
 import { TradingLimitsCard } from "../components/TradingLimits";
@@ -190,6 +191,7 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
           {isLive && <><CapsPanel status={status} decisions={feed} /><WalletPanel /><LiveGateCard /></>}
           <TradingLimitsCard refresh={refresh} />
           <AgentIdentityCard />
+          <StockAgentCard symbol={symbol} tick={tick} />
           <Controls status={status} onChange={refresh} tick={tick} />
           <AskAgent tick={tick} />
           <AlertsPanel version={alertsVersion} />

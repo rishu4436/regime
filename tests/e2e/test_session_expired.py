@@ -86,6 +86,13 @@ def _client(tmp_path):
     return c, ex
 
 
+def _scheduled_read(c):
+    """What the WALLET_REFRESH_SEC schedule (tick / monitor) does when the read is due."""
+    L = c.app.state.st.loop
+    L.wcache["read_at"] = None
+    assert L.wallet_refresh_if_due()
+
+
 def test_illegal_parameter_status_gives_session_expired_banner_fields(tmp_path):
     c, ex = _client(tmp_path)
     ls = c.get("/api/live/status").json()
@@ -93,8 +100,13 @@ def test_illegal_parameter_status_gives_session_expired_banner_fields(tmp_path):
     assert c.get("/api/wallet").json()["session_expired"] is False
 
     ex.baw.mode = "illegal"  # the session silently dies
+    n = len(ex.baw.calls)
+    c.get("/api/wallet"), c.get("/api/live/status"), c.get("/api/system")
+    assert len(ex.baw.calls) == n  # the dashboard endpoints serve the last read and never call baw
+    _scheduled_read(c)
     w = c.get("/api/wallet").json()
     assert w["session_expired"] is True and w["connected"] is False and w["balances"] == []  # -> Reconnect button
+    assert w["stale"] is False  # a session problem is a definitive read, not a network blip
     ls = c.get("/api/live/status").json()
     assert ls["session_expired"] is True and ls["wallet_connected"] is False and ls["can_trade"] is False
     assert SESSION_EXPIRED_REASON in ls["blocked_reasons"]  # matches the frontend SessionBanner regex (session + wallet)
@@ -102,17 +114,19 @@ def test_illegal_parameter_status_gives_session_expired_banner_fields(tmp_path):
     assert c.get("/api/system").json()["live"]["can_trade"] is False
     al = [a for a in c.get("/api/alerts").json() if a["code"] == "WALLET_SESSION_EXPIRED"]
     assert len(al) == 1
-    c.get("/api/live/status")
+    _scheduled_read(c)
     assert len([a for a in c.get("/api/alerts").json() if a["code"] == "WALLET_SESSION_EXPIRED"]) == 1  # once per outage
 
 
 def test_recovery_after_successful_status_clears_it_and_resumes_only_session_pause(tmp_path):
     c, ex = _client(tmp_path)
     ex.baw.mode = "illegal"
+    _scheduled_read(c)
     assert c.get("/api/live/status").json()["session_expired"]
     assert c.get("/api/control").json()["paused"]
 
-    ex.baw.mode = "ok"  # user scanned the QR / clicked Reconnect wallet
+    ex.baw.mode = "ok"  # user scanned the QR / clicked Reconnect wallet: the sign-in forces one fresh read
+    c.app.state.st.loop.on_wallet_connected(ADDR, changed=False)
     ls = c.get("/api/live/status").json()
     assert ls["session_expired"] is False and ls["wallet_connected"] and ls["can_trade"] and ls["blocked_reasons"] == []
     w = c.get("/api/wallet").json()
@@ -122,7 +136,7 @@ def test_recovery_after_successful_status_clears_it_and_resumes_only_session_pau
 
     # a pause the user set is never lifted by a wallet read
     c.post("/api/control/pause", json={"reason": "my pause"})
-    c.get("/api/live/status")
+    _scheduled_read(c)
     assert c.get("/api/control").json()["paused"]
 
 

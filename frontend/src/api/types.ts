@@ -102,6 +102,17 @@ export interface WalletConnectStatus {
 }
 /** POST /api/wallet/reconcile (localhost only; 409 while orders settle or balances are unavailable). */
 export interface WalletReconcileResult { address?: string | null; was_blocked?: boolean; kept?: unknown[]; dropped?: unknown[]; wallet_blocked?: boolean }
+/** GET /api/agent-studio/status (Bot 5): on-chain ERC-8004 identity setup. The identity key never leaves the PC. */
+export interface AgentStudioStatus {
+  registered: boolean; network?: string | null; has_key?: boolean;
+  identity_address?: string | null; bnb_balance?: number | null; bnb_needed?: number | null;
+  erc8004_id?: string | number | null; explorer_url?: string | null;
+}
+export interface AgentStudioRegisterResult { erc8004_id: string | number; explorer_url?: string | null; tx_hash?: string | null }
+/** GET /api/x402/price (Bot 4): paid "second opinion" from Binance Stock Agent via baw x402. Advice only, never trades. */
+export interface X402Price { enabled: boolean; price_usdt?: number | null; cap_usdt?: number | null; calls_left_today?: number | null; quota_usdt_left?: number | null; reason?: string | null }
+export interface X402Job { job_id: string; paid_usdt?: number | null; tx_hash?: string | null }
+export interface X402JobStatus { status: "pending" | "done" | "failed"; report?: string | null; error?: string | null }
 export type ActivateManualBody = { strategy_id: string } | { strategy: ManualStrategy };
 
 // ---------------------------------------------------------------- Trading limits (Bot 6: GET/PUT /api/settings/limits, localhost only)
@@ -202,6 +213,14 @@ export interface ApiClient {
   /** PUT /api/settings/limits (localhost only: 403 elsewhere; 422 on invalid values). */
   /** Partial: only the fields the user changed (risk keeps the rest as they are). */
   putLimits(body: Partial<TradingLimits>): Promise<TradingLimitsResponse>;
+  /** null = this backend has no Agent Studio flow yet */
+  getAgentStudio(): Promise<AgentStudioStatus | null>;
+  createAgentStudioKey(): Promise<{ identity_address: string }>;
+  registerAgentStudio(network: string): Promise<AgentStudioRegisterResult>;
+  /** null = this backend has no x402 flow yet */
+  getX402Price(symbol: string): Promise<X402Price | null>;
+  startX402Analysis(symbol: string): Promise<X402Job>;
+  getX402Job(job_id: string): Promise<X402JobStatus>;
   approve(decisionId: string): Promise<Decision>;
   reject(decisionId: string, reason?: string): Promise<Decision>;
   /** Manual override: close ONE lot by Position.id at the last price (signal.exit_reason MANUAL). 404 if not open. */

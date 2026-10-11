@@ -124,7 +124,9 @@ def live_client(ex=None, risk=None, state_dir=None, **kw):
     risk = risk if risk is not None else ContextRisk(control=__import__("backend.contracts", fromlist=["ControlState"]).ControlState(
         trading_mode=TradingMode.LIVE), live_allowed=True)
     comps = build_components(s, exchange=ex, risk=risk)
-    return TestClient(create_app(s, comps)), ex
+    c = TestClient(create_app(s, comps))
+    c.app.state.st.loop.wallet_refresh_if_due()  # the startup wallet read (the app lifespan does it; plain TestClient doesn't)
+    return c, ex
 
 
 def buy_strategy(size_pct=10.0, sl=2.0, activation="AUTO_EXECUTE", symbol=SYM):
@@ -349,10 +351,13 @@ def test_wallet_live_merges_risk_limits_and_alerts_new_warnings():
 def test_live_status_and_system_block():
     c, _ = live_client()
     ls = c.get("/api/live/status").json()
+    assert ls.pop("wallet_read_at") and ls.pop("wallet_age_s") is not None
     assert ls == {"live_trading_enabled": True, "binance_live_enabled": True, "risk_allow_live": True, "wallet_connected": True,
                   "can_trade": True, "blocked_reasons": [], "cooldowns": [], "chain_pending": [], "wallet_block": None,
-                  "session_expired": False}
-    assert c.get("/api/system").json()["live"] == ls
+                  "session_expired": False, "wallet_stale": False}
+    sys_live = c.get("/api/system").json()["live"]
+    sys_live.pop("wallet_read_at"), sys_live.pop("wallet_age_s")
+    assert sys_live == ls
     c.post("/api/control/emergency-stop", json={"reason": "test"})
     ls = c.get("/api/live/status").json()
     assert not ls["can_trade"] and any("Emergency stop" in r for r in ls["blocked_reasons"])
@@ -503,7 +508,8 @@ def test_wallet_session_expired_pauses_and_alerts():
     ctrl = c.get("/api/control").json()
     assert ctrl["paused"] and "session expired" in ctrl["reason"].lower()
     assert any(a["code"] == "WALLET_SESSION_EXPIRED" for a in c.get("/api/alerts").json())
-    assert any("Paused" in r for r in c.get("/api/live/status").json()["blocked_reasons"])
+    # the session is expired until the next good wallet read: one session line (no duplicate "Paused" line)
+    assert any("Paused" in r or "session expired" in r for r in c.get("/api/live/status").json()["blocked_reasons"])
 
 
 def test_waiting_on_chain_then_confirmed():

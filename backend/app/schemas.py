@@ -125,6 +125,11 @@ class LiveStatus(_M):
                                          "in; no orders until POST /api/wallet/reconcile")
     session_expired: bool = Field(default=False, description="LIVE wallet session expired (latest wallet read): can_trade false, "
                                   "exits held until the wallet is signed in again (Reconnect wallet)")
+    wallet_read_at: Optional[datetime] = Field(default=None, description="v0.9 LIVE: time of the last successful wallet read "
+                                               "(served from cache; this endpoint never calls baw)")
+    wallet_age_s: Optional[float] = Field(default=None, description="v0.9 LIVE: seconds since wallet_read_at")
+    wallet_stale: bool = Field(default=False, description="v0.9 LIVE: the last wallet read failed for a network reason; the "
+                               "last good read is shown, BUYs are blocked until a fresh read succeeds, exits still go out")
 
 
 class WalletConnectStart(_M):
@@ -175,6 +180,12 @@ class WalletInfo(_M):
     updated_at: datetime
     session_expired: bool = Field(default=False, description="Agentic Wallet session expired (e.g. `baw wallet status` -> "
                                   "'illegal parameter'): the dashboard shows the red banner and Reconnect wallet")
+    read_at: Optional[datetime] = Field(default=None, description="v0.9 LIVE: time of the last successful wallet read (cached; "
+                                        "GET /api/wallet never calls baw)")
+    age_s: Optional[float] = Field(default=None, description="v0.9 LIVE: seconds since read_at")
+    stale: bool = Field(default=False, description="v0.9 LIVE: the last read attempt failed (network); values are from read_at")
+    read_error: Optional[str] = Field(default=None, description="v0.9 LIVE: why the last read attempt failed (stale only)")
+    next_retry_at: Optional[datetime] = Field(default=None, description="v0.9 LIVE: next wallet read after a network failure")
 
 
 class Heartbeat(_M):
