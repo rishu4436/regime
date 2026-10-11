@@ -162,7 +162,12 @@ export function ManualBuilder({ strategy: s, setStrategy, capital, setCapital, r
                 <input type="text" value={s.name} onChange={(ev) => up((d) => { d.name = ev.target.value; })} /></div>
               <div><span className="lbl">Tokenized stock<TokenStatusBadge symbol={s.symbol} /></span>
                 <WatchlistPicker value={{ symbol: s.symbol, watchlist: s.watchlist, auto_pick: s.auto_pick }} simOnly={simOnly}
-                  onChange={(v) => up((d) => { d.symbol = v.symbol; d.watchlist = v.watchlist; d.auto_pick = v.auto_pick; })} /></div>
+                  onChange={(v) => up((d) => {
+                    d.symbol = v.symbol; d.watchlist = v.watchlist; d.auto_pick = v.auto_pick;
+                    // max open positions is portfolio-wide: grow it with the watchlist (up to 3) so every token can hold a position
+                    const want = Math.min(3, Math.max(1, v.auto_pick?.enabled ? v.auto_pick.max_tokens : v.watchlist?.length ?? 1));
+                    if (d.risk.max_open_positions < want && (s.risk.max_open_positions ?? 1) < want) d.risk.max_open_positions = want;
+                  })} /></div>
               <div><span className="lbl">Timeframe</span>
                 <select value={s.timeframe} onChange={(ev) => up((d) => { d.timeframe = ev.target.value as Timeframe; })}>{TimeframeValues.map((t) => <option key={t}>{t}</option>)}</select></div>
             </div>
@@ -223,7 +228,9 @@ export function ManualBuilder({ strategy: s, setStrategy, capital, setCapital, r
               <div><span className="lbl">Position size</span><NumberInput value={r.position_size_pct} min={1} max={100} suffix="%" onChange={(v) => up((d) => { d.risk.position_size_pct = Math.min(100, Math.max(1, n(v, 15))); })} /></div>
               <div><span className="lbl">Max open positions</span>
                 <Segmented value={String(r.max_open_positions)} onChange={(v) => up((d) => { d.risk.max_open_positions = +v; })}
-                  options={[{ value: "1", label: "1" }, { value: "2", label: "2" }, { value: "3", label: "3" }]} /></div>
+                  options={[{ value: "1", label: "1" }, { value: "2", label: "2" }, { value: "3", label: "3" }]} />
+                {(() => { const k = s.auto_pick?.enabled ? s.auto_pick.max_tokens : s.watchlist?.length ?? 1;
+                  return k > r.max_open_positions ? <div className="small faint" style={{ marginTop: 3 }}>Across all tokens: with {k} tokens watched, at most {r.max_open_positions} can be held at once.</div> : null; })()}</div>
               <div><span className="lbl">Cooldown after exit</span><NumberInput value={r.cooldown_bars} min={0} suffix="bars" onChange={(v) => up((d) => { d.risk.cooldown_bars = Math.max(0, n(v, 5)); })} /></div>
               <div><span className="lbl">Max loss per trade</span><NumberInput value={r.max_loss_per_trade_pct} nullable min={0} step={0.5} suffix="%" onChange={(v) => up((d) => { d.risk.max_loss_per_trade_pct = v as number; })} /></div>
             </div>
