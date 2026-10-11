@@ -2,9 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { DEFAULT_INITIAL_CAPITAL, TimeframeValues, type AutoConfig, type ManualStrategy, type Timeframe } from "../contracts";
 import { api } from "../api";
 import { Card, NumberInput, RuleRow, Segmented, Toggle, useToast } from "../components/ui";
-import { defaultStrategy, fillStrategy, TOKENS, type FullStrategy } from "../lib/strategy";
+import { defaultStrategy, fillStrategy, TOKENS, type FullStrategy, isXStock } from "../lib/strategy";
 import { BacktestResults, type BacktestRun } from "./BacktestResults";
 import { ensureLoop } from "./Dashboard";
+import { useLive } from "../lib/live";
+import { TokenStatusBadge } from "../components/Live";
 
 interface Props {
   strategy: FullStrategy; setStrategy: (s: FullStrategy) => void;
@@ -25,6 +27,7 @@ export function toContract(s: FullStrategy, keepId = false): ManualStrategy {
 }
 
 export function ManualBuilder({ strategy: s, setStrategy, capital, setCapital, run, setRun, onActivated, onAutoParsed }: Props) {
+  const { system } = useLive(); const simOnly = !system || system.trading_mode === "SIM"; // xStock only selectable in SIM
   const toast = useToast();
   const [busy, setBusy] = useState<"bt" | "act" | "nl" | "save" | null>(null);
   const [saved, setSaved] = useState<ManualStrategy[]>([]);
@@ -129,8 +132,8 @@ export function ManualBuilder({ strategy: s, setStrategy, capital, setCapital, r
               </div>
               <div style={{ gridColumn: "1 / -1" }}><span className="lbl">Strategy name</span>
                 <input type="text" value={s.name} onChange={(ev) => up((d) => { d.name = ev.target.value; })} /></div>
-              <div><span className="lbl">Tokenized stock</span>
-                <select value={s.symbol} onChange={(ev) => up((d) => { d.symbol = ev.target.value; })}>{TOKENS.map((t) => <option key={t.symbol} value={t.symbol}>{t.label}</option>)}</select></div>
+              <div><span className="lbl">Tokenized stock<TokenStatusBadge symbol={s.symbol} /></span>
+                <select value={s.symbol} onChange={(ev) => up((d) => { d.symbol = ev.target.value; })}>{TOKENS.map((t) => <option key={t.symbol} value={t.symbol} disabled={isXStock(t.symbol) && !simOnly} title={isXStock(t.symbol) ? "No liquidity on BSC" : undefined}>{t.label}{isXStock(t.symbol) ? " · No liquidity on BSC" : ""}</option>)}</select></div>
               <div><span className="lbl">Timeframe</span>
                 <select value={s.timeframe} onChange={(ev) => up((d) => { d.timeframe = ev.target.value as Timeframe; })}>{TimeframeValues.map((t) => <option key={t}>{t}</option>)}</select></div>
             </div>

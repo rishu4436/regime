@@ -52,6 +52,7 @@ export interface WalletInfo {
   limits?: LiveLimits | null;
   updated_at?: string | null;
   live_gate?: LiveGate | null;               // accepted here too
+  session_expired?: boolean | null;          // Agentic Wallet session needs re-sign-in (QR in the Binance App)
 }
 /** The live gate: every switch that must be on before a LIVE BUY, and why trading is blocked right now. */
 export interface LiveGate {

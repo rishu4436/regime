@@ -10,7 +10,7 @@ import { Controls } from "./Controls";
 import { AlertsPanel, AskAgent } from "./Insights";
 import { ApiError, type PerformanceSummary } from "../api/types";
 import { ConfirmDialog } from "../components/ConfirmDialog";
-import { ActivityFeed, AutonomyMonitor, CapsPanel, LiveGateCard, TxLink, WalletPanel } from "../components/Live";
+import { ActivityFeed, AgentIdentityCard, AutonomyMonitor, CapsPanel, LiveGateCard, TxLink, WalletPanel } from "../components/Live";
 import { useLive } from "../lib/live";
 
 interface Props { status: StatusSnapshot | null; refresh: () => void; tick: number; alertsVersion: number; go: (tab: "manual" | "auto") => void }
@@ -30,7 +30,7 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
   const [closeTarget, setCloseTarget] = useState<{ kind: "lot"; id: string; symbol: string } | { kind: "all"; symbol: string } | null>(null);
   const [askReset, setAskReset] = useState(false);
   useEffect(() => { api.getPerformance().then(setPerf).catch(() => setPerf(null)); }, [tick]);
-  const symbol = status?.active_symbol ?? "NVDAon";
+  const symbol = status?.active_symbol ?? "NVDAB";
 
   useEffect(() => { api.getCandles(symbol, "1h", 150).then(setCandles).catch(() => setCandles([])); }, [symbol, tick]);
 
@@ -93,7 +93,7 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
         <div className="banner blue">
           <span className="grow">No strategy is running. Build rules in <b>Manual Builder</b> or let the agent choose in <b>Auto Mode</b>.</span>
           <button className="btn ghost" onClick={() => go("manual")}>Open builder</button>
-          <button className="btn" onClick={() => isLive ? go("auto") : api.activateAuto({ symbol: "NVDAon", style: "BALANCED", capital: 10000, activation: "CONFIRMATION" }).then(ensureLoop).then(() => { toast("Auto mode started (Balanced, NVDAon)", "success"); refresh(); }).catch((e) => toast(e instanceof Error ? e.message : String(e), "error"))}>⚡ Quick start Auto</button>
+          <button className="btn" onClick={() => isLive ? go("auto") : api.activateAuto({ symbol: "NVDAB", style: "BALANCED", capital: 10000, activation: "CONFIRMATION" }).then(ensureLoop).then(() => { toast("Auto mode started (Balanced, NVDAB)", "success"); refresh(); }).catch((e) => toast(e instanceof Error ? e.message : String(e), "error"))}>⚡ Quick start Auto</button>
         </div>
       )}
 
@@ -174,6 +174,7 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
             )}
           </Card>
           {isLive && <><CapsPanel status={status} decisions={feed} /><WalletPanel /><LiveGateCard /></>}
+          <AgentIdentityCard />
           <Controls status={status} onChange={refresh} tick={tick} />
           <AskAgent tick={tick} />
           <AlertsPanel version={alertsVersion} />
@@ -181,7 +182,7 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
       </div>
 
       <div style={{ height: 16 }} />
-      {isLive ? <ActivityFeed decisions={feed} /> : <Card title={<>Decision log <span className="muted small" style={{ fontWeight: 400 }}>{shown.length}</span></>}
+      {isLive ? <ActivityFeed decisions={feed} confirmMode={!!status?.control.confirmation_mode} /> : <Card title={<>Decision log <span className="muted small" style={{ fontWeight: 400 }}>{shown.length}</span></>}
         extra={<Segmented size="sm" value={filter} onChange={setFilter} options={[{ value: "ALL", label: "All" }, { value: "TRADES", label: "Trades only" }]} />} pad={false}>
         <div className="table-wrap" style={{ padding: "4px 8px 8px" }}>
           <table>
@@ -191,7 +192,7 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
                 <tr key={d.id}>
                   <td className="small muted">{time(d.timestamp)}</td><td><ActionBadge action={d.action} /></td><td>{d.symbol}</td>
                   <td><RegimeBadge regime={d.regime} /></td><td className="small trunc" title={d.strategy}>{strategyLabel(d.strategy)}</td>
-                  <td className="small">{d.execution ? humanize(d.execution.status) : "—"} <TxLink exec={d.execution} /></td>
+                  <td className="small">{d.execution ? (d.execution.status === "PENDING_CONFIRMATION" && !status?.control.confirmation_mode ? "Waiting on chain" : humanize(d.execution.status)) : "—"} <TxLink exec={d.execution} /></td>
                   <td className="wrap small">{d.signal?.exit_reason && <><ExitPill d={d} />{" "}</>}{d.reason}</td>
                 </tr>
               ))}

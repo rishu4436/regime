@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { CONTRACTS_VERSION, DEFAULT_INITIAL_CAPITAL, PresetNameValues, type AutoConfig } from "./contracts";
 import { API_MODE } from "./api";
 import { MOCK_SCENARIO, setMockScenario } from "./api/mock";
-import { LiveBanner } from "./components/Live";
+import { LiveBanner, SessionBanner } from "./components/Live";
 import { LiveContext, useLiveState } from "./lib/live";
 import { ModeBadge, RegimeBadge } from "./components/Badges";
 import { Toggle, ToastProvider } from "./components/ui";
@@ -49,7 +49,7 @@ function Shell() {
   const setStrategy = (st: FullStrategy) => { setStrategyState(st); try { localStorage.setItem(LS_KEY, JSON.stringify(st)); } catch { /* private mode */ } };
   const [capital, setCapital] = useState(DEFAULT_INITIAL_CAPITAL);
   const [run, setRun] = useState<BacktestRun | null>(null);
-  const [autoCfg, setAutoCfg] = useState<AutoConfig>({ symbol: "NVDAon", style: "BALANCED", enabled_presets: [...PresetNameValues], capital: DEFAULT_INITIAL_CAPITAL, timeframe: "1h", activation: "CONFIRMATION" });
+  const [autoCfg, setAutoCfg] = useState<AutoConfig>({ symbol: "NVDAB", style: "BALANCED", enabled_presets: [...PresetNameValues], capital: DEFAULT_INITIAL_CAPITAL, timeframe: "1h", activation: "CONFIRMATION" });
 
   const nav = TABS.map((t) => (
     <button key={t.id} className={`nav-item${tab === t.id ? " active" : ""}`} onClick={() => setTab(t.id)}>
@@ -89,6 +89,7 @@ function Shell() {
           <ModeBadge mode={mode} />
         </div>
         <LiveBanner />
+        <SessionBanner />
         {error && <div className="banner amber"><span className="grow">Backend unreachable: {error}</span><span className="small muted">Start the API or run with VITE_API_MODE=mock</span></div>}
         {tab === "dashboard" && <Dashboard status={status} refresh={refresh} tick={tick} alertsVersion={alertsVersion} go={go} />}
         {tab === "manual" && <ManualBuilder strategy={strategy} setStrategy={setStrategy} capital={capital} setCapital={setCapital} run={run} setRun={setRun}

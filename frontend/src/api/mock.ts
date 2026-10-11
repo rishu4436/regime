@@ -28,11 +28,12 @@ const hex = (n: number) => Array.from({ length: n }, () => "0123456789abcdef"[Ma
 const pathFor = (symbol: string) => (/B$/.test(symbol) ? "SWAP" : "RFQ") as "SWAP" | "RFQ";
 
 const TOKENS: TokenInfo[] = [
+  { symbol: "NVDAB", name: "NVIDIA BStock", token_type: "BSTOCK", chain: "BSC", underlying: "NVDA", decimals: 18 },
   { symbol: "NVDAon", name: "NVIDIA (Ondo tokenized)", token_type: "ONDO", chain: "BSC", underlying: "NVDA", decimals: 18 },
   { symbol: "TSLAx", name: "Tesla xStock", token_type: "XSTOCK", chain: "BSC", underlying: "TSLA", decimals: 8 },
   { symbol: "AAPLB", name: "Apple BStock", token_type: "BSTOCK", chain: "BSC", underlying: "AAPL", decimals: 18 },
 ];
-const START: Record<string, number> = { NVDAon: 140, TSLAx: 200, AAPLB: 170 };
+const START: Record<string, number> = { NVDAB: 140, NVDAon: 140, TSLAx: 200, AAPLB: 170 };
 const LIVE_REGIMES: Regime[] = ["MILD_UPTREND", "SIDEWAYS", "OVERSOLD_PULLBACK", "STRONG_UPTREND", "HIGH_VOLATILITY", "DOWNTREND"];
 const FEE = 0.001;
 const uid = () => Math.random().toString(16).slice(2, 10) + Date.now().toString(16);
@@ -52,7 +53,7 @@ export class MockApi implements ApiClient {
   private agentMode: "MANUAL" | "AUTO" | null = null;
   private manual: FullStrategy | null = null;
   private auto: AutoConfig | null = null;
-  private symbol = "NVDAon";
+  private symbol = "NVDAB";
   private regime: RegimeAnalysis | null = null;
   private activeStrategy: string | null = null;
   private decisions: Decision[] = [];
@@ -71,8 +72,8 @@ export class MockApi implements ApiClient {
     this.markToMarket();
     try { for (const s of JSON.parse(localStorage.getItem("mock.strategies") ?? "[]")) this.strategies.set(s.id, s); } catch { /* ignore */ }
     if (LIVE) { // the LIVE demo starts like the real thing: an autonomous auto agent (AUTO_EXECUTE), loop running 24/7
-      this.auto = { symbol: "AAPLB", style: "ACTIVE", capital: LIVE_CAPITAL, activation: "AUTO_EXECUTE", timeframe: "1h", enabled_presets: [...PresetNameValues] };
-      this.symbol = "AAPLB"; this.regime = this.analyse(this.symbol);
+      this.auto = { symbol: "NVDAB", style: "ACTIVE", capital: LIVE_CAPITAL, activation: "AUTO_EXECUTE", timeframe: "1h", enabled_presets: [...PresetNameValues] };
+      this.symbol = "NVDAB"; this.regime = this.analyse(this.symbol);
       this.agentMode = "AUTO"; this.activeStrategy = this.select(this.regime, "ACTIVE", [...PresetNameValues]).preset ?? "NONE";
       this.control = { ...this.control, confirmation_mode: false };
       this.loop = { ...this.loop, running: true };
@@ -83,7 +84,8 @@ export class MockApi implements ApiClient {
   // ------------------------------------------------------------------ system & market data
   health() { return ok({ status: "ok", contracts_version: CONTRACTS_VERSION, trading_mode: MODE }); }
   system() {
-    return ok<SystemInfo>({ trading_mode: MODE, live_enabled: LIVE, contracts_version: CONTRACTS_VERSION, sim_seed: LIVE ? null : 42,
+    return ok<SystemInfo & { agent_identity: unknown }>({ trading_mode: MODE, live_enabled: LIVE, contracts_version: CONTRACTS_VERSION, sim_seed: LIVE ? null : 42,
+      agent_identity: { erc8004_id: null, registry: "placeholder (mock)", studio_version: "mock" },
       components: { engine: "mock:browser", risk: "mock:browser", exchange: LIVE ? "mock:LiveBinanceClient(agentic_wallet, demo)" : "mock:browser", explainer: "mock:template" } });
   }
   // ------------------------------------------------------------------ live / wallet (requested endpoints, mocked)
@@ -124,7 +126,7 @@ export class MockApi implements ApiClient {
   getTokens(q = "") {
     const ql = q.toLowerCase();
     return ok(TOKENS.filter((t) => !ql || t.symbol.toLowerCase().includes(ql) || t.name.toLowerCase().includes(ql))
-      .map((t) => ({ ...t, price: this.last(t.symbol), volume_24h: this.candles[t.symbol].slice(-24).reduce((a, c) => a + c.volume * c.close, 0) })));
+      .map((t) => ({ ...t, token_status: tokenStatus(t.symbol), price: this.last(t.symbol), volume_24h: this.candles[t.symbol].slice(-24).reduce((a, c) => a + c.volume * c.close, 0) })));
   }
   getCandles(symbol: string, timeframe: Timeframe = "1h", limit = 200, opts?: { history?: boolean }) {
     if (!this.candles[symbol]) return fail(404, `unknown symbol ${symbol}`);
@@ -586,4 +588,15 @@ function onePrefix(prefix: string, text?: string | null) {
   const t = (text ?? "").replace(new RegExp(`^(\\s*${prefix.replace(/ /g, "[ _]")}\\s*:\\s*)+`, "i"), "").trim();
   if (!t) return prefix;
   return t.toLowerCase().startsWith(prefix.toLowerCase()) ? t : `${prefix}: ${t}`;
+}
+
+/** Mock token_status (shape requested from Bot 6): bStock 24/7, Ondo off-hours outside US hours (20 USD min), xStock no liquidity. */
+function tokenStatus(sym: string) {
+  if (/x$/.test(sym)) return { trading_status: "NO_LIQUIDITY", tradable: false, min_order_usdt: null, next_open_time: null };
+  if (/on$/.test(sym)) {
+    const d = new Date(), h = d.getUTCHours() + d.getUTCMinutes() / 60, wk = d.getUTCDay() % 6 !== 0, open = wk && h >= 13.5 && h < 20;
+    const next = new Date(d); next.setUTCHours(13, 30, 0, 0); if (next <= d || !wk) do next.setUTCDate(next.getUTCDate() + 1); while (next.getUTCDay() % 6 === 0);
+    return { trading_status: open ? "TRADING" : "OFFHOURS", tradable: true, min_order_usdt: 20, next_open_time: open ? null : next.toISOString() };
+  }
+  return { trading_status: "TRADING", tradable: true, min_order_usdt: null, next_open_time: null };
 }

@@ -1,23 +1,74 @@
 // LIVE / 24-7 autonomous monitor: mainnet banner, autonomy + heartbeat, kill switches, caps usage, wallet, live gate,
 // activity feed with BscScan links.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Decision, ExecutionResult, StatusSnapshot } from "../contracts";
 import { api } from "../api";
 import type { LiveExecutionFields } from "../api/types";
 import { cls, time, usd } from "../lib/format";
 import { ago, balAmount, balAsset, bscAddr, bscTx, dur, limitsOf, shortHex, stricter, useLive } from "../lib/live";
-import { conditionLabel, controlReason, strategyLabel } from "../lib/strategy";
+import { conditionLabel, controlReason, exchangeCodeLabels, strategyLabel } from "../lib/strategy";
 import { ActionBadge } from "./Badges";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Card, Skeleton, useToast } from "./ui";
 
 const NA = <span className="faint">not available</span>;
+/** token_status on /api/tokens items (requested from Bot 6); hidden when absent. */
+export interface TokenStatus { trading_status?: "TRADING" | "OFFHOURS" | "CLOSED" | "NO_LIQUIDITY" | "UNKNOWN" | string; tradable?: boolean | null; min_order_usdt?: number | null; next_open_time?: string | null }
+let tokenCache: Promise<Record<string, TokenStatus | undefined>> | null = null;
+export function TokenStatusBadge({ symbol }: { symbol: string }) {
+  const [st, setSt] = useState<TokenStatus | undefined>();
+  useEffect(() => {
+    tokenCache ??= api.getTokens().then((ts) => Object.fromEntries(ts.map((t) => [t.symbol, (t as typeof t & { token_status?: TokenStatus }).token_status])));
+    let live = true; tokenCache.then((m) => live && setSt(m[symbol])).catch(() => {}); return () => { live = false; };
+  }, [symbol]);
+  if (!st?.trading_status) return null;
+  const s = st.trading_status, cls2 = s === "TRADING" ? "ok" : s === "OFFHOURS" ? "warn" : "";
+  const label = s === "TRADING" ? "Trading" : s === "OFFHOURS" ? "Off-hours" : s === "CLOSED" ? "Closed" : s === "NO_LIQUIDITY" ? "No liquidity" : "Unknown";
+  return (
+    <span className={`pill ${cls2}`} style={{ marginLeft: 6, fontSize: ".68rem" }}
+      title={[st.next_open_time ? `Opens ${new Date(st.next_open_time).toLocaleString()}` : "", st.min_order_usdt ? `Min order ${st.min_order_usdt} USDT` : ""].filter(Boolean).join(" · ") || undefined}>
+      <span className="dot" />{label}{s === "OFFHOURS" && st.next_open_time ? ` · opens ${new Date(st.next_open_time).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" })}` : ""}{st.min_order_usdt ? ` · min ${st.min_order_usdt} USDT` : ""}
+    </span>
+  );
+}
+
 /** Token family from the symbol suffix: …B = bStock, …on = Ondo, …x = xStock. */
 export const tokenFamily = (sym: string) => (/on$/.test(sym) ? "Ondo" : /x$/.test(sym) ? "xStock" : /B$/.test(sym) ? "bStock" : null);
 export const FamilyBadge = ({ symbol }: { symbol: string }) => { const f = tokenFamily(symbol); return f ? <span className={`pill fam-${f}`} title={`${f} token`}>{f}</span> : null; };
 const AUTO_STOP = /daily loss|automatic|auto-stop|stopped automatically/i;
 
 /** Red, non-dismissible LIVE / MAINNET banner shown (sticky) on every tab whenever the backend runs LIVE. */
+const SESSION = /session|qr|re-?sign|sign ?in|re-?auth|expired/i;
+/** Agentic Wallet session expired (wallet.session_expired or a session/QR blocked reason): re-sign-in needed. */
+export function SessionBanner() {
+  const { wallet, gate } = useLive();
+  const why = gate?.blocked_reasons.find((r) => SESSION.test(r) && /wallet|session|qr|baw/i.test(r));
+  if (!wallet?.session_expired && !why) return null;
+  return (
+    <div className="banner red" role="alert">
+      <span className="grow"><b>Agentic Wallet session expired.</b> The agent can't trade until the wallet is signed in again: run <code>baw auth signin</code> on the server and approve the QR in the Binance App.{why ? <><br /><span className="small">{why}</span></> : null}</span>
+    </div>
+  );
+}
+
+/** Agent identity: BNB Agent Studio (ERC-8004) id from /api/system.agent_identity, and the execution wallet. */
+export function AgentIdentityCard() {
+  const { system, wallet } = useLive();
+  if (!system) return <Card title="Agent identity"><Skeleton h={60} /></Card>;
+  const id = (system as typeof system & { agent_identity?: { erc8004_id?: string | number | null; registry?: string | null; studio_version?: string | null } | null }).agent_identity;
+  return (
+    <Card title="Agent identity" extra={<span className="pill">BNB Agent Studio · ERC-8004</span>}>
+      <div className="kv">
+        <span className="k">ERC-8004 id</span><span className="mono">{id?.erc8004_id ?? (id ? <span className="faint">placeholder</span> : NA)}</span>
+        <span className="k">Registry</span><span className="small">{id?.registry ?? NA}</span>
+        <span className="k">Studio</span><span className="small">{id?.studio_version ?? NA}</span>
+        <span className="k">Executes with</span><span><span className="pill">Agentic Wallet (baw)</span>{wallet?.address ? <a className="mono small" style={{ marginLeft: 6 }} href={bscAddr(wallet.address)} target="_blank" rel="noreferrer">{shortHex(wallet.address)}</a> : null}</span>
+      </div>
+      {api.kind === "mock" && <div className="note">Placeholder identity in mock mode.</div>}
+    </Card>
+  );
+}
+
 export function LiveBanner() {
   const { isLive, wallet, gate } = useLive();
   if (!isLive) return null;
@@ -40,6 +91,7 @@ export function LiveBanner() {
 /** "tx 0x12ab…cdef ↗" for executions that carry a tx hash (explorer_url from the backend, else BscScan). */
 export function TxLink({ exec }: { exec?: (ExecutionResult & LiveExecutionFields) | null }) {
   if (!exec?.tx_hash) return null;
+  if (/^0xsim/i.test(exec.tx_hash)) return <span className="tx-link faint" title={exec.tx_hash}>simulated</span>; // SIM/PAPER hashes: never linked
   const demo = api.kind === "mock";
   return (
     <a className="tx-link mono" href={exec.explorer_url || bscTx(exec.tx_hash)} target="_blank" rel="noreferrer"
@@ -151,7 +203,7 @@ export function CapsPanel({ status, decisions }: { status: StatusSnapshot | null
         <Meter label="Daily loss → auto e-stop" used={loss} cap={L.daily_loss_cap_usdt} warnAt={0.6}
           hint={toStop != null ? <><b className={toStop < (L.daily_loss_cap_usdt ?? 0) * 0.4 ? "neg" : ""}>{usd(toStop)}</b> left before the agent stops itself (realized + unrealized)</> : undefined} />
         <Meter label={<>Traded today (UTC){src("daily_limit_usdt", L.daily_notional_cap_usdt ?? L.daily_limit_usdt, W?.daily_limit_usdt)}</>} used={L.daily_used_usdt} cap={dayCap}
-          hint={<>{L.daily_remaining_usdt != null ? <>{usd(L.daily_remaining_usdt)} left today</> : null}{which(L.daily_notional_cap_usdt ?? L.daily_limit_usdt, W?.daily_limit_usdt)}</>} />
+          hint={<>{L.daily_remaining_usdt != null ? <>{usd(L.daily_remaining_usdt)} left today · </> : null}Wallet quota resets 05:30 IST (00:00 UTC){which(L.daily_notional_cap_usdt ?? L.daily_limit_usdt, W?.daily_limit_usdt)}</>} />
         <Meter label="Open at once" used={exposure} cap={L.max_exposure_usdt} />
       </div>
       <div className="kv" style={{ marginTop: 12 }}>
@@ -238,7 +290,7 @@ export function LiveGateCard() {
 }
 
 /** Live activity feed: every decision with its risk checks and execution (route, fill, tx hash + BscScan). */
-export function ActivityFeed({ decisions }: { decisions: Decision[] }) {
+export function ActivityFeed({ decisions, confirmMode = false }: { decisions: Decision[]; confirmMode?: boolean }) {
   const [only, setOnly] = useState(false);
   const rows = only ? decisions.filter((d) => d.action !== "STAY_OUT" || (d.risk_verdict && !d.risk_verdict.approved)) : decisions;
   return (
@@ -262,9 +314,10 @@ export function ActivityFeed({ decisions }: { decisions: Decision[] }) {
                     {passed > 0 && <span className="chip pass" title={(d.risk_verdict?.checks ?? []).filter((c) => c.passed).map((c) => `${c.name}: ${c.detail ?? "ok"}`).join("\n")}>✓ {passed} risk check{passed > 1 ? "s" : ""} passed</span>}
                   </div>
                 )}
-                {ex && ex.status !== "PENDING_CONFIRMATION" && (
+                {[...exchangeCodeLabels(d.reason), ...exchangeCodeLabels(ex?.error)].filter((v, i, a) => a.indexOf(v) === i).map((l) => <span key={l} className="chip fail" style={{ marginTop: 4 }}>✕ {l}</span>)}
+                {ex && (ex.status !== "PENDING_CONFIRMATION" || !confirmMode) && (
                   <div className="feed-exec small">
-                    <span className={ex.status === "FILLED" ? "pos" : ex.status === "PARTIALLY_FILLED" ? "" : "neg"}>{ex.status.replace(/_/g, " ").toLowerCase()}</span>
+                    <span className={ex.status === "FILLED" ? "pos" : ex.status === "PARTIALLY_FILLED" || ex.status === "PENDING_CONFIRMATION" ? "" : "neg"}>{ex.status === "PENDING_CONFIRMATION" ? "⏳ waiting on chain" : ex.status.replace(/_/g, " ").toLowerCase()}</span>
                     <span className="pill">{ex.route ?? ex.path}</span>
                     {ex.notional ? <span>{usd(ex.notional)}</span> : null}
                     {ex.avg_price ? <span className="muted">@ {usd(ex.avg_price)}</span> : null}

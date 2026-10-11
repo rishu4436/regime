@@ -7,9 +7,10 @@ import {
 import { bollinger, ema, macd, rsi, sma, volumeAvg } from "./indicators";
 
 export const TOKENS = [
-  { symbol: "NVDAon", label: "NVDAon (NVIDIA)", start: 140 },
-  { symbol: "TSLAx", label: "TSLAx (Tesla)", start: 200 },
-  { symbol: "AAPLB", label: "AAPLB (Apple)", start: 170 },
+  { symbol: "NVDAB", label: "NVDAB (NVIDIA bStock, 24/7)", start: 140 },
+  { symbol: "NVDAon", label: "NVDAon (NVIDIA Ondo)", start: 140 },
+  { symbol: "AAPLB", label: "AAPLB (Apple bStock)", start: 170 },
+  { symbol: "TSLAx", label: "TSLAx (Tesla xStock)", start: 200 },
 ] as const;
 
 type DeepRequired<T> = { [K in keyof T]-?: T[K] extends object | undefined ? DeepRequired<NonNullable<T[K]>> : T[K] };
@@ -19,7 +20,7 @@ export type FullStrategy = DeepRequired<Omit<ManualStrategy, "id" | "created_at"
 export function defaultStrategy(): FullStrategy {
   return {
     name: "My strategy",
-    symbol: "NVDAon",
+    symbol: "NVDAB",
     timeframe: "1h",
     entry: {
       logic: "AND",
@@ -230,12 +231,26 @@ export const CONDITION_LABEL: Record<string, string> = {
   live_quote: "Valid quote", live_quote_notional: "Quote amount matches", live_slippage: "Slippage within limit",
   live_wallet_quote: "Wallet can cover quote", live_daily_notional: "Daily traded cap", live_max_exposure: "Max open exposure",
   live_order_cap: "Per-order cap", live_wallet_balance: "Wallet balance",
-  live_below_min_order: "Below minimum order", live_illiquid_family: "xStock excluded (no liquidity on BNB Chain)", live_token_paused: "Token paused", live_price_impact: "Price impact too high, over 2%",
+  live_below_min_order: "Below minimum order", live_illiquid_family: "xStock excluded (no liquidity on BNB Chain)", live_token_paused: "Token paused", live_price_impact: "Price impact above limit",
+  // Binance Web3 exchange quote errors (Bot 4) used as market-state signals: a stay-out, not a failed trade
+  // Bot 4 exchange reasons and Bot 3 wallet / live checks
+  market_closed: "Market closed", insufficient_liquidity: "Insufficient liquidity", below_minimum: "Below minimum order",
+  above_maximum: "Above maximum order", xstock_disabled: "xStock disabled (no liquidity on BSC)", slippage_exceeded: "Slippage exceeded",
+  wallet_limits: "Wallet limits", wallet_allowed_token: "Token allowed by wallet", wallet_per_tx_cap: "Wallet per-trade cap",
+  wallet_daily_limit: "Wallet daily limit", wallet_exit_reserve: "Exit reserve (quota to sell all positions)",
+  live_token_status: "Token tradable now", live_symbol_allowed: "Token allowed", min_order_notional: "Minimum order size",
+  "40366": "Above Ondo max single order", "40367": "Ondo market not tradable now (off-hours)", "40369": "bStock outside trading time",
+  "40374": "Insufficient liquidity", "40375": "Below Ondo 20 USD minimum order",
 };
 /** Friendly label for a Signal.conditions_met/failed id (rule field, risk check, preset condition or ExitReason). */
 export const conditionLabel = (id: string) =>
   CONDITION_LABEL[id] ?? (id in EXIT_LABEL ? EXIT_LABEL[id as ExitReason] : id.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase()));
 /** ControlState.reason without the backend's "EMERGENCY STOP:" / "PAUSED:" prefix (the UI already says which). */
 export const controlReason = (r?: string | null) => (r ?? "").replace(/^\s*(EMERGENCY[ _]STOP|PAUSED)\s*:\s*/i, "").trim();
+/** Exchange error codes found in a reason text (e.g. "QuoteUnavailable 40367 ..."), as friendly labels. */
+export const exchangeCodeLabels = (text?: string | null) =>
+  [...new Set((text ?? "").match(/\b403(66|67|69|74|75)\b/g) ?? [])].map((c) => CONDITION_LABEL[c]);
+/** xStock (…x) on BNB Chain has no liquidity: greyed out in pickers, selectable only in SIM. */
+export const isXStock = (sym: string) => /x$/.test(sym);
 /** Signal.strategy / active_strategy "NONE" means Auto Mode is staying out. */
 export const strategyLabel = (s?: string | null) => (!s ? "—" : s === "NONE" ? "Staying out" : s);
