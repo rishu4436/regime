@@ -335,3 +335,10 @@ def test_exchange_cap_and_lock_codes_are_plain():
     for raw in ("order_cap_exceeded", "order_cap_exceeded: SELL 550 > 500", "tx_locked"):
         txt = live.plain_reason(raw)
         assert "order_cap_exceeded" not in txt and "tx_locked" not in txt
+
+
+def test_exit_reasons_are_plain():
+    from backend.llm import live
+    txt = live.plain_reason("TAKE_PROFIT: high 332.57 reached target 332.20 (entry 296.61); filled at 332.20; PnL +12.00%")
+    assert txt.startswith("Take-profit hit:") and "TAKE_PROFIT" not in txt and ";" not in txt and "332.20" in txt
+    assert live.plain_reason("STOP_LOSS: price 90.0 below stop 91.0").startswith("Stop-loss hit:")
