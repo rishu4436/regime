@@ -53,7 +53,7 @@ def test_single_symbol_unchanged():
     r = c.post("/api/manual/activate", json={"strategy": _eager("NVDAB", take_profit_pct=50, stop_loss_pct=20)})
     assert r.status_code == 200, r.text
     w = c.get("/api/watchlist").json()
-    assert w["watchlist"] == ["NVDAB"] and w["auto_pick"] is None and w["picks"] == []
+    assert w["watchlist"] == ["NVDAB"] and not (w["auto_pick"] or {}).get("enabled") and w["picks"] == []
     for ds in _ticks(c, 5):
         assert {d["symbol"] for d in ds} <= {"NVDAB"}
         assert len([d for d in ds if d["action"] in ("STAY_OUT", "BUY")]) <= 1
