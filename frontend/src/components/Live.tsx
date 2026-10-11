@@ -1,6 +1,7 @@
 // LIVE / 24-7 autonomous monitor: mainnet banner, autonomy + heartbeat, kill switches, caps usage, wallet, live gate,
 // activity feed with BscScan links.
 import { useEffect, useState } from "react";
+import { RegisterOnChain } from "./AgentStudio";
 import type { Decision, ExecutionResult, StatusSnapshot } from "../contracts";
 import { api } from "../api";
 import type { ChainPending, LiveCooldown, LiveExecutionFields } from "../api/types";
@@ -54,7 +55,7 @@ export function SessionBanner() {
 
 /** Agent identity: BNB Agent Studio (ERC-8004) id from /api/system.agent_identity, and the execution wallet. */
 export function AgentIdentityCard() {
-  const { system, wallet } = useLive();
+  const { system, wallet, refresh } = useLive();
   if (!system) return <Card title="Agent identity"><Skeleton h={60} /></Card>;
   const id = (system as typeof system & { agent_identity?: { erc8004_id?: string | number | null; registry?: string | null; studio_version?: string | null; network?: string | null; explorer_url?: string | null } | null }).agent_identity;
   return (
@@ -70,6 +71,7 @@ export function AgentIdentityCard() {
         <span className="k">Executes with</span><span><span className="pill">Agentic Wallet (baw)</span>{wallet?.address ? <a className="mono small" style={{ marginLeft: 6 }} href={bscAddr(wallet.address)} target="_blank" rel="noreferrer">{shortHex(wallet.address)}</a> : null}</span>
       </div>
       {api.kind === "mock" && <div className="note">Placeholder identity in mock mode.</div>}
+      <RegisterOnChain onRegistered={refresh} />
     </Card>
   );
 }
