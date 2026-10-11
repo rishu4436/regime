@@ -10,7 +10,7 @@ import { detectRegime, presetWantsBuy, STYLE_MAP } from "../lib/auto";
 import { appendCandle, generateMixedCandles, rng } from "../lib/candles";
 import { parseStrategyText } from "../lib/parseText";
 import { backtest, conditionLabel, evaluateLast, fillStrategy, type FullStrategy } from "../lib/strategy";
-import { ApiError, type ActivateManualBody, type ApiClient, type LiveCooldown, type LiveGate, type LiveLimits, type ParseResult, type PresetsTable, type WalletInfo } from "./types";
+import { ApiError, type ActivateManualBody, type ApiClient, type LiveCooldown, type LiveGate, type LiveLimits, type ParseResult, type PresetsTable, type WalletInfo, type WalletConnectStatus } from "./types";
 
 /** Mock-only demo scenario: "LIVE" pretends to be a LIVE (mainnet) backend with an Agentic Wallet so the LIVE UI can be
  * shown without funds. Nothing leaves the browser; tx hashes are random and labelled as demo. Persisted; switching reloads. */
@@ -130,6 +130,18 @@ export class MockApi implements ApiClient {
         ...[...held].map(([sym, h]) => ({ asset: sym, amount: h.q, value_usdt: h.q * h.px, contract_address: TOKENS.find((t) => t.symbol === sym)?.contract_address ?? null })),
       ],
       bnb_gas_reserve: LIVE_GAS_RESERVE, limits: this.liveLimits(), updated_at: now(), live_gate: this.gate() });
+  }
+  // mock QR sign-in: "scanned" ~6 s after the QR is shown
+  private connectSessions = new Map<string, number>();
+  startWalletConnect() {
+    const id = `mock-${Date.now().toString(36)}`; this.connectSessions.set(id, Date.now());
+    return ok({ qr_url: `https://example.invalid/mock-agentic-wallet-login?session=${id}`, session_id: id, expires_at: new Date(Date.now() + 120_000).toISOString() }, 300);
+  }
+  getWalletConnect(session_id: string) {
+    const t0 = this.connectSessions.get(session_id);
+    if (t0 == null) return fail(404, `unknown session ${session_id}`);
+    const age = Date.now() - t0;
+    return ok<WalletConnectStatus>(age > 120_000 ? { status: "expired" } : age > 6000 ? { status: "connected", address: DEMO_WALLET, wallet_changed: false } : { status: "pending" }, 150);
   }
   getTokens(q = "") {
     const ql = q.toLowerCase();

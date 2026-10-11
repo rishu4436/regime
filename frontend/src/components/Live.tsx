@@ -47,7 +47,7 @@ export function SessionBanner() {
   if (!wallet?.session_expired && !why) return null;
   return (
     <div className="banner red" role="alert">
-      <span className="grow"><b>Agentic Wallet session expired, re-scan QR on host PC.</b> The agent can't trade until the wallet is signed in again (<code>baw auth signin</code>, then scan the QR in the Binance App).{why ? <><br /><span className="small">{why}</span></> : null}</span>
+      <span className="grow"><b>Agentic Wallet session expired.</b> The agent can't trade until the wallet is signed in again Click <b>Reconnect wallet</b> at the top and scan the QR in the Binance App (or run <code>baw auth signin</code> on the host PC).{why ? <><br /><span className="small">{why}</span></> : null}</span>
     </div>
   );
 }

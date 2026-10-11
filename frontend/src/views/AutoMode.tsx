@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { TokenPicker } from "../components/TokenPicker";
 import { PresetNameValues, RegimeValues, TimeframeValues, TraderStyleValues, type AutoConfig, type RegimeAnalysis, type StatusSnapshot, type StrategySelection, type Timeframe } from "../contracts";
 import { ensureLoop } from "./Dashboard";
 import { api } from "../api";
@@ -6,7 +7,7 @@ import { RegimeBadge } from "../components/Badges";
 import { Card, NumberInput, Segmented, Skeleton, Toggle, useToast } from "../components/ui";
 import { PRESET_INFO, REGIME_INFO, STYLE_INFO } from "../lib/auto";
 import type { PresetsTable } from "../api/types";
-import { strategyLabel, humanReason, TOKENS, isXStock } from "../lib/strategy";
+import { strategyLabel, humanReason } from "../lib/strategy";
 import { useLive } from "../lib/live";
 import { TokenStatusBadge } from "../components/Live";
 
@@ -54,7 +55,7 @@ export function AutoMode({ config: c, setConfig, status, onActivated, tick }: Pr
           <div className="stack" style={{ gap: 14 }}>
             <div className="field-grid">
               <div><span className="lbl">Tokenized stock<TokenStatusBadge symbol={c.symbol} /></span>
-                <select value={c.symbol} onChange={(e) => setConfig({ ...c, symbol: e.target.value })}>{TOKENS.map((t) => <option key={t.symbol} value={t.symbol} disabled={isXStock(t.symbol) && !simOnly} title={isXStock(t.symbol) ? "No liquidity on BSC" : undefined}>{t.label}{isXStock(t.symbol) ? " · No liquidity on BSC" : ""}</option>)}</select></div>
+                <TokenPicker value={c.symbol} onChange={(v) => setConfig({ ...c, symbol: v })} simOnly={simOnly} /></div>
               <div><span className="lbl">Timeframe</span>
                 <select value={c.timeframe ?? "1h"} onChange={(e) => setConfig({ ...c, timeframe: e.target.value as Timeframe })}>{TimeframeValues.map((t) => <option key={t}>{t}</option>)}</select></div>
               <div><span className="lbl">Capital allocated</span><NumberInput value={c.capital} min={1} step={500} suffix="USDT" onChange={(v) => setConfig({ ...c, capital: v ?? 1 })} /></div>

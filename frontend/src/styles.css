@@ -272,3 +272,5 @@ tr.settling td:first-child { opacity: 1; }
 .chip.warn { color: #fcd34d; background: rgba(245,158,11,0.08); border-color: rgba(245,158,11,0.3); }
 .inflight { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border, rgba(148,163,184,0.15)); }
 .inflight-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.banner.green { background: rgba(34,197,94,0.1); border-color: rgba(34,197,94,0.4); }
+.btn.danger { background: linear-gradient(180deg, #ef4444, #dc2626); color: #fff; box-shadow: none; }

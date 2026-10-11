@@ -90,6 +90,16 @@ export interface LoopHeartbeat {
 
 /** notes: parser remarks to show the user, e.g. the default entry rule it filled in (POST /api/llm/parse). */
 export type ParseResult = ({ kind: "MANUAL"; strategy: ManualStrategy } | { kind: "AUTO"; config: AutoConfig }) & { notes?: string[] };
+/** POST /api/wallet/connect (localhost only, else 403): starts the Agentic Wallet QR sign-in. */
+export interface WalletConnectStart { qr_url: string; session_id: string; expires_at?: string | null }
+/** GET /api/wallet/connect?session_id=: on "connected" the backend has already re-read the wallet limits. */
+export interface WalletConnectStatus {
+  status: "pending" | "connected" | "expired" | "failed";
+  address?: string | null;
+  /** true when the signed-in address differs from the one the agent saved: LIVE stays blocked ("different wallet connected"). */
+  wallet_changed?: boolean | null;
+  error?: string | null;
+}
 export type ActivateManualBody = { strategy_id: string } | { strategy: ManualStrategy };
 
 /** Error from the API: 404 unknown id/symbol, 409 invalid state, 422 validation. */
@@ -141,6 +151,8 @@ export interface ApiClient {
   // live / wallet (null = endpoint not available on this backend yet)
   getLiveGate(): Promise<LiveGate | null>;
   getWallet(): Promise<WalletInfo | null>;
+  startWalletConnect(): Promise<WalletConnectStart>;
+  getWalletConnect(session_id: string): Promise<WalletConnectStatus>;
   approve(decisionId: string): Promise<Decision>;
   reject(decisionId: string, reason?: string): Promise<Decision>;
   /** Manual override: close ONE lot by Position.id at the last price (signal.exit_reason MANUAL). 404 if not open. */

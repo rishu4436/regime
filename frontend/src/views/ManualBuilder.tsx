@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import { TokenPicker } from "../components/TokenPicker";
 import { DEFAULT_INITIAL_CAPITAL, TimeframeValues, type AutoConfig, type ManualStrategy, type Timeframe } from "../contracts";
 import { api } from "../api";
 import { Card, NumberInput, RuleRow, Segmented, Toggle, useToast } from "../components/ui";
-import { defaultStrategy, fillStrategy, TOKENS, type FullStrategy, isXStock } from "../lib/strategy";
+import { defaultStrategy, fillStrategy, type FullStrategy } from "../lib/strategy";
 import { BacktestResults, type BacktestRun } from "./BacktestResults";
 import { ensureLoop } from "./Dashboard";
 import { useLive } from "../lib/live";
@@ -138,7 +139,7 @@ export function ManualBuilder({ strategy: s, setStrategy, capital, setCapital, r
               <div style={{ gridColumn: "1 / -1" }}><span className="lbl">Strategy name</span>
                 <input type="text" value={s.name} onChange={(ev) => up((d) => { d.name = ev.target.value; })} /></div>
               <div><span className="lbl">Tokenized stock<TokenStatusBadge symbol={s.symbol} /></span>
-                <select value={s.symbol} onChange={(ev) => up((d) => { d.symbol = ev.target.value; })}>{TOKENS.map((t) => <option key={t.symbol} value={t.symbol} disabled={isXStock(t.symbol) && !simOnly} title={isXStock(t.symbol) ? "No liquidity on BSC" : undefined}>{t.label}{isXStock(t.symbol) ? " · No liquidity on BSC" : ""}</option>)}</select></div>
+                <TokenPicker value={s.symbol} onChange={(v) => up((d) => { d.symbol = v; })} simOnly={simOnly} /></div>
               <div><span className="lbl">Timeframe</span>
                 <select value={s.timeframe} onChange={(ev) => up((d) => { d.timeframe = ev.target.value as Timeframe; })}>{TimeframeValues.map((t) => <option key={t}>{t}</option>)}</select></div>
             </div>

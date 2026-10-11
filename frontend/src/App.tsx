@@ -4,6 +4,7 @@ import { API_MODE } from "./api";
 import { MOCK_SCENARIO, setMockScenario } from "./api/mock";
 import { LiveBanner, SessionBanner } from "./components/Live";
 import { LiveContext, useLiveState } from "./lib/live";
+import { WalletButton, WalletConnectProvider } from "./components/WalletConnect";
 import { ModeBadge, RegimeBadge } from "./components/Badges";
 import { Toggle, ToastProvider } from "./components/ui";
 import { useStatus } from "./lib/useStatus";
@@ -56,6 +57,7 @@ function Shell() {
 
   return (
     <LiveContext.Provider value={live}>
+    <WalletConnectProvider>
     <div className={`app${live.isLive ? " is-live" : ""}`}>
       <aside className="sidebar">
         <div className="brand"><div className="brand-logo">◆</div><div><b>Regime</b><small>Autonomous tokenized-stock agent</small></div></div>
@@ -83,6 +85,7 @@ function Shell() {
             : <span className="pill ok"><span className="live-dot" />Live loop</span>)}
           {live.isLive && <span className="live-tag" title="Real funds on BNB Smart Chain mainnet"><span className="live-dot" />LIVE · MAINNET</span>}
           <ModeBadge mode={mode} />
+          <WalletButton />
         </div>
         {API_MODE === "mock" && <div className="banner amber" style={{ marginBottom: 12 }}><span className="grow small">
           <b>Mock data:</b> this dashboard isn't connected to the Regime backend, so nothing here is real. Start it with <code>VITE_API_MODE=http</code> to see the live agent.</span></div>}
@@ -97,6 +100,7 @@ function Shell() {
       </main>
       <nav className="mobile-nav">{nav}</nav>
     </div>
+    </WalletConnectProvider>
     </LiveContext.Provider>
   );
 }
