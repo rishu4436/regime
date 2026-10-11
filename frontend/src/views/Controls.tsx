@@ -80,7 +80,7 @@ export function Controls({ status, onChange, tick }: Props) {
         <ConfirmDialog title="Trigger emergency stop?" danger confirmLabel="Stop everything" busy={busy}
           onCancel={() => setAskStop(false)} onConfirm={() => run(() => api.emergencyStop("Emergency stop by user", flatten), "Emergency stop engaged").then(() => setAskStop(false))}>
           Every cycle becomes STAY OUT (no new buys) and pending confirmations are rejected ({c?.trading_mode ?? "SIM"} mode).{" "}
-          {flatten ? "All open positions are closed immediately at the last price." : "Open positions are closed on the next bar at that bar's close (exit reason EMERGENCY_STOP)."}{" "}
+          {flatten ? "All open positions are closed immediately at the last price." : "Open positions are closed on the next bar at that bar's close, logged as an emergency stop."}{" "}
           Clear it later with “Reset e-stop” (Resume does not clear it).
           <div className="rule on" style={{ marginTop: 12 }}>
             <Toggle checked={flatten} onChange={setFlatten} label="Close all positions" />

@@ -96,7 +96,7 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
           <span className="grow">
             <b>Emergency stop active</b>{controlReason(status.control.reason) ? `: ${controlReason(status.control.reason)}` : ""}<br />
             <span className="small">Every cycle is <b>STAY OUT</b> (no new buys) and pending confirmations are rejected.{" "}
-              {pf?.positions?.length ? <>The {pf.positions.length} open position{pf.positions.length > 1 ? "s close" : " closes"} on the next bar at that bar's close (exit reason EMERGENCY_STOP).</> : "Any positions left were closed with exit reason EMERGENCY_STOP."}</span>
+              {pf?.positions?.length ? <>The {pf.positions.length} open position{pf.positions.length > 1 ? "s close" : " closes"} on the next bar at that bar's close, logged as an emergency stop.</> : "Any positions left were closed with exit reason EMERGENCY_STOP."}</span>
           </span>
           <button className="btn ghost" onClick={() => setAskReset(true)}>↺ Reset emergency stop</button>
         </div>
