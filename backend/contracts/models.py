@@ -348,7 +348,7 @@ class ManualStrategy(ContractModel):
     version: int = 1
     watchlist: list[str] = Field(default_factory=list, max_length=5, description=(
         "v0.3: up to 5 tokens traded with these rules; empty = [symbol]. `symbol` stays the first entry"))
-    auto_pick: Optional[AutoPickConfig] = Field(default=None, description="v0.3: pick the watchlist automatically")
+    auto_pick: AutoPickConfig = Field(default_factory=AutoPickConfig, description="v0.3: pick the watchlist automatically (off by default)")
 
 
 # --------------------------------------------------------------------------- auto mode (spec 3)
@@ -361,7 +361,7 @@ class AutoConfig(ContractModel):
     activation: ActivationMode = ActivationMode.CONFIRMATION
     watchlist: list[str] = Field(default_factory=list, max_length=5, description=(
         "v0.3: up to 5 tokens for the auto agent; empty = [symbol]. `symbol` stays the first entry"))
-    auto_pick: Optional[AutoPickConfig] = Field(default=None, description="v0.3: pick the watchlist automatically")
+    auto_pick: AutoPickConfig = Field(default_factory=AutoPickConfig, description="v0.3: pick the watchlist automatically (off by default)")
 
 
 class RegimeAnalysis(ContractModel):

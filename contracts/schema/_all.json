@@ -89,16 +89,8 @@
           "default": "CONFIRMATION"
         },
         "auto_pick": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AutoPickConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "v0.3: pick the watchlist automatically"
+          "$ref": "#/$defs/AutoPickConfig",
+          "description": "v0.3: pick the watchlist automatically (off by default)"
         },
         "capital": {
           "description": "USDT allocated to the auto agent",
@@ -960,16 +952,8 @@
           "default": "CONFIRMATION"
         },
         "auto_pick": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AutoPickConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "v0.3: pick the watchlist automatically"
+          "$ref": "#/$defs/AutoPickConfig",
+          "description": "v0.3: pick the watchlist automatically (off by default)"
         },
         "created_at": {
           "format": "date-time",

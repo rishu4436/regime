@@ -312,8 +312,8 @@ export interface ManualStrategy {
   version?: number;
   /** v0.3: up to 5 tokens traded with these rules; empty = [symbol]. `symbol` stays the first entry */
   watchlist?: string[];
-  /** v0.3: pick the watchlist automatically */
-  auto_pick?: AutoPickConfig | null;
+  /** v0.3: pick the watchlist automatically (off by default) */
+  auto_pick?: AutoPickConfig;
 }
 
 export interface AutoConfig {
@@ -326,8 +326,8 @@ export interface AutoConfig {
   activation?: ActivationMode;
   /** v0.3: up to 5 tokens for the auto agent; empty = [symbol]. `symbol` stays the first entry */
   watchlist?: string[];
-  /** v0.3: pick the watchlist automatically */
-  auto_pick?: AutoPickConfig | null;
+  /** v0.3: pick the watchlist automatically (off by default) */
+  auto_pick?: AutoPickConfig;
 }
 
 export interface RegimeAnalysis {
