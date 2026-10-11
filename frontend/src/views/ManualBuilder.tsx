@@ -161,7 +161,7 @@ export function ManualBuilder({ strategy: s, setStrategy, capital, setCapital, r
               hint={`volume > ${e.volume_above_avg.multiplier}× avg (${e.volume_above_avg.period ? `${e.volume_above_avg.period} bars` : "default window"})`}>
               <NumberInput value={e.volume_above_avg.multiplier} min={0} step={0.1} suffix="×" width={78} onChange={(v) => up((d) => { d.entry.volume_above_avg.multiplier = n(v, 1.1); })} />
             </RuleRow>
-            <RuleRow on={e.breakout.enabled} onToggle={(v) => up((d) => { d.entry.breakout.enabled = v; })} title="Price-action breakout" hint="Break of the recent high/low (from the spec, not in the simulator)">
+            <RuleRow on={e.breakout.enabled} onToggle={(v) => up((d) => { d.entry.breakout.enabled = v; })} title="Price-action breakout" hint="Close breaks the recent high (or low)">
               <Segmented size="sm" value={e.breakout.direction} onChange={(v) => up((d) => { d.entry.breakout.direction = v; })} options={[{ value: "HIGH", label: "High" }, { value: "LOW", label: "Low" }]} />
               <NumberInput value={e.breakout.lookback} min={2} width={62} onChange={(v) => up((d) => { d.entry.breakout.lookback = n(v, 20); })} />
             </RuleRow>
@@ -216,6 +216,7 @@ export function ManualBuilder({ strategy: s, setStrategy, capital, setCapital, r
                 <Segmented value={s.activation} onChange={(v) => up((d) => { d.activation = v; })} options={[{ value: "AUTO_EXECUTE", label: "Autonomous" }, { value: "CONFIRMATION", label: "Ask me first" }]} /></div>
             </div>
             <button className="btn block lg" style={{ marginTop: 16 }} disabled={busy != null} onClick={runBacktest}>{busy === "bt" ? <span className="spin" /> : "▶"} Run backtest</button>
+            {!Object.values(e).some((c) => typeof c === "object" && c && (c as { enabled?: boolean }).enabled) && <div className="banner amber" style={{ marginTop: 10 }}><span className="grow small"><b>No entry rule turned on:</b> this strategy will never buy. Turn on at least one entry condition (price above EMA(20) is a good start).</span></div>}
             <div className="field-grid" style={{ marginTop: 8 }}>
               <button className="btn green" disabled={busy != null} onClick={activate}>{busy === "act" ? <span className="spin" /> : "⚡"} Activate strategy</button>
               <button className="btn ghost" disabled={busy != null} onClick={() => { setStrategy(defaultStrategy()); setCapital(DEFAULT_INITIAL_CAPITAL); toast("Reset to simulator defaults", "info"); }}>Reset</button>

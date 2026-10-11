@@ -6,7 +6,7 @@ import { api } from "../api";
 import type { ChainPending, LiveCooldown, LiveExecutionFields } from "../api/types";
 import { cls, time, usd } from "../lib/format";
 import { ago, allowedTokensText, balAmount, balAsset, balValue, bscAddr, bscTx, dur, limitsOf, shortHex, stricter, useLive } from "../lib/live";
-import { conditionLabel, controlReason, exchangeCodeLabels, isExitQueued, strategyLabel } from "../lib/strategy";
+import { conditionLabel, controlReason, exchangeCodeLabels, isExitQueued, strategyLabel, humanReason } from "../lib/strategy";
 import { ActionBadge } from "./Badges";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Card, Skeleton, useToast } from "./ui";
@@ -323,7 +323,7 @@ export function ActivityFeed({ decisions, confirmMode = false }: { decisions: De
                   {ex?.real_funds && <span className="pill bad" title="Real funds on mainnet">real funds</span>}
                   {isExitQueued(d.reason) && <span className="pill warn">Exit queued until fill</span>}
                   {/\border_in_flight\b/i.test(d.reason ?? "") && <span className="pill warn">Earlier swap still settling, waiting</span>}</div>
-                <div className="small">{d.explanation ?? d.reason}</div>{d.explanation && d.explanation !== d.reason && <div className="faint small">{d.reason}</div>}
+                <div className="small">{d.explanation ?? humanReason(d.reason)}</div>{d.explanation && d.explanation !== d.reason && <div className="faint small">{humanReason(d.reason)}</div>}
                 {(failed.length > 0 || passed > 0) && (
                   <div className="chips" style={{ marginTop: 4 }}>
                     {failed.map((c) => <span key={c.name} className="chip fail" title={c.detail ?? ""}>✕ {conditionLabel(c.name)}{c.detail ? `: ${c.detail}` : ""}</span>)}

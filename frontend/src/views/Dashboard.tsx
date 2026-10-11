@@ -5,7 +5,7 @@ import { ActionBadge, RegimeBadge } from "../components/Badges";
 import { PriceChart, type TradeMarker } from "../components/Charts";
 import { Card, Segmented, Skeleton, StatCard, useToast } from "../components/ui";
 import { cls, humanize, num, time, usd } from "../lib/format";
-import { conditionLabel, controlReason, EXIT_LABEL, heldExit, isExitQueued, isPendingPos, strategyLabel, TOKENS } from "../lib/strategy";
+import { conditionLabel, controlReason, EXIT_LABEL, heldExit, isExitQueued, isPendingPos, strategyLabel, humanReason, TOKENS } from "../lib/strategy";
 import { Controls } from "./Controls";
 import { AlertsPanel, AskAgent } from "./Insights";
 import { ApiError, type PerformanceSummary } from "../api/types";
@@ -52,9 +52,17 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
   const last = status?.last_decision;
   const lastPx = candles?.[candles.length - 1]?.close, firstPx = candles?.[0]?.close;
 
-  const markers = useMemo<TradeMarker[]>(() => decisions
-    .filter((d) => d.symbol === symbol && d.execution?.status === "FILLED" && (d.action === "BUY" || d.action === "SELL") && d.timestamp)
-    .map((d) => ({ time: d.timestamp!, type: d.action as "BUY" | "SELL", text: d.action === "BUY" ? "B" : "S" })), [decisions, symbol]);
+  // fills from the last 60 decisions (feed) + the 20 in the snapshot, plus an entry marker for every open lot so older positions still show
+  const markers = useMemo<TradeMarker[]>(() => {
+    const seen = new Set<string>(), out: TradeMarker[] = [];
+    for (const d of [...feed, ...decisions]) {
+      if (d.symbol !== symbol || d.execution?.status !== "FILLED" || (d.action !== "BUY" && d.action !== "SELL") || !d.timestamp) continue;
+      const k = d.id ?? `${d.timestamp}${d.action}`; if (seen.has(k)) continue; seen.add(k);
+      out.push({ time: d.timestamp, type: d.action, text: d.action === "BUY" ? "B" : "S" });
+    }
+    for (const p of pf?.positions ?? []) if (p.symbol === symbol && p.opened_at && !out.some((m) => m.type === "BUY" && m.time === p.opened_at)) out.push({ time: p.opened_at, type: "BUY", text: "B" });
+    return out.sort((a, b) => String(a.time).localeCompare(String(b.time)));
+  }, [feed, decisions, symbol, pf]);
 
   const lotCount = (sym: string) => (pf?.positions ?? []).filter((p) => p.symbol === sym).length;
   const act = async (id: string, ok: boolean) => {
@@ -107,7 +115,7 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
             <div><div className="lbl">Price</div><b>~{usd(d.execution?.avg_price ?? d.signal?.price)}</b></div>
             <div><div className="lbl">Strategy</div><b>{strategyLabel(d.strategy)}</b></div>
           </div>
-          <div className="summary-box" style={{ marginBottom: 12 }}>{d.explanation ?? d.reason}</div>
+          <div className="summary-box" style={{ marginBottom: 12 }}>{d.explanation ?? humanReason(d.reason)}</div>
           <div className="btn-row">
             <button className="btn green" disabled={busy === d.id} onClick={() => act(d.id!, true)}>✓ Confirm trade</button>
             <button className="btn ghost" disabled={busy === d.id} onClick={() => act(d.id!, false)}>Reject</button>
@@ -150,7 +158,7 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
                         {p.id && <div className="faint small" title={p.id}>lot {p.id.slice(0, 6)}</div>}</td><td className="r">{num(p.quantity)}</td><td className="r">{usd(p.avg_entry_price)}</td><td className="r">{usd(p.current_price)}</td>
                       <td className={`r ${isPendingPos(p) ? "" : cls(p.unrealized_pnl)}`}>{isPendingPos(p) ? "—" : usd(p.unrealized_pnl)}</td>
                       <td className="small">SL {usd(p.stop_loss_price)} · TP {usd(p.take_profit_price)}{p.trailing_stop_pct ? ` · trail ${p.trailing_stop_pct}%` : ""}</td>
-                      <td className="small trunc" title={p.strategy}>{p.strategy}</td>
+                      <td className="small trunc" title={p.strategy}>{strategyLabel(p.strategy)}</td>
                       <td><button className="btn ghost" style={{ padding: "4px 10px" }} disabled={isPendingPos(p)} title={isPendingPos(p) ? "Buy still settling on-chain: exit queued until fill" : "Close this lot at the last price"}
                         onClick={() => setCloseTarget(p.id ? { kind: "lot", id: p.id, symbol: p.symbol } : { kind: "all", symbol: p.symbol })}>Close</button></td>
                     </tr>
@@ -196,7 +204,7 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
                   <td className="small muted">{time(d.timestamp)}</td><td><ActionBadge action={d.action} /></td><td>{d.symbol}</td>
                   <td><RegimeBadge regime={d.regime} /></td><td className="small trunc" title={d.strategy}>{strategyLabel(d.strategy)}</td>
                   <td className="small">{d.execution ? (d.execution.status === "PENDING_CONFIRMATION" && !status?.control.confirmation_mode ? "Waiting on chain" : humanize(d.execution.status)) : "—"} <TxLink exec={d.execution} /></td>
-                  <td className="wrap small">{isExitQueued(d.reason) && <><span className="pill warn">Exit queued until fill</span>{" "}</>}{d.signal?.exit_reason && <><ExitPill d={d} />{" "}</>}{d.reason}</td>
+                  <td className="wrap small">{isExitQueued(d.reason) && <><span className="pill warn">Exit queued until fill</span>{" "}</>}{d.signal?.exit_reason && <><ExitPill d={d} />{" "}</>}{humanReason(d.reason)}</td>
                 </tr>
               ))}
             </tbody>
@@ -242,7 +250,7 @@ function DecisionDetail({ d }: { d: Decision }) {
         <span className="k">When</span><span className="small">{time(d.timestamp)} · {d.mode} · {d.agent_mode}</span>
         <span className="k">Token / strategy</span><span>{d.symbol} · <b>{strategyLabel(d.strategy)}</b></span>
         <span className="k">Regime</span><span><RegimeBadge regime={d.regime} /></span>
-        <span className="k">Reason</span><span>{d.reason}</span>
+        <span className="k">Reason</span><span>{humanReason(d.reason)}</span>
         {d.signal?.exit_reason && <><span className="k">Exit</span><span><ExitPill d={d} />{d.signal.position_id && <span className="faint small"> · lot {d.signal.position_id.slice(0, 6)}</span>}</span></>}
         {v && <><span className="k">Risk check</span><span>{v.approved ? <span className="pill ok">approved</span> : <span className="pill bad">blocked</span>} <span className="small muted">{v.reasons?.join("; ")}{v.adjusted_notional ? ` ${usd(v.adjusted_notional)}` : ""}</span></span></>}
         {d.execution && <><span className="k">Execution</span><span className="small">{humanize(d.execution.status)} {d.execution.avg_price ? `@ ${usd(d.execution.avg_price)}` : ""} {d.execution.error ?? ""} <TxLink exec={d.execution} /></span></>}

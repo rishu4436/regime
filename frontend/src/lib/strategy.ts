@@ -260,4 +260,17 @@ export const heldExit = (p: object) => (p as { held_exit?: { code?: string; reas
 /** xStock (…x) on BNB Chain has no liquidity: greyed out in pickers, selectable only in SIM. */
 export const isXStock = (sym: string) => /x$/.test(sym);
 /** Signal.strategy / active_strategy "NONE" means Auto Mode is staying out. */
-export const strategyLabel = (s?: string | null) => (!s ? "—" : s === "NONE" ? "Staying out" : s);
+const STRATEGY_NAMES: Record<string, string> = { DCA: "DCA", SMART_DCA: "Smart DCA", BUY_THE_DIP: "Buy the Dip", TREND_FOLLOWING: "Trend / Momentum", TREND_MOMENTUM: "Trend / Momentum", GRID: "Grid" };
+const REGIME_NAMES: Record<string, string> = { STRONG_UPTREND: "Strong uptrend", MILD_UPTREND: "Mild uptrend", SIDEWAYS: "Sideways", SIDEWAYS_RANGE: "Sideways", OVERSOLD_PULLBACK: "Oversold pullback", HIGH_VOLATILITY: "High volatility", DOWNTREND: "Downtrend" };
+const STYLE_NAMES: Record<string, string> = { PATIENT: "Patient", BALANCED: "Balanced", ACTIVE: "Active" };
+/** Human strategy name: preset label, "MANUAL:<name>" -> "<name> (manual)", "NONE" -> Staying out. */
+export const strategyLabel = (s?: string | null) => {
+  if (!s) return "—";
+  if (s === "NONE") return "Staying out";
+  if (s.startsWith("MANUAL:")) return `${s.slice(7)} (manual)`;
+  return STRATEGY_NAMES[s] ?? s;
+};
+/** Replace raw engine names (regimes, presets, styles) inside a reason with labels; "->" becomes "picks". */
+export const humanReason = (r?: string | null) => !r ? "" : r
+  .replace(/\s*->\s*/g, " picks ")
+  .replace(/\b[A-Z][A-Z_]{2,}\b/g, (w) => REGIME_NAMES[w] ?? STRATEGY_NAMES[w] ?? STYLE_NAMES[w] ?? w);
