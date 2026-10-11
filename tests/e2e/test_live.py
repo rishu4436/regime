@@ -376,7 +376,7 @@ def test_wallet_settings_provider_never_runs_outside_live_and_caches():
     assert sim.get() is None and not calls
     live = WalletSettingsProvider(object(), TradingMode.LIVE, runner=runner, ttl_s=60)
     live.get(); live.get()
-    assert len(calls) == 1 and calls[0][:3] == ("baw", "wallet", "settings")
+    assert len(calls) == 1 and calls[0][0].replace("\\", "/").rsplit("/", 1)[-1] in ("baw", "baw.cmd") and calls[0][1:3] == ("wallet", "settings")
 
     errs = []
     bad = WalletSettingsProvider(object(), TradingMode.LIVE, runner=lambda cmd: (_ for _ in ()).throw(FileNotFoundError("baw")),

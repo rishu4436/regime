@@ -76,7 +76,10 @@ def require_local(request: Request) -> None:
     """Wallet sign-in is localhost-only (the Vite dev proxy also connects from localhost)."""
     host = (request.client.host if request.client else "") or ""
     fwd = [h.strip() for h in (request.headers.get("x-forwarded-for") or "").split(",") if h.strip()]
-    if host not in LOCAL_HOSTS or any(h not in LOCAL_HOSTS for h in fwd):
+    # the Vite proxy keeps the browser's Host header: a LAN visitor (http://192.168.x.y:5173) is refused here too
+    hh = (request.headers.get("host") or "localhost").strip().lower()
+    hh = hh[1:].split("]")[0] if hh.startswith("[") else hh.rsplit(":", 1)[0] if hh.count(":") == 1 else hh
+    if host not in LOCAL_HOSTS or any(h not in LOCAL_HOSTS for h in fwd) or hh not in LOCAL_HOSTS:
         raise HTTPException(403, "Wallet sign-in only works on the PC running the Regime backend "
                                  "(open the dashboard at http://localhost there).")
 

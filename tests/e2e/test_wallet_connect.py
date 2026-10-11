@@ -37,7 +37,7 @@ def _fake_env(monkeypatch):
 
 
 def _local(c: TestClient) -> TestClient:
-    return TestClient(c.app, client=LOCAL)
+    return TestClient(c.app, client=LOCAL, base_url="http://localhost:8000")
 
 
 def _connect(c: TestClient, timeout: float = 15.0) -> tuple[dict, list[dict]]:
@@ -68,6 +68,9 @@ def test_non_local_client_gets_403_and_never_starts_baw():
     assert lan.post("/api/wallet/connect").status_code == 403
     proxied = _local(c)  # e.g. a proxy on localhost forwarding a LAN client
     assert proxied.post("/api/wallet/connect", headers={"X-Forwarded-For": "192.168.1.20"}).status_code == 403
+    # Vite proxy on 0.0.0.0: the connection is local but the browser asked for the LAN address
+    assert proxied.post("/api/wallet/connect", headers={"Host": "192.168.1.20:5173"}).status_code == 403
+    assert proxied.post("/api/wallet/connect", headers={"Host": "127.0.0.1:5173"}).status_code == 200
 
 
 def test_sim_pending_then_connected_with_exact_dashboard_fields():
