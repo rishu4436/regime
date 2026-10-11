@@ -1,7 +1,7 @@
 // In-browser mock of Bot 6's API (backend/app/API.md): same methods, payloads, error codes (404/409/422) and
 // WebSocket-style Events (STATUS, DECISION, EXECUTION, CONTROL, PRICE, ALERT) emitted on a timer by a SIM loop.
 import {
-  CONTRACTS_VERSION, DEFAULT_INITIAL_CAPITAL, PresetNameValues,
+  CONTRACTS_VERSION, DEFAULT_INITIAL_CAPITAL, PresetNameValues, RegimeValues, TraderStyleValues,
   type Alert, type AlertLevel, type BacktestRequest, type LoopState, type PerformanceSummary, type SystemInfo, type AutoConfig, type BacktestResult, type Candle, type ControlState, type Decision, type EquityPoint, type Event, type ExecutionResult,
   type ExitReason, type ManualStrategy, type Portfolio, type PresetName, type Position, type Regime, type RegimeAnalysis, type Signal,
   type StatusSnapshot, type StrategySelection, type Timeframe, type TokenInfo, type TraderStyle,
@@ -10,7 +10,7 @@ import { detectRegime, presetWantsBuy, STYLE_MAP } from "../lib/auto";
 import { appendCandle, generateMixedCandles, rng } from "../lib/candles";
 import { parseStrategyText } from "../lib/parseText";
 import { backtest, conditionLabel, evaluateLast, fillStrategy, type FullStrategy } from "../lib/strategy";
-import { ApiError, type ActivateManualBody, type ApiClient, type ParseResult } from "./types";
+import { ApiError, type ActivateManualBody, type ApiClient, type ParseResult, type PresetsTable } from "./types";
 
 const TOKENS: TokenInfo[] = [
   { symbol: "NVDAon", name: "NVIDIA (Ondo tokenized)", token_type: "ONDO", chain: "Ethereum", underlying: "NVDA", decimals: 18 },
@@ -76,6 +76,14 @@ export class MockApi implements ApiClient {
   getSelection(symbol: string, style: TraderStyle = "BALANCED") {
     if (!this.candles[symbol]) return fail(404, `unknown symbol ${symbol}`);
     return ok(this.select(this.analyse(symbol), style, [...PresetNameValues]));
+  }
+
+  getPresetsTable() {
+    const entries = RegimeValues.flatMap((regime) => TraderStyleValues.map((style) => {
+      const sel = this.select({ regime, confidence: 1, reason: "" }, style, [...PresetNameValues]);
+      return { regime, style, preset: sel.preset ?? null, size_multiplier: sel.size_multiplier ?? 0, reason: sel.reason };
+    }));
+    return ok<PresetsTable>({ source: "fallback:MockApi", entries });
   }
 
   // ------------------------------------------------------------------ strategies
@@ -179,6 +187,13 @@ export class MockApi implements ApiClient {
     d.execution = { ...d.execution, status: "REJECTED", error: reason || "rejected by user" };
     d.reason += ` (rejected by user${reason ? `: ${reason}` : ""})`;
     this.emit("DECISION", d); this.emitStatus();
+    return ok(d);
+  }
+  closePositionById(positionId: string) {
+    const pos = (this.portfolio.positions ?? []).find((p) => p.id === positionId);
+    if (!pos) return fail(404, `no open position with id ${positionId}`);
+    const d = this.exitDecision(pos, "MANUAL", this.last(pos.symbol), `Manual override: user closed ${pos.symbol} lot ${positionId.slice(0, 6)}`);
+    this.emitStatus();
     return ok(d);
   }
   closePosition(symbol: string) {
@@ -408,6 +423,11 @@ export class MockApi implements ApiClient {
       if (why) out.push(this.exitDecision(p, why, level, `${why.replace(/_/g, " ").toLowerCase()} hit: lot ${p.id?.slice(0, 6)} filled at ${level.toFixed(2)}`));
     }
     if (this.control.emergency_stopped) {
+      // no flatten: the risk layer closes remaining lots on the next bar at that bar's close
+      for (const p of [...(this.portfolio.positions ?? [])]) {
+        const bar = this.candles[p.symbol][this.candles[p.symbol].length - 1];
+        out.push(this.exitDecision(p, "EMERGENCY_STOP", bar.close, `Emergency stop: lot ${p.id?.slice(0, 6)} closed at bar close ${bar.close.toFixed(2)}`));
+      }
       out.push(this.log({ symbol: this.symbol, action: "STAY_OUT", strategy: this.activeStrategy ?? "-", reason: `Emergency stop active: no new entries (${this.control.reason ?? "stopped"})` }));
       return finish();
     }
