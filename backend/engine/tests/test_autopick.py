@@ -261,3 +261,26 @@ def test_candidate_tokens_prefilters_the_full_list():
     assert [r["symbol"] for r in candidate_tokens(rows, "BIG_TECH", narrative_of=lambda s: None)] == ["AAPLB"]
     raised = candidate_tokens(rows, "ANY", limit=1, cfg=__import__("backend.engine.autopick", fromlist=["x"]).AutoPickConfig(max_order_usdt=200))
     assert raised[0]["symbol"] == "BIGB"  # a raised per-order cap makes the 100 USDT minimum buyable
+
+
+def test_zero_volume_token_is_not_picked():
+    """Live preview (Bot 4, 11 Oct): PLTRB ranked first with '24h volume 0 USDT'. A known 0 volume is ineligible;
+    an unknown (None) volume still is not."""
+    from backend.engine.autopick import AutoPickConfig, candidate_tokens, rank_tokens
+
+    up = wiggle(n=120)
+    toks = [
+        {"symbol": "PLTRB", "status": "trading", "volume_24h": 0},
+        {"symbol": "NVDAB", "status": "trading", "volume_24h": 25_000},
+        {"symbol": "AMDB", "status": "trading", "volume_24h": None},
+    ]
+    res = rank_tokens(toks, {t["symbol"]: up for t in toks}, "ANY", 3)
+    picked = [p.symbol for p in res.picks]
+    assert "PLTRB" not in picked and set(picked) == {"NVDAB", "AMDB"}, picked
+    skip = {s["symbol"]: s["reason"] for s in res.skipped}
+    assert "no trading volume" in skip["PLTRB"], skip
+    assert [t["symbol"] for t in candidate_tokens(toks)] == ["NVDAB", "AMDB"]
+    strict = AutoPickConfig(min_volume_24h_usdt=50_000)
+    res2 = rank_tokens(toks, {t["symbol"]: up for t in toks}, "ANY", 3, cfg=strict)
+    assert [p.symbol for p in res2.picks] == ["AMDB"]
+    assert "below the 50,000 USDT minimum" in {s["symbol"]: s["reason"] for s in res2.skipped}["NVDAB"]

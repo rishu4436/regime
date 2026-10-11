@@ -10,7 +10,8 @@ then STAY_OUTs. The risk layer still decides every trade.
 
 Token metadata is a mapping per token (Bot 4's token list). Keys used, all optional except ``symbol``:
 ``status`` / ``tradable``, ``min_order_usdt`` (or ``minOrderUsdt``), ``volume_24h`` (or ``volume24h``),
-``liquidity``, ``narrative``. Unknown values never exclude a token; they only score lower.
+``liquidity``, ``narrative``. Unknown values never exclude a token; they only score lower. A known 24h volume of 0
+(no trades) does exclude it.
 """
 
 from __future__ import annotations
@@ -52,6 +53,7 @@ class AutoPickConfig:
     max_order_usdt: float = 25.0  # a token whose minimum order is above this can never be bought (risk's order cap)
     blocked_families: frozenset = LiveSafetyConfig().blocked_families  # xStock: ~no liquidity on BSC
     momentum_cap_pct: float = 10.0  # +/-10% over MOMENTUM_BARS maps to the full momentum score
+    min_volume_24h_usdt: float = 0.0  # a token whose known 24h volume is <= this (0 = no trades) can't be picked
     liquidity_floor_usdt: float = 1_000.0  # log scale: 1k USDT 24h volume -> 0, 10M -> full liquidity score
     liquidity_full_usdt: float = 10_000_000.0
     weight_momentum: float = 40.0
@@ -123,6 +125,11 @@ def _blocker(symbol: str, meta: Mapping[str, Any], cfg: AutoPickConfig) -> Optio
     fam = token_family(symbol)
     if fam in cfg.blocked_families:
         return f"{fam} tokens have almost no liquidity on BNB Chain"
+    vol = _num(_first(meta, "volume_24h", "volume24h"))
+    if vol is not None and vol <= cfg.min_volume_24h_usdt:
+        if cfg.min_volume_24h_usdt <= 0:
+            return "no trading volume in the last 24h (0 USDT), so a quote could be poor"
+        return f"24h volume {vol:,.0f} USDT is below the {cfg.min_volume_24h_usdt:,.0f} USDT minimum"
     mo = _num(_first(meta, "min_order_usdt", "minOrderUsdt"))
     if mo is not None and mo > cfg.max_order_usdt:
         return f"minimum order {mo:g} USDT is above the {cfg.max_order_usdt:g} USDT per-order cap"
