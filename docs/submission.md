@@ -29,6 +29,9 @@ limits you set.
   happened and can never place a trade.
 - **Checks every trade against hard limits.** The risk layer approves or blocks each live buy before it reaches the
   wallet and can always force Stay out. Stop-loss, take-profit and trailing-stop sells always go through.
+- **Trades a watchlist.** The user can pick 1 to 5 tokens from the full list of about 680 tokenized stocks, or let
+  Auto-pick choose them by theme (AI & chips, EV & energy, big tech, crypto, or any) using momentum, trend and how
+  much they trade. Regime evaluates each one every tick, and the risk layer keeps all buys together within the caps.
 - **Lets you stay in control.** The dashboard has Pause and an Emergency stop, plus optional confirmation mode if you
   want to approve each trade.
 
@@ -82,12 +85,6 @@ Both trades were made by Regime on its own, with no human approving them.
 - **Sized from the real wallet:** Auto mode sizes each buy from what the wallet actually holds, so a small wallet
   never gets an oversized order.
 - **Exits always go through,** checked against each candle's high and low, not just its close.
-
-<!-- Watchlist + Auto-pick: add this bullet under "What it does" ONLY if it is merged into main before submission:
-- **Trades a watchlist.** The user can pick 1 to 5 tokens from the full list of about 680 tokenized stocks, or let
-  Auto-pick choose them by theme (AI & chips, EV & energy, big tech, crypto, or any) using momentum, trend and how
-  much they trade. Regime evaluates each one every tick, and the risk layer keeps all buys together within the caps.
--->
 
 ## Architecture
 
