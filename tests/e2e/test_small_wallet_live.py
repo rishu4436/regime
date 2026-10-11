@@ -8,9 +8,9 @@ wallets of 30 / 100 / 500 USDT:
 - 30 USDT: a BUY is either filled at (or above) the minimum or blocked with a clear reason - never a FAILED execution.
 - Weekend clock: NVDAon (Ondo OFFHOURS) stays out with live_token_paused / a risk off-hours block; NVDAB still trades.
 
-On main the 100 USDT case is blocked (engine sizes 2% of equity, risk refuses < token minimum); it depends on the
-pending bot2/followup (engine raises to get_token_status().min_order_usdt) + bot3/live-fixes (risk raises small buys to
-the token minimum) and is xfail(strict=False). 30 USDT may block today; it must do so with a clear reason.
+With bot2/followup (engine raises to get_token_status().min_order_usdt) + bot3/live-fixes (risk raises small buys to the
+token minimum) every funded case fills at the token minimum (NVDAB 10, NVDAon 20). 30 USDT may fill at the minimum or
+block, always with a clear reason.
 """
 from __future__ import annotations
 
@@ -32,7 +32,6 @@ from .helpers import SEED, trading_strategy
 WEEKDAY = datetime(2026, 10, 14, 15, 0, tzinfo=timezone.utc)  # Wed: Ondo TRADING
 WEEKEND = datetime(2026, 10, 11, 10, 0, tzinfo=timezone.utc)  # Sun: Ondo OFFHOURS
 TOKEN_MIN = {"NVDAB": 10.0, "NVDAon": 20.0}
-PENDING = "needs bot2/followup (engine raises BUYs to min_order_usdt) + bot3/live-fixes (risk raises to token minimum)"
 
 
 def _real_impls():
@@ -181,7 +180,7 @@ def test_engine_gets_token_minimum_in_market_context(monkeypatch):
 
 
 # ---------------------------------------------------------------- pending bot2/followup + bot3/live-fixes
-@pytest.mark.parametrize("usdt", [pytest.param(100, marks=pytest.mark.xfail(strict=False, reason=PENDING)), 500])
+@pytest.mark.parametrize("usdt", [100, 500])
 @pytest.mark.parametrize("symbol", ["NVDAB", "NVDAon"])
 def test_funded_wallet_fills_at_least_one_buy(usdt, symbol, monkeypatch):
     c, ex = _client(usdt, WEEKDAY, monkeypatch)
