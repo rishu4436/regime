@@ -100,3 +100,24 @@ template is used instead).
 The engine stay-out and the risk block give the identical sentence for the same situation (numbers rendered by
 `live.pct_text`), and `templates.dedupe_block_reasons` drops the repeat ("Risk blocked the trade too, for the same
 reason"). The Grok facts carry the de-duplicated `block_reasons`, and the system prompt has the same price-impact rules.
+
+## Auto-pick narratives - `backend/llm/narratives.py`
+
+- `narrative_of(symbol, name=None) -> Optional[str]`: `AI_CHIPS`, `EV_ENERGY`, `BIG_TECH`, `CRYPTO` or `None`.
+  Map only, never uses the network. Tokenized symbols are reduced to the underlying ticker (`NVDAB` bStock,
+  `NVDAon` Ondo, `NVDAx` xStock -> `NVDA`); a suffix is stripped only when the rest is a ticker in the map, so a
+  real ticker ending in B / X / ON is never cut short. A company name (`"NVIDIA Corporation"`) is the fallback.
+  Broad ETFs (SPY, QQQ, IVV, VOO) and unknown tokens -> `None`, so they only match "Any".
+- `make_narrative_of(explainer_or_client=None)`: same lookup plus Grok for unmapped tokens, only when an xAI key is
+  set. Short timeout (6 s), answer must be exactly one code (else `None`), cached per symbol. No key -> map only.
+  `DefaultExplainer().narrative_of()` returns the same.
+- Wiring into the engine: `rank_tokens(tokens, candles, narrative, n, narrative_of=narrative_of)`.
+- `explain_picks(picks, skipped=None) -> list[str]` (also `DefaultExplainer.explain_picks`): one sentence per pick
+  and per skipped token, e.g. "Picked NVDAB (AI & chips): up 6.2% over 20 bars, above a rising 50-bar average,
+  24h volume 1.2M USDT, market strong uptrend." / "Skipped TSLAx: xStock tokens have almost no liquidity on BNB
+  Chain." Raw codes are translated; the narrative is named once.
+- `NARRATIVE_LABELS`: AI & chips, EV & energy, Big Tech, Crypto-linked, Any.
+
+Per-order cap wording: the cap is runtime-configurable, so nothing here hardcodes it. Risk details carry their own
+number; a bare `live_order_cap` / `live_below_min_order` code is shown with the current
+`per_order_cap_usdt` from `set_live_limits(...)` ("the per-order cap of 200 USDT"), or without a number if unknown.

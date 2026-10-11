@@ -217,6 +217,8 @@ REASON_TEXT: dict[str, str] = {
     "live_quote_notional": "the quote amount is over the size risk allowed or the per-order cap",
     "live_order_cap": f"the per-order cap ({AGENT})",
     "live_max_exposure": "the max open exposure cap for live trading",
+    "live_token_exposure": "the max amount Regime may hold in one token is reached",
+    "reserved_orders": "other buys approved in this same check already use the remaining room under the caps",
     "live_daily_notional": f"the daily live buying cap ({AGENT})",
     "wallet_per_tx_cap": f"the per-transaction limit ({WALLET})",
     "wallet_daily_limit": f"the daily spending limit ({WALLET})",
@@ -351,7 +353,31 @@ def _token_status_text(detail: str) -> Optional[str]:
     return None
 
 
+# Current per-order cap in USDT (risk.live_limits()["per_order_cap_usdt"], pushed in via templates.set_live_limits).
+# The cap is runtime-configurable, so wording never assumes a fixed number; it is shown only when known.
+_ORDER_CAP_USDT: Optional[float] = None
+_CAP_CODES = frozenset({"live_order_cap", "live_below_min_order"})
+
+
+def set_order_cap(value: Any) -> None:
+    """Latest effective per-order cap (USDT) or None to forget it. Read defensively."""
+    global _ORDER_CAP_USDT
+    try:
+        v = float(value) if value is not None and not isinstance(value, bool) else None
+    except (TypeError, ValueError):
+        v = None
+    _ORDER_CAP_USDT = v if v is not None and v > 0 and v != float("inf") else None
+
+
 def _code_text(code: str, detail: str) -> Optional[str]:
+    text = _code_text_base(code, detail)
+    # A bare code (no number in the detail) names the cap's current value, so a raised cap isn't hidden.
+    if text and code in _CAP_CODES and _ORDER_CAP_USDT is not None and not re.search(r"\d", detail or ""):
+        text = text.replace("the per-order cap", f"the per-order cap of {_ORDER_CAP_USDT:g} USDT", 1)
+    return text
+
+
+def _code_text_base(code: str, detail: str) -> Optional[str]:
     if code in ("live_token_status", "live_token_paused"):
         return _token_status_text(detail) or REASON_TEXT[code]
     if code == "min_order_notional" and "token minimum" in detail.lower():
