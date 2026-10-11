@@ -27,7 +27,7 @@ class _OpenPosition:
     entry_price: float  # fill price incl. slippage
     quantity: float
     cost: float  # cash spent incl. entry fee
-    trail: Optional[float]
+    hwm: float  # highest high of the PRIOR bars since entry (starts at the entry price)
     max_loss_level: Optional[float]
 
 
@@ -118,7 +118,7 @@ def run_backtest(
                     p.entry_price,
                     ex.take_profit_pct,
                     ex.stop_loss_pct,
-                    p.trail,
+                    exits.trail_from_hwm(p.hwm, trail_pct) if trail_pct is not None else None,
                     p.max_loss_level,
                 )
                 if pe is not None:
@@ -131,8 +131,7 @@ def run_backtest(
                     )
                     last_exit = i
                     continue
-                if p.trail is not None and trail_pct is not None:
-                    p.trail = exits.ratchet_trail(p.trail, c.high, trail_pct)
+                p.hwm = max(p.hwm, c.high)  # raised AFTER the exit check (a bar never tightens its own stop)
                 ie = indicator_exit(strategy, mi, i)
                 if ie is not None:
                     close(p, i, c.close, ie[0], ie[1])
@@ -161,8 +160,10 @@ def run_backtest(
                                 entry_price=fill,
                                 quantity=qty,
                                 cost=cost,
-                                trail=exits.initial_trail(fill, trail_pct) if trail_pct is not None else None,
-                                max_loss_level=exits.max_loss_level(fill, qty, equity_now, risk.max_loss_per_trade_pct),
+                                hwm=fill,
+                                max_loss_level=exits.max_loss_level(
+                                    fill, qty, initial_capital, risk.max_loss_per_trade_pct
+                                ),
                             )
                             open_pos.append(p)
                             entry_reasons[id(p)] = f"{strategy.entry.logic.value}: " + "; ".join(ev.detail)
