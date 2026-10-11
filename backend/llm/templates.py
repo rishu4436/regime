@@ -6,7 +6,10 @@ from typing import Optional, Sequence
 
 from backend.contracts import (
     Action, Alert, AlertLevel, Decision, ExitReason, OrderStatus, PerformanceSummary, Position, StatusSnapshot,
+    TradingMode,
 )
+
+from . import live as live_facts
 
 EXIT_REASON_TEXT: dict[ExitReason, str] = {
     ExitReason.TRAILING_STOP: "the trailing stop was hit",
@@ -74,6 +77,8 @@ def _exit_sentence(d: Decision) -> Optional[str]:
 
 
 def explain_decision(d: Decision) -> str:
+    if live_facts.is_live(d):
+        return explain_live_decision(d)
     verb = {Action.BUY: "Buy", Action.SELL: "Sell", Action.STAY_OUT: "Stay out of"}[d.action]
     parts = [f"{verb} {d.symbol} ({d.agent_mode.value} mode, {d.mode.value})."]
     ctx = f"Strategy: {d.strategy}"
@@ -116,6 +121,112 @@ def explain_decision(d: Decision) -> str:
     return " ".join(parts)
 
 
+# ------------------------------------------------------------------ LIVE (real funds, autonomous 24/7)
+_LIVE_DONE = {"BUY": "bought", "SELL": "sold"}
+_REDUCED_RE = re.compile(r"reduced from ([\d,.]+) to ([\d,.]+) USDT")
+
+
+def live_execution_sentence(d: Decision) -> Optional[str]:
+    """Real-funds execution sentence: amount, route, fill price, price impact, tx hash + BscScan link."""
+    ex = d.execution
+    if ex is None:
+        return None
+    f = live_facts.execution_facts(ex)
+    status = (f["status"] or "").upper()
+    side = (f["side"] or ("SELL" if d.action == Action.SELL else "BUY")).upper()
+    sym = f["symbol"] or d.symbol
+    route = f" via {f['route']}" if f["route"] else ""
+    if status in ("FILLED", "PARTIALLY_FILLED") and (f["quantity"] or f["amount_usdt"]):
+        amt = f"{f['amount_usdt']:,.2f} USDT" if f["amount_usdt"] is not None else "an unreported USDT amount"
+        txt = (f"The agent {_LIVE_DONE.get(side, side.lower())} {sym} on its own with real funds on BNB Chain mainnet: "
+               f"{amt}{route}")
+        if f["fill_price"] is not None:
+            txt += f" at a fill price of {_price(f['fill_price'])}"
+        if f["quantity"]:
+            txt += f" ({f['quantity']:g} {sym}" + (f", fee {_money(f['fee'])})" if f["fee"] else ")")
+        if status == "PARTIALLY_FILLED":
+            txt += ", partially filled"
+        txt += "."
+        if f["price_impact_pct"] is not None:
+            txt += f" Price impact {f['price_impact_pct']:.2f}%."
+    else:
+        why = f": {live_facts.plain_reason(f['error'])}" if f["error"] else ""
+        txt = f"The live {side} order for {sym}{route} was not filled ({status or 'unknown status'}){why}."
+        if status in ("FAILED", "REJECTED", "EXPIRED", "CANCELLED", "CANCELED") or f["error"]:
+            txt += " No position change from this order."
+    if f["tx_hash"]:
+        txt += f" Tx hash {f['tx_hash']}" + (f": {f['explorer_url']}" if f["explorer_url"] else "") + "."
+    elif f["explorer_url"]:
+        txt += f" BscScan: {f['explorer_url']}."
+    return txt
+
+
+def live_block_reasons(d: Decision) -> list[str]:
+    """Plain-language risk block reasons for a LIVE decision (each names the limit hit, numbers kept)."""
+    v = d.risk_verdict
+    if v is None or v.approved:
+        return []
+    raw = list(v.reasons) or [f"Blocked ({c.name}): {c.detail}" for c in v.checks if not c.passed]
+    return live_facts.plain_reasons(raw) or ["no reason given"]
+
+
+def live_size_cuts(d: Decision) -> list[str]:
+    """'size cut from 30.00 to 25.00 USDT by the per-order cap (set by the agent's risk limits)' for capped approvals."""
+    v = d.risk_verdict
+    if v is None or not v.approved:
+        return []
+    out = []
+    for c in v.checks:
+        m = _REDUCED_RE.search(c.detail or "")
+        if m and c.passed:
+            limit = (live_facts.REASON_TEXT.get(c.name) or live_facts.plain_reason(f"{c.name} {c.detail}").split(" (")[0])
+            out.append(f"size cut from {m.group(1)} to {m.group(2)} USDT by {limit}")
+    return out
+
+
+def explain_live_decision(d: Decision) -> str:
+    """LIVE decision: the agent acts on its own with real funds; never approval/confirmation wording."""
+    verb = {Action.BUY: "Buy", Action.SELL: "Sell", Action.STAY_OUT: "Stay out of"}[d.action]
+    parts = [f"LIVE, real funds, autonomous: {verb} {d.symbol} ({d.agent_mode.value} mode)."]
+    ctx = f"Strategy: {d.strategy}"
+    if d.regime is not None:
+        ctx += f", market regime: {_human(d.regime.value)}"
+    parts.append(ctx + ".")
+    sig = d.signal
+    exit_txt = _exit_sentence(d)
+    filled_exit = exit_txt is not None and exit_txt.startswith("Sold")
+    if exit_txt and not filled_exit:
+        parts.append(exit_txt)
+    elif filled_exit and sig is not None and sig.exit_reason:
+        parts.append(f"Exit trigger: {EXIT_REASON_TEXT[sig.exit_reason]}.")
+    if d.reason:
+        parts.append("Reason: " + _sentence(d.reason))
+    if sig is not None:
+        if sig.conditions_met:
+            parts.append("Conditions met: " + ", ".join(_human(c) for c in sig.conditions_met) + ".")
+        engine_codes = [c for c in sig.conditions_failed if c in live_facts.REASON_TEXT]
+        others = [c for c in sig.conditions_failed if c not in live_facts.REASON_TEXT]
+        if engine_codes:
+            parts.append("Stayed out because " + "; ".join(live_facts.plain_reason(c) for c in engine_codes) + ".")
+        if others:
+            parts.append("Conditions not met: " + ", ".join(_human(c) for c in others) + ".")
+        if sig.price is not None and not exit_txt and d.execution is None:
+            parts.append(f"Price at decision: {_price(sig.price)}.")
+    v = d.risk_verdict
+    if v is not None:
+        if v.approved:
+            cuts = live_size_cuts(d)
+            parts.append(f"Live risk checks passed ({_money(v.adjusted_notional)})" + ("; " + "; ".join(cuts) if cuts else "") + ".")
+        else:
+            parts.append("Risk blocked the trade, no real funds were spent: " + _sentence("; ".join(live_block_reasons(d))))
+    ex_txt = live_execution_sentence(d)
+    if ex_txt:
+        parts.append(ex_txt)
+    elif d.action != Action.STAY_OUT and (v is None or v.approved):
+        parts.append("The agent is placing this order on its own; no fill yet.")
+    return " ".join(parts)
+
+
 def _position_line(p: Position) -> str:
     line = f"{p.symbol} #{short_id(p.id)}: {p.quantity:g} @ {_price(p.avg_entry_price)}"
     if p.current_price is not None:
@@ -133,7 +244,10 @@ def control_line(s: StatusSnapshot) -> str:
     else:
         state = "running"
     txt = f"Agent is {state} in {c.trading_mode.value} mode"
-    txt += ", trades need your confirmation" if c.confirmation_mode else ", trades auto-execute"
+    if c.trading_mode == TradingMode.LIVE:
+        txt += ", trading autonomously 24/7 with real funds on BNB Chain mainnet"
+    else:
+        txt += ", trades need your confirmation" if c.confirmation_mode else ", trades auto-execute"
     if c.reason:
         txt += f" ({c.reason})"
     return txt + "."
@@ -224,8 +338,10 @@ def answer(question: str, s: StatusSnapshot, performance: Optional[PerformanceSu
            alerts: Optional[Sequence[Alert]] = None) -> str:
     q = question or ""
     if _TRADE_REQUEST.search(q):
+        controls = ("pause / override / emergency stop" if s.control.trading_mode == TradingMode.LIVE
+                    else "confirm / pause / override / emergency stop")
         return ("I can only explain what the agent is doing; I never place, change or cancel trades. "
-                "Use the dashboard controls (confirm / pause / override / emergency stop) to act. " + control_line(s))
+                f"Use the dashboard controls ({controls}) to act. " + control_line(s))
     builders = {"last": last_decision_line, "regime": regime_line, "strategy": strategy_line,
                 "positions": positions_line, "performance": lambda st: performance_line(st, performance), "control": control_line,
                 "alerts": lambda st: alerts_line(alerts)}
