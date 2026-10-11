@@ -109,6 +109,16 @@ def select(
                 + (f", size x{mult:g}" if mult != 1.0 else ""),
             )
     names = ", ".join(p.value for p in prefs)
+    if PresetName.DCA in enabled_set:
+        # Last fallback: the user enabled DCA but none of the presets this regime/style prefers (e.g. only DCA on
+        # ACTIVE, whose table never lists DCA). Run plain DCA at this regime's size multiplier. Pause regimes
+        # (empty preference list, handled above) still pause.
+        return (
+            PresetName.DCA,
+            mult,
+            f"{regime.value} + {style.value} -> DCA (last fallback: none of the suitable presets ({names}) is "
+            "enabled)" + (f", size x{mult:g}" if mult != 1.0 else ""),
+        )
     return None, 0.0, f"{regime.value} + {style.value}: none of the suitable presets ({names}) is enabled; staying out"
 
 

@@ -162,6 +162,10 @@ and classify 99% of 480 seeded mock series correctly.
 | HIGH_VOLATILITY | DCA › Smart DCA (×0.5) | **pause** | Grid (×0.5) |
 | DOWNTREND | DCA (×0.25, minimal) | **pause** | **pause** |
 
+**DCA last fallback:** if none of the presets in a regime's list is enabled but DCA is (e.g. only DCA enabled with
+ACTIVE, whose lists never contain DCA), plain DCA runs at that regime's size multiplier, with "last fallback" in the
+reason. Pause regimes (no list) still pause, and every `live_safe` gate and cap still applies.
+
 BUY size = `BASE_SIZE_PCT[style]` (5 / 10 / 15 %) × multiplier, applied to `AutoConfig.capital`. SELL targets the
 **oldest** position in the symbol (`position_id`, 100% of it, `price` = close). `exit_reason` maps each preset onto the
 closest `ExitReason`, because there is no generic strategy-exit value:
