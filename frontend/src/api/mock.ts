@@ -10,7 +10,7 @@ import { detectRegime, presetWantsBuy, STYLE_MAP } from "../lib/auto";
 import { appendCandle, generateMixedCandles, rng } from "../lib/candles";
 import { parseStrategyText } from "../lib/parseText";
 import { backtest, conditionLabel, evaluateLast, fillStrategy, type FullStrategy } from "../lib/strategy";
-import { ApiError, type ActivateManualBody, type ApiClient, type LiveCooldown, type LiveGate, type LiveLimits, type ParseResult, type PresetsTable, type WalletInfo, type WalletConnectStatus } from "./types";
+import { ApiError, type ActivateManualBody, type ApiClient, type LiveCooldown, type LiveGate, type LiveLimits, type ParseResult, type PresetsTable, type WalletInfo, type WalletConnectStatus, type TradingLimits, type TradingLimitsResponse } from "./types";
 
 /** Mock-only demo scenario: "LIVE" pretends to be a LIVE (mainnet) backend with an Agentic Wallet so the LIVE UI can be
  * shown without funds. Nothing leaves the browser; tx hashes are random and labelled as demo. Persisted; switching reloads. */
@@ -33,6 +33,8 @@ const TOKENS: TokenInfo[] = [
   { symbol: "TSLAx", name: "Tesla xStock", token_type: "XSTOCK", chain: "BSC", underlying: "TSLA", decimals: 8 },
   { symbol: "AAPLB", name: "Apple BStock", token_type: "BSTOCK", chain: "BSC", underlying: "AAPL", decimals: 18 },
 ];
+const LIMIT_DEFAULTS: TradingLimits = { order_mode: "fixed", order_usdt: 25, order_pct: 2, max_order_usdt: 25, max_total_usdt: 100, max_per_token_usdt: 50, daily_loss_usdt: 10 };
+const WALLET_DAILY_LIMIT = 500;
 const START: Record<string, number> = { NVDAB: 140, NVDAon: 140, TSLAx: 200, AAPLB: 170 };
 const LIVE_REGIMES: Regime[] = ["MILD_UPTREND", "SIDEWAYS", "OVERSOLD_PULLBACK", "STRONG_UPTREND", "HIGH_VOLATILITY", "DOWNTREND"];
 const FEE = 0.001;
@@ -142,6 +144,23 @@ export class MockApi implements ApiClient {
     if (t0 == null) return fail(404, `unknown session ${session_id}`);
     const age = Date.now() - t0;
     return ok<WalletConnectStatus>(age > 120_000 ? { status: "expired" } : age > 6000 ? { status: "connected", address: DEMO_WALLET, wallet_changed: false } : { status: "pending" }, 150);
+  }
+  // Trading limits (mock of Bot 6's GET/PUT /api/settings/limits): saved in localStorage like logs/limits.json
+  private limits: TradingLimits = (() => { try { const r = localStorage.getItem("mock.limits"); if (r) return { ...LIMIT_DEFAULTS, ...JSON.parse(r) }; } catch { /* ignore */ } return { ...LIMIT_DEFAULTS }; })();
+  getLimits() { return ok<TradingLimitsResponse | null>({ ...this.limits, wallet_daily_limit_usdt: WALLET_DAILY_LIMIT, defaults: { ...LIMIT_DEFAULTS }, updated_at: now() }); }
+  putLimits(b: TradingLimits) {
+    const nums: (keyof TradingLimits)[] = ["order_usdt", "order_pct", "max_order_usdt", "max_total_usdt", "max_per_token_usdt", "daily_loss_usdt"];
+    if (b.order_mode !== "fixed" && b.order_mode !== "pct") return fail(422, "order_mode must be fixed or pct");
+    for (const k of nums) if (!(typeof b[k] === "number" && (b[k] as number) > 0)) return fail(422, `${k} must be greater than 0`);
+    if (b.order_pct > 100) return fail(422, "order_pct can't be above 100");
+    if (b.order_mode === "fixed" && b.order_usdt > b.max_order_usdt) return fail(422, "order size is above the max per order");
+    if (b.max_order_usdt > b.max_total_usdt) return fail(422, "max per order can't be above max total invested");
+    if (b.max_per_token_usdt > b.max_total_usdt) return fail(422, "max in one token can't be above max total invested");
+    for (const k of ["max_order_usdt", "max_total_usdt", "max_per_token_usdt", "daily_loss_usdt"] as const)
+      if (b[k] > WALLET_DAILY_LIMIT) return fail(422, `${k} (${b[k]}) is above the wallet's own daily limit of ${WALLET_DAILY_LIMIT} USDT`);
+    this.limits = { order_mode: b.order_mode, order_usdt: b.order_usdt, order_pct: b.order_pct, max_order_usdt: b.max_order_usdt, max_total_usdt: b.max_total_usdt, max_per_token_usdt: b.max_per_token_usdt, daily_loss_usdt: b.daily_loss_usdt };
+    try { localStorage.setItem("mock.limits", JSON.stringify(this.limits)); } catch { /* ignore */ }
+    return this.getLimits() as Promise<TradingLimitsResponse>;
   }
   reconcileWallet() { return ok({ address: DEMO_WALLET, was_blocked: false, kept: [], dropped: [], wallet_blocked: false }, 300); }
   getTokens(q = "") {

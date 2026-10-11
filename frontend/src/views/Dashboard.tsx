@@ -12,6 +12,7 @@ import { ApiError, type PerformanceSummary } from "../api/types";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ActivityFeed, AgentIdentityCard, AutonomyMonitor, CapsPanel, LiveGateCard, TxLink, WalletPanel } from "../components/Live";
 import { useLive } from "../lib/live";
+import { TradingLimitsCard } from "../components/TradingLimits";
 
 interface Props { status: StatusSnapshot | null; refresh: () => void; tick: number; alertsVersion: number; go: (tab: "manual" | "auto") => void }
 
@@ -185,6 +186,7 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
             )}
           </Card>
           {isLive && <><CapsPanel status={status} decisions={feed} /><WalletPanel /><LiveGateCard /></>}
+          <TradingLimitsCard refresh={refresh} />
           <AgentIdentityCard />
           <Controls status={status} onChange={refresh} tick={tick} />
           <AskAgent tick={tick} />

@@ -104,6 +104,24 @@ export interface WalletConnectStatus {
 export interface WalletReconcileResult { address?: string | null; was_blocked?: boolean; kept?: unknown[]; dropped?: unknown[]; wallet_blocked?: boolean }
 export type ActivateManualBody = { strategy_id: string } | { strategy: ManualStrategy };
 
+// ---------------------------------------------------------------- Trading limits (Bot 6: GET/PUT /api/settings/limits, localhost only)
+export type OrderMode = "fixed" | "pct";
+/** User-editable trading limits. order_mode "fixed" = order_usdt per order; "pct" = order_pct % of wallet USDT per order. */
+export interface TradingLimits {
+  order_mode: OrderMode;
+  order_usdt: number;
+  order_pct: number;
+  max_order_usdt: number;
+  max_total_usdt: number;
+  max_per_token_usdt: number;
+  daily_loss_usdt: number;
+}
+/** GET /api/settings/limits: current limits + the wallet's own daily limit (final cap) + the safe defaults. */
+export interface TradingLimitsResponse extends TradingLimits {
+  wallet_daily_limit_usdt?: number | null;
+  defaults?: TradingLimits | null;
+  updated_at?: string | null;
+}
 /** Error from the API: 404 unknown id/symbol, 409 invalid state, 422 validation. */
 export class ApiError extends Error {
   constructor(public status: number, public detail: string) {
@@ -156,6 +174,10 @@ export interface ApiClient {
   startWalletConnect(): Promise<WalletConnectStart>;
   getWalletConnect(session_id: string): Promise<WalletConnectStatus>;
   reconcileWallet(): Promise<WalletReconcileResult>;
+  /** GET /api/settings/limits (null = not available on this backend: the panel hides). */
+  getLimits(): Promise<TradingLimitsResponse | null>;
+  /** PUT /api/settings/limits (localhost only: 403 elsewhere; 422 on invalid values). */
+  putLimits(body: TradingLimits): Promise<TradingLimitsResponse>;
   approve(decisionId: string): Promise<Decision>;
   reject(decisionId: string, reason?: string): Promise<Decision>;
   /** Manual override: close ONE lot by Position.id at the last price (signal.exit_reason MANUAL). 404 if not open. */
