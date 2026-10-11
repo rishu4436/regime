@@ -148,7 +148,7 @@ def test_list_tokens_falls_back_to_public_then_registry_then_previous(fake, api,
     good = c3.list_tokens()
     assert count_by_type(good) == {"bStock": 47, "Ondo": 442, "xStock": 2}   # + registry AAPLB, TSLAx, METAx
     aaplb = {r["symbol"]: r for r in good}["AAPLB"]
-    assert aaplb["tradable"] is False and aaplb["reason"] == "unlisted"
+    assert aaplb["reason"] != "unlisted" and aaplb["source"] in ("registry", "registry+token_status")
     fake.on("GET", "/api/v1/dex/market/rwa/tokens", err(50000, "boom", 500))
     clock.advance(601)
     assert len(c3.list_tokens()) == len(good) and "boom" in c3.universe_error
@@ -245,3 +245,74 @@ def test_client_set_live_limits_paper_and_sim(api, clock, monkeypatch):
     monkeypatch.setenv("BINANCE_LIVE_HARD_MAX_ORDER_USDT", "100")
     with pytest.raises(ValueError):
         s.set_live_limits(150)
+
+
+# ------------------------------------------------------------------ follow-ups (live run 2026-10-11 13:28 IST)
+AAPLB = "0x431a3bee82e2ca41e49895cbece5bb0f76a89b7a"
+
+
+class DynPublic(FakePublic):
+    """Public client whose rwa/dynamic answers TRADING for AAPLB (like the old /api/tokens token_status path)."""
+
+    def rwa_dynamic(self, chain_id, addr):
+        if addr.lower() != AAPLB:
+            raise RuntimeError("not in this test")
+        return {"tokenInfo": {"price": "254.10", "sharesMultiplier": "1"}, "stockInfo": {"price": "254.0"},
+                "statusInfo": {"openState": True, "marketStatus": None, "reasonCode": "TRADING"},
+                "limitInfo": {"maxActiveNotionalValue": "5000"}}
+
+
+def test_registry_token_missing_from_rwa_tokens_uses_token_status(fake, api, clock):
+    assert AAPLB not in {r["tokenContractAddress"] for r in RWA_TOKENS}   # real: AAPLB absent from rwa/tokens
+    fake.on("GET", "/api/v1/dex/market/rwa/tokens", ok(RWA_TOKENS))
+    fake.on("POST", "/api/v1/dex/market/price-info", ok([]))
+    fake.on("GET", "/api/v1/dex/market/rwa/price", ok([]))
+    c = paper(api, clock, public=DynPublic())
+    by = {r["symbol"]: r for r in c.list_tokens()}
+    a = by["AAPLB"]
+    st = c.get_token_status("AAPLB")
+    assert a["status"] == st.trading_status.value == "TRADING" and a["tradable"] is True and a["reason"] is None
+    assert a["price"] == pytest.approx(254.10) and a["max_order_usdt"] == 5000 and a["min_order_usdt"] == 10
+    assert a["source"] == "registry+token_status" and a["name"] == "Apple BStock"
+    # non-registry tokens that are only in the public list keep the "unlisted" behaviour
+    crmb = by["CRMB"]
+    assert crmb["status"] == "UNKNOWN" and crmb["tradable"] is False and crmb["reason"] == "unlisted"
+    # registry tokens that ARE in rwa/tokens still come from rwa/tokens
+    assert by["NVDAB"]["source"] == "rwa_tokens"
+    # registry xStocks stay disabled
+    assert by["TSLAx"]["tradable"] is False and by["TSLAx"]["reason"] == "xstock_disabled"
+
+
+def test_volume_none_when_missing_from_price_info_zero_when_really_zero():
+    rows = rows_from_rwa_tokens(RWA_TOKENS)
+    pltrb = "0x0ca5d51d0277bd006fd9607d3e560785ebad8222"
+    mrvlb = "0x16cd4fe7e8880ecc3ba222795229e20489fc2c76"
+    apply_price_info(rows, [
+        {"tokenContractAddress": pltrb, "buyVolume24H": "0", "sellVolume24H": "0"},        # real 0 (PLTRB, live)
+        {"tokenContractAddress": "0x02fca66c1d1afb4e2a7884261eb00f63598a7436", "buyVolume24H": None,
+         "sellVolume24H": None},                                                            # present but null
+    ])
+    by = {r["contract_address"]: r for r in rows}
+    assert by[pltrb]["volume_24h"] == 0.0
+    assert by["0x02fca66c1d1afb4e2a7884261eb00f63598a7436"]["volume_24h"] is None
+    assert by[mrvlb]["volume_24h"] is None                                                  # absent -> None
+    # the saved real batch: PLTRB is in it with an explicit 0/0
+    assert any(r["tokenContractAddress"] == pltrb and r["buyVolume24H"] == "0" and r["sellVolume24H"] == "0"
+               for r in PRICE_INFO)
+
+
+def test_price_info_batches_cover_every_row_and_gaps_stay_none(fake, api, clock):
+    seen = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        seen.extend(b["tokenContractAddress"] for b in body)
+        return ok([{"tokenContractAddress": b["tokenContractAddress"], "buyVolume24H": "1", "sellVolume24H": "2"}
+                   for b in body[1:]])  # first token of each batch missing from the response
+
+    fake.on("GET", "/api/v1/dex/market/rwa/tokens", ok(RWA_TOKENS))
+    fake.on("POST", "/api/v1/dex/market/price-info", handler)
+    rows = [r for r in paper(api, clock).list_tokens() if r["source"] == "rwa_tokens"]
+    assert len(seen) == len(rows) == 488 and len(set(seen)) == 488
+    missing = [r for r in rows if r["volume_24h"] is None]
+    assert len(missing) == 5 and all(r["volume_24h"] == 3.0 for r in rows if r not in missing)

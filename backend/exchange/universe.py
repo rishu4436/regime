@@ -152,7 +152,9 @@ def rows_from_tokens(tokens: Iterable[TokenInfo], source: str = "registry",
 
 
 def apply_price_info(rows: list[dict[str, Any]], data: Iterable[Mapping[str, Any]]) -> None:
-    """Merge `/market/price-info` rows: volume_24h = DEX buy + sell volume (USD), liquidity, price if missing."""
+    """Merge `/market/price-info` rows: volume_24h = DEX buy + sell volume (USD), liquidity, price if missing.
+    A token absent from the response (or with both volumes null) keeps volume_24h=None, never 0. A real "0"/"0"
+    (e.g. PLTRB on 2026-10-11: no DEX trade for ~2 weeks) is reported as 0.0."""
     by_addr = {r["contract_address"]: r for r in rows}
     for p in data or []:
         r = by_addr.get(str(p.get("tokenContractAddress") or "").lower())

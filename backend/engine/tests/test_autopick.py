@@ -83,7 +83,7 @@ def test_narrative_falls_back_to_token_field_and_survives_lookup_errors():
 
 
 def test_max_tokens_limits_picks_and_is_validated():
-    data = {f"T{i}B": trend(pct=0.1 * (i + 1)) for i in range(7)}
+    data = {f"T{i}B": trend(pct=0.04 * (i + 1)) for i in range(7)}  # below the momentum cap
     res = rank_tokens(list(data), data, "ANY", 2)
     assert len(res.picks) == 2 and len(res.ranked) == 7
     assert res.picks[0].symbol == "T6B"  # strongest momentum first
@@ -261,3 +261,40 @@ def test_candidate_tokens_prefilters_the_full_list():
     assert [r["symbol"] for r in candidate_tokens(rows, "BIG_TECH", narrative_of=lambda s: None)] == ["AAPLB"]
     raised = candidate_tokens(rows, "ANY", limit=1, cfg=__import__("backend.engine.autopick", fromlist=["x"]).AutoPickConfig(max_order_usdt=200))
     assert raised[0]["symbol"] == "BIGB"  # a raised per-order cap makes the 100 USDT minimum buyable
+
+
+def test_zero_volume_token_is_not_picked():
+    """Live preview (Bot 4, 11 Oct): PLTRB ranked first with '24h volume 0 USDT'. A known 0 volume is ineligible;
+    an unknown (None) volume still is not."""
+    from backend.engine.autopick import AutoPickConfig, candidate_tokens, rank_tokens
+
+    up = wiggle(n=120)
+    toks = [
+        {"symbol": "PLTRB", "status": "trading", "volume_24h": 0},
+        {"symbol": "NVDAB", "status": "trading", "volume_24h": 25_000},
+        {"symbol": "AMDB", "status": "trading", "volume_24h": None},
+    ]
+    res = rank_tokens(toks, {t["symbol"]: up for t in toks}, "ANY", 3)
+    picked = [p.symbol for p in res.picks]
+    assert "PLTRB" not in picked and set(picked) == {"NVDAB", "AMDB"}, picked
+    skip = {s["symbol"]: s["reason"] for s in res.skipped}
+    assert "no trading volume" in skip["PLTRB"], skip
+    assert [t["symbol"] for t in candidate_tokens(toks)] == ["NVDAB", "AMDB"]
+    strict = AutoPickConfig(min_volume_24h_usdt=50_000)
+    res2 = rank_tokens(toks, {t["symbol"]: up for t in toks}, "ANY", 3, cfg=strict)
+    assert [p.symbol for p in res2.picks] == ["AMDB"]
+    assert "below the 50,000 USDT minimum" in {s["symbol"]: s["reason"] for s in res2.skipped}["NVDAB"]
+
+
+def test_stale_candles_token_is_not_picked():
+    """Live: PLTRB's newest 1h candle was from 29 Sep while others were current. Stale vs the freshest candidate -> skipped."""
+    from datetime import timedelta
+
+    from backend.engine.autopick import rank_tokens
+
+    fresh = wiggle(n=120)
+    old = [c.model_copy(update={"timestamp": c.timestamp - timedelta(days=12)}) for c in wiggle(n=120)]
+    toks = [{"symbol": "PLTRB", "status": "trading"}, {"symbol": "NVDAB", "status": "trading"}]
+    res = rank_tokens(toks, {"PLTRB": old, "NVDAB": fresh}, "ANY", 2)
+    assert [p.symbol for p in res.picks] == ["NVDAB"]
+    assert "no new price for" in {s["symbol"]: s["reason"] for s in res.skipped}["PLTRB"]
