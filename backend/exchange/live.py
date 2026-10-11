@@ -278,13 +278,17 @@ class BinanceWeb3Client(TokenStatusMixin):
         return st
 
     # ------------------------------------------------------------------ execution
-    def execute_swap(self, order: OrderRequest, quote: Quote) -> ExecutionResult:
-        return self._execute(order, quote, ExecutionPath.SWAP)
+    def execute_swap(self, order: OrderRequest, quote: Quote,
+                     max_slippage_pct: Optional[float] = None) -> ExecutionResult:
+        """`max_slippage_pct` (percent, e.g. risk's cap) overrides the executor default for this LIVE order."""
+        return self._execute(order, quote, ExecutionPath.SWAP, max_slippage_pct)
 
-    def execute_rfq(self, order: OrderRequest, quote: Quote) -> ExecutionResult:
-        return self._execute(order, quote, ExecutionPath.RFQ)
+    def execute_rfq(self, order: OrderRequest, quote: Quote,
+                    max_slippage_pct: Optional[float] = None) -> ExecutionResult:
+        return self._execute(order, quote, ExecutionPath.RFQ, max_slippage_pct)
 
-    def _execute(self, order: OrderRequest, quote: Quote, path: ExecutionPath) -> ExecutionResult:
+    def _execute(self, order: OrderRequest, quote: Quote, path: ExecutionPath,
+                 max_slippage_pct: Optional[float] = None) -> ExecutionResult:
         now = self._clock()
         base = dict(client_order_id=order.client_order_id, symbol=order.symbol, side=order.side, path=path,
                     mode=self._mode, timestamp=now)
@@ -320,6 +324,9 @@ class BinanceWeb3Client(TokenStatusMixin):
         self._routes.pop(quote.quote_id, None)
         try:
             assert self.executor is not None
+            import inspect  # never retry on TypeError: a second call could submit a second swap
+            if max_slippage_pct is not None and "max_slippage_pct" in inspect.signature(self.executor.execute).parameters:
+                return done(self.executor.execute(order, quote, ctx, path, max_slippage_pct=max_slippage_pct))
             return done(self.executor.execute(order, quote, ctx, path))
         except ExchangeError as e:
             return reject(str(e), OrderStatus.FAILED)

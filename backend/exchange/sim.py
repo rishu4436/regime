@@ -57,6 +57,7 @@ from .status import (
     xstock_enabled,
 )
 from .tokens import DEFAULT_TOKENS
+from .wallet import SimWalletMixin
 
 ONDO_MIN_ORDER_USD = 20.0
 # xStock quotes are RFQ (need userWalletAddress, else 40001); BStock supports SWAP (observed) as well as RFQ.
@@ -88,7 +89,7 @@ def path_for(token_type: TokenType) -> ExecutionPath:
     return ExecutionPath.RFQ if token_type in RFQ_TYPES else ExecutionPath.SWAP
 
 
-class SimulatedBinanceClient(TokenStatusMixin, MockExchangeClient):
+class SimulatedBinanceClient(SimWalletMixin, TokenStatusMixin, MockExchangeClient):
     def __init__(
         self,
         regimes: Optional[dict[str, Regime]] = None,
@@ -260,11 +261,11 @@ class SimulatedBinanceClient(TokenStatusMixin, MockExchangeClient):
             return reject(f"{code} market closed for {order.symbol}")
         return None
 
-    def execute_swap(self, order: OrderRequest, quote: Quote) -> ExecutionResult:
+    def execute_swap(self, order: OrderRequest, quote: Quote, max_slippage_pct: Optional[float] = None) -> ExecutionResult:
         self._maybe_sleep()
         return self._venue_check(order, quote, ExecutionPath.SWAP) or self._finish(order, quote, ExecutionPath.SWAP)
 
-    def execute_rfq(self, order: OrderRequest, quote: Quote) -> ExecutionResult:
+    def execute_rfq(self, order: OrderRequest, quote: Quote, max_slippage_pct: Optional[float] = None) -> ExecutionResult:
         self._maybe_sleep()
         return self._venue_check(order, quote, ExecutionPath.RFQ) or self._finish(order, quote, ExecutionPath.RFQ)
 
