@@ -184,6 +184,31 @@ def read_exchange_wallet(exchange: Any) -> tuple[Optional[str], Optional[dict[st
 
 
 SESSION_REASONS = ("session_expired", "wallet_not_ready")  # Bot 4 baw PAUSE_REASONS: re-sign-in needed
+# A wallet read that failed because of the network (baw / Binance unreachable), NOT a dead session: keep the last good
+# read, block BUYs until a fresh read succeeds, back off. 'illegal parameter' on `baw wallet status` stays session_expired.
+NETWORK_REASONS = ("service_unavailable", "baw_timeout")
+NETWORK_WORDS = ("connecterror", "connect error", "connectionerror", "connection error", "connection refused",
+                 "connection reset", "getaddrinfo", "enotfound", "eai_again", "etimedout", "econnreset", "econnrefused",
+                 "enetunreach", "ehostunreach", "socket hang up", "fetch failed", "network", "timed out", "timeout",
+                 "temporary failure in name resolution", "name or service not known")
+
+
+def is_network_failure(state: dict) -> bool:
+    """read_exchange_wallet_state() result failed for a network reason (never when the session is expired)."""
+    if state.get("session_expired") or state.get("connected"):
+        return False
+    if (state.get("reason") or "") in NETWORK_REASONS:
+        return True
+    text = f"{state.get('reason') or ''} {state.get('error') or ''}".lower()
+    if "illegal parameter" in text:
+        return False
+    return any(w in text for w in NETWORK_WORDS)
+
+
+def is_network_error_text(text: Optional[str]) -> bool:
+    t = (text or "").lower()
+    return bool(t) and "illegal parameter" not in t and (any(w in t for w in NETWORK_WORDS)
+                                                         or any(r in t for r in NETWORK_REASONS))
 SESSION_EXPIRED_REASON = "wallet session expired: click Reconnect wallet"
 
 
@@ -333,6 +358,10 @@ class WalletSettingsProvider:
         if isinstance(out, dict) and isinstance(out.get("data"), dict):  # tolerate {"success":..,"data":{..}} wrappers
             out = out["data"]
         return out, False
+
+    def peek(self) -> Any:
+        """The last read as-is (never calls baw). Bot 3 judges its age from the fetched_at it was built with."""
+        return self._cached
 
     def invalidate(self) -> None:
         """Re-read on next use (called after every execution: the wallet's daily quota just changed)."""

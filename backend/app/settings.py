@@ -38,6 +38,7 @@ class Settings:
     # 24/7
     loop_autostart: bool = False              # LOOP_AUTOSTART: resume the persisted agent and start the loop on boot
     state_dir: Optional[str] = None           # STATE_DIR (default LOG_DIR): agent_state.<mode>.json
+    wallet_refresh_sec: float = 300.0         # WALLET_REFRESH_SEC: LIVE background wallet re-read (baw); orders always re-read first
     stall_intervals: float = 3.0              # ALERT when no tick for this many loop intervals
     default_agent_symbol: Optional[str] = None  # DEFAULT_AGENT_SYMBOL: autostart agent when none is saved (PAPER/LIVE: NVDAB)
     sim_bnb_balance: float = 0.05             # simulated wallet gas balance (SIM/PAPER)
@@ -80,6 +81,7 @@ class Settings:
             loop_autostart=_bool(e.get("LOOP_AUTOSTART")),
             default_agent_symbol=e.get("DEFAULT_AGENT_SYMBOL") or None,
             state_dir=e.get("STATE_DIR") or e.get("LOG_DIR") or None,
+            wallet_refresh_sec=float(e.get("WALLET_REFRESH_SEC") or 300),
         )
 
     def validate(self) -> None:

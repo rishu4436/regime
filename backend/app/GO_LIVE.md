@@ -84,6 +84,7 @@ BINANCE_LIVE_MAX_ORDER_USDT=25       # Exchange/Wallet executor hard cap (indepe
 LOOP_AUTOSTART=true                  # on start: resume the saved agent, else Auto (AUTO_EXECUTE) on DEFAULT_AGENT_SYMBOL
 DEFAULT_AGENT_SYMBOL=NVDAB           # bStock, trades 24/7
 LOOP_INTERVAL_SECONDS=60
+# WALLET_REFRESH_SEC=300             # background wallet re-read (baw); every order re-reads right before it goes out
 STATE_DIR=./logs                     # agent_state.live.json (agent, open lots, emergency stop) survives restarts
 # LIVE_ALLOWED_TOKENS=NVDAB,TSLAon   # optional: restrict the agent's tokens
 # BINANCE_ENABLE_XSTOCK=true         # xStock (...x) is off by default (no BSC liquidity)
