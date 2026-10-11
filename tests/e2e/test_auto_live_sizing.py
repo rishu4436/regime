@@ -37,6 +37,13 @@ def test_auto_grid_on_110_usdt_wallet_proposes_token_minimum_not_25(monkeypatch)
     ex._price_override["NVDAB"] = 99.75
     assert ex.get_token_status("NVDAB").min_order_usdt == 10.0
     assert c.get("/api/wallet").json()  # wallet readable
+    # Rishu's PC: the token context reached the engine without a wallet `equity` hint, so live_size's basis was the
+    # Auto Mode capital. Drop that hint here so the engine's own basis (min(capital, portfolio equity)) is tested.
+    eng = c.app.state.st.loop.c.engine
+    eng = getattr(eng, "_primary", None) or eng
+    orig = eng.set_market_context
+    monkeypatch.setattr(eng, "set_market_context",
+                        lambda sym, ctx: orig(sym, {k: v for k, v in (ctx or {}).items() if k != "equity"} if ctx else ctx))
 
     r = c.post("/api/auto/activate", json={"symbol": "NVDAB", "style": "BALANCED", "capital": 10_000,
                                            "activation": "AUTO_EXECUTE"})
