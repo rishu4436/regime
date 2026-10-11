@@ -22,6 +22,7 @@ export interface LiveLimits {
   daily_notional_cap_usdt?: number | null;   // 100 traded per UTC day
   max_exposure_usdt?: number | null;         // 50 open at once
   max_slippage_pct?: number | null;          // 1
+  max_favorable_impact_pct?: number | null;  // 3: a quote better than the market by more than this is skipped as a likely bad quote
   stale_after_s?: number | null;             // 900
   bnb_gas_reserve?: number | null;           // 0.002 BNB
   fee_buffer_usdt?: number | null;
@@ -87,7 +88,8 @@ export interface LoopHeartbeat {
   heartbeat?: { started_at: string; uptime_s: number; last_tick_at?: string | null; seconds_since_tick?: number | null; restarts?: number; last_error?: string | null; autostart?: boolean } | null;
 }
 
-export type ParseResult = { kind: "MANUAL"; strategy: ManualStrategy } | { kind: "AUTO"; config: AutoConfig };
+/** notes: parser remarks to show the user, e.g. the default entry rule it filled in (POST /api/llm/parse). */
+export type ParseResult = ({ kind: "MANUAL"; strategy: ManualStrategy } | { kind: "AUTO"; config: AutoConfig }) & { notes?: string[] };
 export type ActivateManualBody = { strategy_id: string } | { strategy: ManualStrategy };
 
 /** Error from the API: 404 unknown id/symbol, 409 invalid state, 422 validation. */

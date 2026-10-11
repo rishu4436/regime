@@ -96,7 +96,7 @@ export class MockApi implements ApiClient {
     const exposure = (this.portfolio.positions ?? []).reduce((a, p) => a + p.quantity * (p.current_price ?? p.avg_entry_price), 0);
     const loss = Math.max(0, -(this.portfolio.daily_pnl ?? 0) - (this.portfolio.positions ?? []).reduce((a, p) => a + (p.unrealized_pnl ?? 0), 0));
     return { live_allowed: true, per_order_cap_usdt: LIVE_CAP, daily_loss_cap_usdt: LIVE_DAILY_LOSS, daily_notional_cap_usdt: LIVE_DAILY_NOTIONAL,
-      daily_limit_usdt: LIVE_DAILY_NOTIONAL, max_exposure_usdt: LIVE_EXPOSURE, max_slippage_pct: 1, stale_after_s: 900, bnb_gas_reserve: LIVE_GAS_RESERVE,
+      daily_limit_usdt: LIVE_DAILY_NOTIONAL, max_exposure_usdt: LIVE_EXPOSURE, max_slippage_pct: 1, max_favorable_impact_pct: 3, stale_after_s: 900, bnb_gas_reserve: LIVE_GAS_RESERVE,
       fee_buffer_usdt: 1, min_wallet_usdt: 70, min_order_usdt: 10, market_hours_utc: null, daily_used_usdt: this.dailyNotional, daily_loss_usdt: loss, open_exposure_usdt: exposure,
       daily_remaining_usdt: Math.max(0, LIVE_DAILY_NOTIONAL - this.dailyNotional), warnings: exposure > Math.max(0, LIVE_DAILY_NOTIONAL - this.dailyNotional) ? [`Exit reserve: ${Math.max(0, LIVE_DAILY_NOTIONAL - this.dailyNotional).toFixed(2)} USDT of daily quota left can't cover selling all open positions (${exposure.toFixed(2)} USDT)`] : [], limit_source: { per_order_cap_usdt: "risk", daily_limit_usdt: "risk" },
       allowed_tokens: "ALL", tradable_tokens: TOKENS.filter((t) => !/x$/.test(t.symbol)).map((t) => t.symbol), wallet: { daily_limit_usdt: 200, per_order_cap_usdt: 50, allowed_tokens: null } };
@@ -323,7 +323,14 @@ export class MockApi implements ApiClient {
   llmParse(text: string, default_symbol?: string) {
     if (!text.trim()) return fail(422, "text: must not be empty");
     const out = parseStrategyText(text, default_symbol);
-    return ok<ParseResult>("entry" in out || "exit" in out ? { kind: "MANUAL", strategy: out as ManualStrategy } : { kind: "AUTO", config: out as AutoConfig }, 450);
+    if (!("entry" in out || "exit" in out)) return ok<ParseResult>({ kind: "AUTO", config: out as AutoConfig, notes: [] }, 450);
+    const m = out as ManualStrategy, e = m.entry, notes: string[] = [];
+    // mirror Bot 5: no entry rule in the text -> team default "price above EMA(20)", with a note saying so
+    if (e && ![e.rsi_below, e.price_above_sma, e.price_above_ema, e.macd_bullish_cross, e.bollinger_lower, e.volume_above_avg, e.breakout].some((c) => c?.enabled)) {
+      e.price_above_ema = { ...e.price_above_ema, enabled: true, period: 20 };
+      notes.push("No entry rule found in your text, so the entry is set to the team default: buy when price is above EMA(20).");
+    }
+    return ok<ParseResult>({ kind: "MANUAL", strategy: m, notes }, 450);
   }
   llmAsk(question: string) {
     if (!question.trim()) return fail(422, "question: must not be empty");

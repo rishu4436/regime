@@ -47,11 +47,13 @@ export function ManualBuilder({ strategy: s, setStrategy, capital, setCapital, r
     catch (err) { toast(err instanceof Error ? err.message : String(err), "error"); }
   };
   const [text, setText] = useState("");
+  const [parseNotes, setParseNotes] = useState<string[]>([]);
   const describe = async () => {
     if (!text.trim()) return;
-    setBusy("nl");
+    setBusy("nl"); setParseNotes([]);
     try {
       const out = await api.llmParse(text, s.symbol);
+      setParseNotes(out.kind === "MANUAL" ? (out.notes ?? []).filter(Boolean) : []);
       if (out.kind === "MANUAL") { setStrategy({ ...fillStrategy(out.strategy), id: undefined }); toast("Form filled from your description. Review it, then run a backtest", "success"); }
       else { onAutoParsed(out.config); toast("That sounds like Auto Mode, so I opened it with your settings", "info"); }
     } catch (err) { toast(`Couldn't parse that: ${err instanceof Error ? err.message : err}`, "error"); }
@@ -111,6 +113,9 @@ export function ManualBuilder({ strategy: s, setStrategy, capital, setCapital, r
                 <span className="faint small" style={{ flex: 1 }}>{api.kind === "mock" ? "Mock keyword parser (Grok via backend in http mode)" : "Parsed by Grok on the backend"} · Ctrl+Enter</span>
                 <button className="btn" style={{ padding: "6px 12px" }} disabled={busy != null || !text.trim()} onClick={describe}>{busy === "nl" ? <span className="spin" /> : null}Fill form</button>
               </div>
+              {parseNotes.length > 0 && <div className="banner amber" style={{ marginTop: 8 }}><span className="grow small">
+                <b>Note from the parser:</b> {parseNotes.join(" ")}</span>
+                <button className="btn ghost" style={{ padding: "2px 8px" }} onClick={() => setParseNotes([])}>Dismiss</button></div>}
             </div>
           </div>
           <div className="group">

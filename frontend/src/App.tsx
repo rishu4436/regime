@@ -58,7 +58,7 @@ function Shell() {
     <LiveContext.Provider value={live}>
     <div className={`app${live.isLive ? " is-live" : ""}`}>
       <aside className="sidebar">
-        <div className="brand"><div className="brand-logo">◆</div><div><b>Teamwork Agent</b><small>On-chain stocks</small></div></div>
+        <div className="brand"><div className="brand-logo">◆</div><div><b>Regime</b><small>Autonomous tokenized-stock agent</small></div></div>
         {nav}
         <div className="sidebar-foot">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>Mode <ModeBadge mode={mode} /></div>
@@ -84,6 +84,8 @@ function Shell() {
           {live.isLive && <span className="live-tag" title="Real funds on BNB Smart Chain mainnet"><span className="live-dot" />LIVE · MAINNET</span>}
           <ModeBadge mode={mode} />
         </div>
+        {API_MODE === "mock" && <div className="banner amber" style={{ marginBottom: 12 }}><span className="grow small">
+          <b>Mock data:</b> this dashboard isn't connected to the Regime backend, so nothing here is real. Start it with <code>VITE_API_MODE=http</code> to see the live agent.</span></div>}
         <LiveBanner />
         <SessionBanner />
         {error && <div className="banner amber"><span className="grow">Backend unreachable: {error}</span><span className="small muted">Start the API or run with VITE_API_MODE=mock</span></div>}
