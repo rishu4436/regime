@@ -185,6 +185,12 @@ const Meter = ({ label, used, cap, hint, warnAt = 0.8, children }: { label: Reac
   );
 };
 
+const WARNING_TEXT: Record<string, string> = {
+  wallet_too_small: "Wallet too small to trade live: top up USDT to at least the minimum wallet size.",
+  token_min_above_cap: "This token's minimum order is above the per-order cap, so it can't be bought live.",
+  exit_quota_shortfall: "Today's remaining quota can't cover selling every open position.",
+  wallet_limits_stale: "Wallet limits haven't refreshed recently.",
+};
 /** Caps usage (Bot 3 live_limits): per order, daily loss (distance to the auto e-stop), traded today, open exposure. */
 export function CapsPanel({ status, decisions }: { status: StatusSnapshot | null; decisions: Decision[] }) {
   const { wallet, walletEndpoint } = useLive();
@@ -204,7 +210,7 @@ export function CapsPanel({ status, decisions }: { status: StatusSnapshot | null
   return (
     <Card title="Hard caps" extra={<span className="pill">{L.per_order_cap_usdt != null ? "enforced by risk (Bot 3)" : "not reported"}</span>}>
       {!wallet && walletEndpoint === false && <div className="small muted" style={{ marginBottom: 8 }}>Caps come from <code>GET /api/wallet</code> → <code>limits</code>, which this backend doesn't serve yet.</div>}
-      {(L.warnings ?? []).filter(Boolean).map((w) => <div key={w} className="banner amber" style={{ marginBottom: 10 }}><span className="grow small">⚠ {w}</span></div>)}
+      {(L.warnings ?? []).filter(Boolean).map((w) => <div key={w} className="banner amber" style={{ marginBottom: 10 }}><span className="grow small">⚠ {WARNING_TEXT[w] ?? w}</span></div>)}
       <div className="meters">
         <Meter label={<>Per order{src("per_order_cap_usdt", L.per_order_cap_usdt, W?.per_order_cap_usdt)}</>} used={lastBuy?.execution?.notional ?? null} cap={orderCap} hint={<>last buy{lastBuy ? ` ${time(lastBuy.timestamp)}` : ": none yet"}{which(L.per_order_cap_usdt, W?.per_order_cap_usdt)}</>} />
         <Meter label="Daily loss → auto e-stop" used={loss} cap={L.daily_loss_cap_usdt} warnAt={0.6}
@@ -235,6 +241,8 @@ export function WalletPanel() {
   const usdtBal = wallet?.balances.find((b) => balAsset(b) === "USDT");
   const usdtAmt = usdtBal ? balValue(usdtBal) ?? balAmount(usdtBal) : null;
   const tooSmall = minWallet != null && usdtAmt != null && usdtAmt < minWallet;
+  const minOrder = wallet?.limits?.min_order_usdt ?? null;
+  const share = minOrder != null && usdtAmt ? minOrder / usdtAmt : null;
   return (
     <Card title="Wallet" extra={<>{wallet && <span className={`pill ${wallet.connected ? "ok" : "bad"}`}><span className="dot" />{wallet.connected ? "connected" : "disconnected"}</span>}
       <button className="btn ghost" style={{ padding: "3px 9px", marginLeft: 6 }} onClick={refresh} title="Refresh balances">↻</button></>}>
@@ -250,12 +258,15 @@ export function WalletPanel() {
             <b>{gasOut ? "Out of gas reserve:" : "BNB gas running low:"}</b> {balAmount(bnb!).toFixed(4)} BNB, reserve {reserve} BNB. {gasOut ? "New buys are blocked until you top up." : "Top up soon or buys will be blocked."}</span></div>}
           {tooSmall && <div className="banner amber" style={{ marginBottom: 10 }}><span className="grow small">
             <b>Wallet too small to trade live:</b> {usd(usdtAmt)} USDT, buys need about {usd(minWallet, 0)} or more (token minimum order plus fees){reserve != null ? `, plus ~${Math.max(0.005, reserve * 2.5).toFixed(3)} BNB for gas` : ""}. The agent stays out until you top up.</span></div>}
+          {!tooSmall && share != null && share >= 0.4 && <div className="banner amber" style={{ marginBottom: 10 }}><span className="grow small">
+            <b>Concentrated buys:</b> one minimum buy ({usd(minOrder, 0)}) is {Math.round(share * 100)}% of your USDT, so each trade puts a big part of the wallet in one token.</span></div>}
           <div className="kv">
             <span className="k">Address</span>
             <span>{wallet.address ? <><a className="mono" href={bscAddr(wallet.address)} target="_blank" rel="noreferrer" title={wallet.address}>{shortHex(wallet.address, 8)} ↗</a>
               <button className="btn ghost" style={{ padding: "1px 7px", marginLeft: 6, fontSize: ".72rem" }} onClick={() => navigator.clipboard?.writeText(wallet.address!)}>copy</button></> : NA}</span>
             <span className="k">Provider</span><span>{wallet.provider === "baw" ? "Binance Agentic Wallet (baw)" : wallet.provider ?? NA}</span>
             <span className="k">Network</span><span>{wallet.chain ?? "BSC"} · chain {wallet.chain_id ?? NA}{String(wallet.chain_id) === "56" ? " (mainnet)" : ""}</span>
+            <span className="k">Minimum wallet</span><span>{minWallet != null ? usd(minWallet, 0) : NA}{wallet.limits?.min_wallet_usdt_note ? <span className="faint small"> · {wallet.limits.min_wallet_usdt_note}</span> : null}</span>
             <span className="k">Total</span><span><b>{total ? usd(total) : NA}</b>{wallet.updated_at ? <span className="faint small"> · {time(wallet.updated_at)}</span> : null}</span>
           </div>
           <div className="table-wrap" style={{ marginTop: 10, maxHeight: 220 }}>
