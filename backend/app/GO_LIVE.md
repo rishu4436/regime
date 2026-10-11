@@ -17,8 +17,12 @@ LIVE switch is opt-in, and the caps default to tiny amounts (25 USDT per order).
    baw wallet status --json                    # must report CONNECTED
    python -m backend.exchange.baw_smoke        # read-only checks (status, balances, settings, a quote); never swaps
    ```
-   The session can expire in **up to 48 h**. The agent then pauses with `session_expired` (alert
-   `WALLET_SESSION_EXPIRED`). Repeat these steps, then `POST /api/control/resume`.
+   The session can expire in **up to 48 h**, sometimes much sooner (on 11 Oct it dropped after ~80 min, with
+   `baw wallet status` failing as "illegal parameter"). The agent then pauses with `session_expired` (alert
+   `WALLET_SESSION_EXPIRED`); the dashboard shows a red banner and **Reconnect wallet**, and stop-loss / take-profit
+   exits are **held** (no swaps) until you sign in again. Click **Reconnect wallet** (or repeat these steps). Once the
+   wallet reports CONNECTED the agent resumes on its own and any held exit sells on that check at the market price.
+   A pause you set yourself is never lifted automatically.
 3. **Wallet settings in the Binance app** (Agentic Wallet → settings). Set exactly these three:
    - **Daily limit:** the USDT the agent may trade per day.
    - **Trade all tokens:** on, so the wallet doesn't refuse the agent's tokens.

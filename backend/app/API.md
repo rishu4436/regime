@@ -152,9 +152,9 @@ are unchanged except where noted (positions always carry `pending`).
 
 | Method | Path | Response |
 |---|---|---|
-| GET | `/api/live/status` | `{live_trading_enabled, binance_live_enabled, risk_allow_live, wallet_connected, can_trade, blocked_reasons: string[], cooldowns: [{symbol, code, until, reason}], chain_pending: [{order_id, client_order_id, symbol, notional, tx_hash, since, held_exit}]}` |
+| GET | `/api/live/status` | `{live_trading_enabled, binance_live_enabled, risk_allow_live, wallet_connected, session_expired, can_trade, blocked_reasons: string[], cooldowns: [{symbol, code, until, reason}], chain_pending: [{order_id, client_order_id, symbol, notional, tx_hash, since, held_exit}]}` |
 | GET | `/api/system` | `SystemInfo` + `live` (= `/api/live/status`) + `agent_identity` (see below) |
-| GET | `/api/wallet` | `{provider: 'sim'\|'paper'\|'baw'\|'web3_api', address, chain: 'BSC', chain_id: 56, connected, balances: [{symbol, amount, usd_value}], bnb_gas_reserve, limits, updated_at}` |
+| GET | `/api/wallet` | `{provider: 'sim'\|'paper'\|'baw'\|'web3_api', address, chain: 'BSC', chain_id: 56, connected, session_expired, balances: [{symbol, amount, usd_value}], bnb_gas_reserve, limits, updated_at}` |
 | GET | `/api/loop` | `LoopState` + `heartbeat: {last_tick_at, seconds_since_tick, restarts, last_error}` |
 
 `limits` = Bot 3's `risk.live_limits(portfolio, LiveContext)` keys as-is (`limit_source`, `wallet_limits`,
@@ -208,8 +208,22 @@ explainer receives, so LIVE explanations carry the BscScan link.
 - No quote (market closed, no liquidity, xStock disabled, below minimum — any mode): `"BUY not executed: no quote (<detail>)"`.
 - Codes 40367 / 40369 / 40374 additionally start a 20-minute per-token cooldown: `"... cooling down until HH:MM UTC"`
   and later `"BUY not executed: <symbol> cooling down until HH:MM UTC after exchange error <code>"`; listed in `cooldowns`.
-- `WALLET_SESSION_EXPIRED` / executor reasons `session_expired`, `wallet_not_ready`: the agent is paused and a CRITICAL
-  alert `WALLET_SESSION_EXPIRED` is raised (re-scan the QR with `baw`, then resume).
+- `WALLET_SESSION_EXPIRED` / executor reasons `session_expired`, `wallet_not_ready` (including `baw wallet status`
+  failing with "illegal parameter", Bot 4 d2cb887): the agent is paused ("Wallet session expired: click Reconnect
+  wallet") and one CRITICAL alert `WALLET_SESSION_EXPIRED` is raised per outage.
+  - The wallet is read fresh on every tick, every `/api/wallet` and every `/api/live/status` (Bot 4's executor caches
+    at most 15 s); there is no cached connected flag. A failed read never counts as connected.
+  - `/api/wallet`: `session_expired: true`, `connected: false` (the dashboard shows the red banner and **Reconnect wallet**).
+  - `/api/live/status`: `session_expired: true`, `wallet_connected: false`, `can_trade: false`, blocked reason
+    `"wallet session expired: click Reconnect wallet"` (the session pause is not listed a second time).
+  - Exits (SL / TP / trailing / manual close / emergency flatten) are **held** with no swap: one STAY_OUT per check,
+    `"<STOP_LOSS> exit held: wallet session expired: click Reconnect wallet. It sells on the first check after you sign in
+    again"`, plus one CRITICAL alert `EXIT_HELD_SESSION`. A swap that itself comes back `session_expired` marks the
+    session expired and stops further swaps.
+  - Recovery: the first successful wallet read clears it, raises INFO `WALLET_SESSION_RESTORED`, and the held exit
+    sells on that tick at the market price. When the wallet itself reports `CONNECTED` (Bot 4 `get_wallet`: `baw wallet
+    status` + reads succeeded) the app also lifts **only** the pause it set for the session (never a user pause or an
+    emergency stop); a client with only a balance source keeps that pause until `POST /api/control/resume`.
 - Bot 2 live engine `STAY_OUT` codes (`live_below_min_order`, `live_illiquid_family`, `live_token_paused`,
   `live_price_impact`, `insufficient_data`, stale data) are logged no-trade decisions. Before each evaluation the app calls
   `engine.set_market_context(symbol, {status, reference_price_only, min_order_usdt, priceImpactPercent, equity})`
@@ -218,7 +232,7 @@ explainer receives, so LIVE explanations carry the BscScan link.
   `live_config.max_order_usdt` from `risk.live_limits()['per_order_cap_usdt']`. Engine and risk agree on price impact:
   > 1.0 % blocks, exactly 1.0 % is allowed.
 
-Alert codes added: `WALLET_SESSION_EXPIRED`, `WALLET_SETTINGS`, `LIVE_LIMIT_<CODE>`, `CHAIN_PENDING` (unconfirmed after 30 min),
+Alert codes added: `WALLET_SESSION_EXPIRED`, `WALLET_SESSION_RESTORED`, `EXIT_HELD_SESSION`, `WALLET_SETTINGS`, `LIVE_LIMIT_<CODE>`, `CHAIN_PENDING` (unconfirmed after 30 min),
 `LOOP_RESTARTED`, `LOOP_STALLED` (no tick for 3 intervals), `STATE_RESTORED`, `STATE_RESTORE`, `AUTOSTART`.
 
 ## Wallet sign-in from the dashboard (v0.8, localhost only)

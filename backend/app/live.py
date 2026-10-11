@@ -172,11 +172,57 @@ def read_exchange_wallet(exchange: Any) -> tuple[Optional[str], Optional[dict[st
     if callable(gw):
         w = gw()
         get = (lambda k: w.get(k)) if isinstance(w, dict) else (lambda k: getattr(w, k, None))
+        if get("connected") is False:
+            # Bot 4's get_wallet() never raises: a failed read is connected False + balances []. An empty list from a
+            # failed read is NOT a real zero balance (the 10:33 outage kept wallet_connected/can_trade true this way).
+            return get("address") or address, None, "exchange:get_wallet"
         return get("address") or address, _norm_balances(get("balances")), "exchange:get_wallet"
     gb = getattr(exchange, "get_balances", None)
     if callable(gb):
         return address, _norm_balances(gb()), "exchange:get_balances"
     return address, None, "none"
+
+
+SESSION_REASONS = ("session_expired", "wallet_not_ready")  # Bot 4 baw PAUSE_REASONS: re-sign-in needed
+SESSION_EXPIRED_REASON = "wallet session expired: click Reconnect wallet"
+
+
+def read_exchange_wallet_state(exchange: Any) -> dict:
+    """The LATEST wallet read as {address, balances | None, connected, session_expired, reason, error}.
+
+    connected = the exchange returned real balances (not a failed read). session_expired = Bot 4 reports
+    `session_expired` / `wallet_not_ready` (e.g. `baw wallet status` -> "illegal parameter", d2cb887), or the read
+    raised a session error. Never raises."""
+    out: dict = {"address": getattr(exchange, "wallet_address", None), "balances": None, "connected": False,
+                 "session_expired": False, "verified": False, "reason": None, "error": None}
+    try:
+        gw = getattr(exchange, "get_wallet", None)
+        w = gw() if callable(gw) else None
+        if w is not None:
+            get = (lambda k: w.get(k)) if isinstance(w, dict) else (lambda k: getattr(w, k, None))
+            err = get("error") or {}
+            if isinstance(err, dict):
+                out["reason"], out["error"] = err.get("reason"), err.get("message")
+            elif err:
+                out["error"] = str(err)
+            out["address"] = get("address") or out["address"]
+            if get("session_expired") or out["reason"] in SESSION_REASONS:
+                out["session_expired"] = True
+        address, bal, _src = read_exchange_wallet(exchange) if w is None else (out["address"], None, "")
+        if w is None:
+            out["address"] = address or out["address"]
+            out["balances"] = bal
+        elif not out["session_expired"] and get("connected") is not False:
+            out["balances"] = _norm_balances(get("balances"))
+        out["connected"] = out["balances"] is not None and not out["session_expired"]
+        # verified = the wallet itself said CONNECTED (Bot 4 get_wallet: `baw wallet status` + reads succeeded), not just
+        # a balance source answering; only a verified read lifts the session pause automatically
+        out["verified"] = bool(out["connected"] and w is not None and str(get("status") or "").upper() == "CONNECTED")
+    except Exception as e:  # noqa: BLE001 - a wallet read must never break /api/live/status
+        out["error"] = f"{type(e).__name__}: {e}"
+        if is_session_expired(e):
+            out["session_expired"], out["reason"] = True, "session_expired"
+    return out
 
 
 def wallet_provider(exchange: Any, mode: TradingMode) -> str:

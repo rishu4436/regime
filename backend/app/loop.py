@@ -31,6 +31,8 @@ from .settings import Settings
 from .state import AgentStateStore, state_path
 from .wiring import Components, call_with_supported, supported_kwargs
 
+SESSION_PAUSE_REASON = "Wallet session expired: click Reconnect wallet"  # the pause this app sets (auto-cleared on sign-in)
+SESSION_PAUSE_REASONS = (SESSION_PAUSE_REASON, "Wallet session expired: re-scan the baw QR code, then resume")
 PENDING_EXIT = "pending_exit"        # exit held while the BUY settles on chain (Bot 1 / Bot 5 code)
 ORDER_IN_FLIGHT = "order_in_flight"  # Bot 4 executor single-flight refusal (verbatim)
 
@@ -92,6 +94,8 @@ class TradingLoop:
         self.chain_pending: dict[str, dict] = {}   # client_order_id -> in-flight BUY (synthetic position)
         self._settled: set[str] = set()
         self._token_status_cache: dict[str, tuple[float, Optional[dict]]] = {}
+        # LIVE wallet session from the LATEST wallet read (each tick, /api/wallet, /api/live/status; Bot 4 caches <= 15 s)
+        self.wallet_session: dict = {"expired": False, "since": None, "error": None, "checked_at": None, "exit_alerted": False}
         self.bus.enrich = self.enrich_payload
         self.wallet_settings = livemod.WalletSettingsProvider(
             comps.exchange, settings.trading_mode, on_error=lambda m: self._alert(AlertLevel.WARNING, "WALLET_SETTINGS", m))
@@ -215,6 +219,8 @@ class TradingLoop:
             if sym is None:
                 raise AgentStateError("no active agent: activate a manual strategy or auto config first")
             self.last_tick_at = utc_now()  # heartbeat: every cycle counts, even without a new bar
+            if self.live:
+                self._wallet_read()  # fresh session state every tick: an expired session holds exits and blocks BUYs
             window = self.feed.next_window(sym, self.timeframe)
             if window is None:
                 if self.sim and not self.finished:
@@ -378,7 +384,9 @@ class TradingLoop:
             _, balances, _ = livemod.read_exchange_wallet(ex)
         except Exception as e:
             errs.append(RiskCheck(name="live_wallet", passed=False, detail=f"wallet unavailable: {type(e).__name__}: {e}"))
-        if balances is None:
+        if self.wallet_session["expired"]:
+            errs.append(RiskCheck(name="live_wallet_session", passed=False, detail=livemod.SESSION_EXPIRED_REASON))
+        elif balances is None:
             errs.append(RiskCheck(name="live_wallet_balances", passed=False,
                                   detail="wallet balances unavailable (exchange client has no get_wallet/get_balances): no BUYs"))
         extra: dict = {"wallet_limits": self.wallet_settings.get()}
@@ -463,11 +471,66 @@ class TradingLoop:
         return [dict(c, until=c["until"].isoformat()) for c in self.cooldowns.values()]
 
     def _session_expired(self, err: Any) -> None:
-        """baw session gone (can silently expire within 48h): pause trading + alert. Exits are still attempted."""
+        """baw session gone (can silently expire within 48h): pause trading + alert once per outage. Exits are HELD (no
+        swaps that can only fail) and retried on the first tick after a successful wallet read (Reconnect wallet)."""
+        ws = self.wallet_session
+        first = not ws["expired"]
+        ws.update(expired=True, error=str(err)[:200])
+        if first:
+            ws.update(since=utc_now(), exit_alerted=False)
+            self._drop_wallet_cache()  # the next read is fresh, so recovery is seen as soon as the user signs in
         if not self.control().paused:
-            self._control_changed(self.c.risk.pause("Wallet session expired: re-scan the baw QR code, then resume"))
-        self._alert(AlertLevel.CRITICAL, "WALLET_SESSION_EXPIRED", f"wallet session expired ({str(err)[:120]}); trading paused - "
-                    "run `baw auth signin` (scan the QR), then POST /api/control/resume")
+            self._control_changed(self.c.risk.pause(SESSION_PAUSE_REASON))
+        if first:
+            self._alert(AlertLevel.CRITICAL, "WALLET_SESSION_EXPIRED", f"wallet session expired ({str(err)[:120]}); trading "
+                        "paused and exits held - click Reconnect wallet on the dashboard (or run `baw auth signin`)")
+
+    def _session_restored(self, resume: bool = True) -> None:
+        """A successful wallet read after an expired session: clear it (held exits retry), and when the wallet itself
+        reported CONNECTED (`resume`) lift only the pause this app set for the session; alert."""
+        ws = self.wallet_session
+        was = ws["expired"]
+        ws.update(expired=False, since=None, error=None, exit_alerted=False)
+        ctrl = self.control()
+        resumed = False
+        # also a session pause restored from the state file after a restart (incl. the pre-v0.9 wording)
+        if resume and ctrl.paused and not ctrl.emergency_stopped and (ctrl.reason or "") in SESSION_PAUSE_REASONS:
+            self._control_changed(self.c.risk.resume())
+            resumed = True
+        if not (was or resumed):
+            return
+        self._alert(AlertLevel.INFO, "WALLET_SESSION_RESTORED", "wallet signed in again; " + (
+            "trading resumed and held exits retry on the next check" if resumed else "held exits retry on the next check"))
+
+    def _drop_wallet_cache(self) -> None:
+        ex = self.c.exchange
+        for obj in (ex, getattr(ex, "executor", None), getattr(ex, "_executor", None)):
+            if obj is not None and hasattr(obj, "_wallet_cache"):
+                try:
+                    obj._wallet_cache = None
+                except Exception:
+                    pass
+
+    def _wallet_read(self) -> dict:
+        """LATEST wallet read (never a cached connected flag; Bot 4's executor caches <= 15 s) + session transitions."""
+        st = livemod.read_exchange_wallet_state(self.c.exchange)
+        with self.lock:
+            self.wallet_session["checked_at"] = utc_now()
+            if st["session_expired"]:
+                self._session_expired(st.get("error") or st.get("reason") or "session_expired")
+            elif st["connected"]:
+                self._session_restored(resume=bool(st.get("verified")))
+        return st
+
+    def _held_exit_session(self, signal: Signal, tag: str, base: dict, did: str) -> Decision:
+        """Exit while the wallet session is expired: no swap (it can only fail); retried after Reconnect wallet."""
+        if not self.wallet_session.get("exit_alerted"):
+            self.wallet_session["exit_alerted"] = True
+            self._alert(AlertLevel.CRITICAL, "EXIT_HELD_SESSION", f"{tag} exit for {signal.symbol} is held until the wallet is "
+                        "signed in again (click Reconnect wallet); it sells at the market price on the first check after that",
+                        signal.symbol)
+        return self._finalize(Decision(id=did, action=Action.STAY_OUT, reason=(
+            f"{tag} exit held: {livemod.SESSION_EXPIRED_REASON}. It sells on the first check after you sign in again"), **base))
 
     # ------------------------------------------------------------------ in-flight LIVE buys (real-money safety)
     def _executor(self) -> Any:
@@ -770,12 +833,10 @@ class TradingLoop:
         the book. Never shows made-up balances in LIVE. limits = Bot 3's live_limits() merged over the app's."""
         with self.lock:
             pf = self.book.portfolio()
-            address, bal, _src = None, None, "none"
+            address, bal, expired = None, None, False
             if not self.sim:
-                try:
-                    address, bal, _src = livemod.read_exchange_wallet(self.c.exchange)
-                except Exception:
-                    bal = None
+                st = self._wallet_read() if self.live else livemod.read_exchange_wallet_state(self.c.exchange)
+                address, bal, expired = st["address"], st["balances"], bool(st["session_expired"])
             address = address or self.state.get("wallet_address") or self.s.wallet_address
             connected = bal is not None
             if bal is None and not self.live:
@@ -821,7 +882,7 @@ class TradingLoop:
             limits.setdefault("max_exposure_usdt", self.s.live_max_exposure_usdt)
             return {
                 "provider": livemod.wallet_provider(self.c.exchange, self.s.trading_mode), "address": address, "chain": "BSC",
-                "chain_id": livemod.BSC_CHAIN_ID, "connected": connected, "balances": rows,
+                "chain_id": livemod.BSC_CHAIN_ID, "connected": connected and not expired, "session_expired": expired, "balances": rows,
                 "bnb_gas_reserve": rl.get("bnb_gas_reserve", self.s.live_min_bnb), "limits": limits, "updated_at": utc_now(),
             }
 
@@ -901,12 +962,10 @@ class TradingLoop:
         """GET /api/live/status and /api/system.live (Bot 1 shape)."""
         allow = bool(self.allow_live if self.allow_live is not None else livemod.risk_allow_live(self.c.risk))
         allow = bool(livemod.risk_allow_live(self.c.risk)) if livemod.risk_allow_live(self.c.risk) is not None else allow
-        connected = False
-        if self.live:
-            try:
-                connected = livemod.read_exchange_wallet(self.c.exchange)[1] is not None
-            except Exception:
-                connected = False
+        connected, expired = False, False
+        if self.live:  # the LATEST read, never a cached flag (10:33 outage: every call failed while this said true)
+            st = self._wallet_read()
+            connected, expired = bool(st["connected"]), bool(st["session_expired"])
         reasons: list[str] = []
         if not self.live:
             reasons.append(f"TRADING_MODE is {self.s.trading_mode.value}, not LIVE")
@@ -916,16 +975,18 @@ class TradingLoop:
             reasons.append("BINANCE_LIVE_ENABLED is not true")
         if not allow:
             reasons.append("risk allow_live is off (RISK_ALLOW_LIVE=true)")
-        if self.live and not connected:
+        if self.live and expired:
+            reasons.append(livemod.SESSION_EXPIRED_REASON)
+        elif self.live and not connected:
             reasons.append("wallet not connected (no balances from the exchange client)")
         if self.wallet_block:
             reasons.append("different wallet connected")
         ctrl = self.control()
         if ctrl.emergency_stopped:
             reasons.append(one_prefix("Emergency stop", ctrl.reason, "active"))
-        if ctrl.paused:
+        if ctrl.paused and not (expired and (ctrl.reason or "") in SESSION_PAUSE_REASONS):  # no duplicate session line
             reasons.append(one_prefix("Paused", ctrl.reason, "by user"))
-        return {"wallet_block": self.wallet_block, "live_trading_enabled": self.s.live_trading_enabled, "binance_live_enabled": self.s.binance_live_enabled,
+        return {"wallet_block": self.wallet_block, "session_expired": expired, "live_trading_enabled": self.s.live_trading_enabled, "binance_live_enabled": self.s.binance_live_enabled,
                 "risk_allow_live": allow, "wallet_connected": connected, "can_trade": not reasons, "blocked_reasons": reasons,
                 "cooldowns": self.active_cooldowns(),
                 "chain_pending": [{"order_id": v["res"].order_id, "client_order_id": k, "symbol": v["symbol"],
@@ -953,6 +1014,8 @@ class TradingLoop:
         """After a dashboard sign-in: re-read the wallet + limits; a different wallet blocks all orders until reconciled."""
         with self.lock:
             self.refresh_wallet()
+            if self.live:
+                self._wallet_read()  # clears an expired session (and the pause it set) right after the sign-in
             if changed:
                 self.wallet_block = {"address": address, "expected": self.expected_wallet_address(), "since": utc_now().isoformat()}
                 self.state.update(wallet_block=self.wallet_block)
@@ -1187,19 +1250,27 @@ class TradingLoop:
                     timestamp=self._now(), strategy=strategy, signal=signal, risk_verdict=verdict)
         if not lots:
             return self._finalize(Decision(id=did, action=Action.STAY_OUT, reason=f"SELL ignored: no open position in {sym}", **base))
+        tag = reason.value if reason else "EXIT"
+        if self.live and self.wallet_session["expired"]:
+            return self._held_exit_session(signal, tag, base, did)
         last: Optional[ExecutionResult] = None
         filled = 0
         for lot in list(lots):
             q = lot.position.quantity
             px = signal.price or self.book.prices.get(sym) or lot.position.avg_entry_price
             res = last = self._execute(OrderSide.SELL, sym, q * px, did, quantity=q, fill_price=signal.price)
+            if self.live and not (res.status in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED) and res.filled_quantity > 0) \
+                    and (livemod.result_reason(res) in livemod.SESSION_REASONS or livemod.is_session_expired(res.error)):
+                self._session_expired(res.error or "session_expired")
+                if not filled:  # nothing sold: one plain held decision, no more swaps until the user signs in again
+                    return self._held_exit_session(signal, tag, base, did)
+                break
             if res.status in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED) and res.filled_quantity > 0:
                 filled += 1
                 self.book.close_lot(lot, res, reason.value if reason else None, self._now())
                 self.perf.record_trade(self.book.closed[-1].pnl)
                 limit = self.book.starting_capital * DAILY_LOSS_LIMIT_PCT / 100
                 self._publish_alerts(self.alerts.on_trade_closed(self.perf.consecutive_losses, self.book.daily_pnl, limit, sym))
-        tag = reason.value if reason else "EXIT"
         if filled:
             return self._finalize(Decision(id=did, action=Action.SELL, execution=last,
                                            reason=one_prefix(tag, signal.reason, keep_sentence=False), **base))
