@@ -216,7 +216,16 @@ export const CONDITION_LABEL: Record<string, string> = {
   macd_bullish_cross: "MACD bullish cross", bollinger_lower: "Near lower Bollinger", volume_above_avg: "Volume above average",
   breakout: "Breakout", market_hours: "Market hours", min_volume: "Min volume", cooldown: "Cooldown elapsed",
   max_open_positions: "Position slot free",
+  // Auto-mode preset conditions emitted by Bot 2's engine (backend/engine/presets.py)
+  close_above_ema: "Close above EMA", ema_above_sma: "EMA above SMA", macd_above_signal: "MACD above signal",
+  dca_schedule: "DCA schedule bar", near_sma20: "Near SMA20", drop_from_high: "Drop from high", rsi_recovered: "RSI recovered",
+  trend_broken: "Trend broken", trend_lost: "Trend lost", warmup: "Indicators warmed up", range: "Range wide enough",
+  in_range: "Inside range", bottom_cell: "Bottom grid cell", top_cell: "Top grid cell",
 };
-export const conditionLabel = (id: string) => CONDITION_LABEL[id] ?? id.replace(/_/g, " ");
+/** Friendly label for a Signal.conditions_met/failed id (rule field, risk check, preset condition or ExitReason). */
+export const conditionLabel = (id: string) =>
+  CONDITION_LABEL[id] ?? (id in EXIT_LABEL ? EXIT_LABEL[id as ExitReason] : id.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase()));
+/** ControlState.reason without the backend's "EMERGENCY STOP:" / "PAUSED:" prefix (the UI already says which). */
+export const controlReason = (r?: string | null) => (r ?? "").replace(/^\s*(EMERGENCY[ _]STOP|PAUSED)\s*:\s*/i, "").trim();
 /** Signal.strategy / active_strategy "NONE" means Auto Mode is staying out. */
 export const strategyLabel = (s?: string | null) => (!s ? "—" : s === "NONE" ? "Staying out" : s);

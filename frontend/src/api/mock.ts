@@ -151,6 +151,7 @@ export class MockApi implements ApiClient {
   getLoop() { return ok(this.loop); }
   startLoop(interval_seconds?: number) {
     if (interval_seconds != null && !(interval_seconds > 0)) return fail(422, "interval_seconds: must be > 0");
+    if (!this.agentMode) return fail(409, "no active agent: activate a manual strategy or auto config first"); // same as backend
     this.loop = { ...this.loop, running: true, interval_seconds: interval_seconds ?? this.loop.interval_seconds };
     this.restartTimer(); this.emitStatus();
     return ok(this.loop);

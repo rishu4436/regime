@@ -5,7 +5,7 @@ import { ActionBadge, RegimeBadge } from "../components/Badges";
 import { PriceChart, type TradeMarker } from "../components/Charts";
 import { Card, Segmented, Skeleton, StatCard, useToast } from "../components/ui";
 import { cls, humanize, num, time, usd } from "../lib/format";
-import { conditionLabel, EXIT_LABEL, strategyLabel, TOKENS } from "../lib/strategy";
+import { conditionLabel, controlReason, EXIT_LABEL, strategyLabel, TOKENS } from "../lib/strategy";
 import { Controls } from "./Controls";
 import { AlertsPanel, AskAgent } from "./Insights";
 import type { PerformanceSummary } from "../api/types";
@@ -63,7 +63,7 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
         <div className="banner red" role="alert">
           <span style={{ fontSize: "1.4rem" }}>■</span>
           <span className="grow">
-            <b>Emergency stop active</b>{status.control.reason ? `: ${status.control.reason}` : ""}<br />
+            <b>Emergency stop active</b>{controlReason(status.control.reason) ? `: ${controlReason(status.control.reason)}` : ""}<br />
             <span className="small">Every cycle is <b>STAY OUT</b> (no new buys) and pending confirmations are rejected.{" "}
               {pf?.positions?.length ? <>The {pf.positions.length} open position{pf.positions.length > 1 ? "s close" : " closes"} on the next bar at that bar's close (exit reason EMERGENCY_STOP).</> : "Any positions left were closed with exit reason EMERGENCY_STOP."}</span>
           </span>
