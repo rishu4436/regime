@@ -79,9 +79,13 @@ class EntryEvaluation:
     detail: list[str]
 
 
-def evaluate_entry(s: ManualStrategy, mi: ManualIndicators, candles: Sequence[Candle], i: int) -> EntryEvaluation:
+def evaluate_entry(
+    s: ManualStrategy, mi: ManualIndicators, candles: Sequence[Candle], i: int, volume_applicable: bool = True
+) -> EntryEvaluation:
     """Each ENABLED condition whose indicator is available contributes one boolean; warm-up ones are skipped.
-    No booleans -> no entry. AND = all true, OR = any true. Names = EntryConditions field names."""
+    No booleans -> no entry. AND = all true, OR = any true. Names = EntryConditions field names.
+    ``volume_applicable=False`` (token families without on-chain bar volume, e.g. Ondo off-hours): the volume
+    condition is NOT APPLICABLE: it is left out entirely (neither met, failed nor warming up)."""
     c = candles[i]
     e = s.entry
     results: dict[str, Optional[bool]] = {}
@@ -121,7 +125,9 @@ def evaluate_entry(s: ManualStrategy, mi: ManualIndicators, candles: Sequence[Ca
                 f"close {c.close:.4g} {'<' if c.close < lim else '>='} "
                 f"lower BB*(1+{e.bollinger_lower.proximity_pct:g}%) {lim:.4g}"
             )
-    if e.volume_above_avg.enabled:
+    if e.volume_above_avg.enabled and not volume_applicable:
+        detail.append("volume condition n/a (token family has no on-chain bar volume)")
+    elif e.volume_above_avg.enabled:
         v = mi.vol_avg[i]
         if v is None:
             results["volume_above_avg"] = None
@@ -173,8 +179,11 @@ def in_market_hours(ts: datetime, f: MarketHoursFilter) -> bool:
     return h >= f.start_hour_utc or h < f.end_hour_utc
 
 
-def check_filters(s: ManualStrategy, mi: ManualIndicators, candles: Sequence[Candle], i: int) -> tuple[bool, list[str]]:
-    """Hard filters (always ANDed with the entry result). Returns (passed, human-readable failures)."""
+def check_filters(
+    s: ManualStrategy, mi: ManualIndicators, candles: Sequence[Candle], i: int, volume_applicable: bool = True
+) -> tuple[bool, list[str]]:
+    """Hard filters (always ANDed with the entry result). Returns (passed, human-readable failures).
+    ``volume_applicable=False`` skips the min-volume filter (not applicable, see ``evaluate_entry``)."""
     c = candles[i]
     fails: list[str] = []
     mh = s.filters.market_hours
@@ -184,7 +193,7 @@ def check_filters(s: ManualStrategy, mi: ManualIndicators, candles: Sequence[Can
             f"{', weekdays' if mh.weekdays_only else ''})"
         )
     mv = s.filters.min_volume
-    if mv.enabled:
+    if mv.enabled and volume_applicable:
         avg = mi.vol_avg[i]
         if avg is None:
             fails.append("min-volume filter: volume average still in warm-up")

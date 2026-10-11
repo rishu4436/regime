@@ -162,6 +162,20 @@ def infer_token_type(symbol: str) -> TokenType:
 
 STOCK_TOKEN_TYPES = {TokenType.ONDO, TokenType.XSTOCK, TokenType.BSTOCK}
 
+# Token families (lower-case strings so they are easy to use as config keys):
+#   "bstock" (...B)  trades 24/7 on BSC with real DEX volume
+#   "ondo"   (...on) off-hours/weekend candles are zero-volume, price ~= reference (oracle-like)
+#   "xstock" (...x)  near-zero liquidity on BSC (TSLAx liquidity 0, bars weeks apart)
+#   "other"          anything else (crypto, stables)
+FAMILY_BSTOCK, FAMILY_ONDO, FAMILY_XSTOCK, FAMILY_OTHER = "bstock", "ondo", "xstock", "other"
+_FAMILY_BY_TYPE = {TokenType.BSTOCK: FAMILY_BSTOCK, TokenType.ONDO: FAMILY_ONDO, TokenType.XSTOCK: FAMILY_XSTOCK}
+
+
+def token_family(symbol: str) -> str:
+    """Suffix rule shared with Bot 4: '...B' bStock, '...on' Ondo, '...x' xStock, else 'other'.
+    Caveat: crypto symbols ending in 'B' (BNB, WBNB) classify as bStock (current volume rules, the strict ones)."""
+    return _FAMILY_BY_TYPE.get(infer_token_type(symbol or ""), FAMILY_OTHER)
+
 
 def staleness(last_ts: datetime, now: datetime, bar_seconds: int) -> float:
     """Age of the last candle's OPEN time in bars (negative = from the future)."""
@@ -182,6 +196,7 @@ __all__ = [
     "contiguous_pairs",
     "infer_token_type",
     "STOCK_TOKEN_TYPES",
+    "token_family",
     "staleness",
     "as_utc",
 ]

@@ -6,7 +6,7 @@ Pure: no I/O, no execution, no risk decisions.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Callable, Optional, Sequence
+from typing import Any, Callable, Mapping, Optional, Sequence
 
 from backend.contracts import (
     SIM_WARMUP_BARS,
@@ -31,7 +31,14 @@ from backend.contracts import (
 from . import exits, presets
 from .backtest import BacktestRun, run_backtest
 from .data import TIMEFRAME_SECONDS, DataReport, sanitize_candles
-from .live import LiveSafetyConfig, cap_size_pct, entry_blockers, thin_liquidity_factor
+from .live import (
+    LiveSafetyConfig,
+    entry_blockers,
+    live_size,
+    market_blockers,
+    normalize_market_context,
+    volume_applicable,
+)
 from .manual import ManualIndicators, check_filters, evaluate_entry, indicator_exit
 from .regime import detect_regime as _detect_regime
 
@@ -58,6 +65,7 @@ class DefaultStrategyEngine:
         live_safe: bool = False,
         live_config: Optional[LiveSafetyConfig] = None,
         clock: Callable[[], datetime] = utc_now,
+        market_context: Optional[Mapping[str, Mapping[str, Any]]] = None,
     ) -> None:
         if fee_pct < 0 or slippage_bps < 0 or warmup_bars < 0:
             raise ValueError("fee_pct, slippage_bps and warmup_bars must be >= 0")
@@ -72,14 +80,33 @@ class DefaultStrategyEngine:
         self.live_safe = live_safe
         self.live_config = live_config or LiveSafetyConfig()
         self.clock = clock
+        # Optional per-symbol market context from the loop (no contract change): see set_market_context.
+        self._market: dict[str, dict] = {}
+        for sym, ctx in (market_context or {}).items():
+            self.set_market_context(sym, ctx)
+
+    def set_market_context(self, symbol: str, ctx: Optional[Mapping[str, Any]]) -> None:
+        """Latest market info for ``symbol`` (``None`` clears it). Keys: ``status`` ('open'|'offhours'|'paused'|
+        'closed'; Binance ``statusInfo`` keys marketStatus/openState/reasonCode also accepted), ``price_impact_pct``
+        (from a probe quote), ``reference_price``, ``equity`` (USDT hint). Applies to BUYs only:
+        paused/closed -> STAY_OUT 'live_token_paused'; impact > 2% -> STAY_OUT 'live_price_impact'; > 1% -> size x0.5.
+        """
+        norm = normalize_market_context(ctx)
+        if norm is None:
+            self._market.pop(symbol, None)
+        else:
+            self._market[symbol] = norm
+
+    def market_context(self, symbol: str) -> Optional[dict]:
+        return self._market.get(symbol)
 
     # ------------------------------------------------------------------ live helpers
     def _live_block(
         self, symbol: str, cs: Sequence[Candle], bar_seconds: int, base: dict, met: Sequence[str] = ()
     ) -> Optional[Signal]:
-        if not self.live_safe:
-            return None
-        blocks = entry_blockers(symbol, cs, bar_seconds, self.clock(), self.live_config)
+        blocks = market_blockers(symbol, self._market.get(symbol), self.live_config)
+        if self.live_safe:
+            blocks = entry_blockers(symbol, cs, bar_seconds, self.clock(), self.live_config) + blocks
         if not blocks:
             return None
         return Signal(
@@ -90,16 +117,29 @@ class DefaultStrategyEngine:
             **base,
         )
 
-    def _size(self, pct: float, cs: Sequence[Candle]) -> tuple[float, str]:
+    def _size(
+        self, symbol: str, pct: float, equity: float, cs: Sequence[Candle], base: dict, met: Sequence[str] = ()
+    ) -> tuple[float, float, str, Optional[Signal]]:
+        """(size %, notional, reason note, blocking STAY_OUT or None) for a BUY."""
+        ctx = self._market.get(symbol)
         if not self.live_safe:
-            return pct, ""
-        cfg = self.live_config
-        factor, thin = thin_liquidity_factor(cs, cfg)
-        capped = cap_size_pct(pct, cfg, factor)
-        extra = f", {thin}" if thin else ""
-        return capped, (
-            f" [live-safe size {pct:g}% x{cfg.size_factor:g} capped at {cfg.max_size_pct:g}%{extra} -> {capped:g}%]"
-        )
+            imp = ctx.get("price_impact_pct") if ctx else None
+            if imp is not None and imp > self.live_config.impact_halve_pct:
+                pct *= 0.5
+                return pct, equity * pct / 100, f" [price impact {imp:.2f}% -> size x0.5]", None
+            return pct, equity * pct / 100, "", None
+        d = live_size(symbol, pct, equity, cs, self.live_config, ctx)
+        if d.blocker is not None:
+            name, why = d.blocker
+            blocked = Signal(
+                action=Action.STAY_OUT,
+                conditions_met=list(met),
+                conditions_failed=[name],
+                reason=f"Live safety blocked entry: {why}",
+                **base,
+            )
+            return 0.0, 0.0, "", blocked
+        return d.pct, d.notional, d.note, None
 
     @staticmethod
     def _data_note(rep: DataReport) -> str:
@@ -170,7 +210,8 @@ class DefaultStrategyEngine:
         blocked = self._live_block(strategy.symbol, cs, bar_s, base)
         if blocked is not None:
             return blocked
-        f_ok, f_fails = check_filters(strategy, mi, cs, i)
+        vol_ok = not self.live_safe or volume_applicable(strategy.symbol, self.live_config)
+        f_ok, f_fails = check_filters(strategy, mi, cs, i, volume_applicable=vol_ok)
         if not f_ok:
             names = (["market_hours"] if any("market hours" in f for f in f_fails) else []) + (
                 ["min_volume"] if any("min-volume" in f for f in f_fails) else []
@@ -181,7 +222,7 @@ class DefaultStrategyEngine:
                 reason="Filter blocked entry: " + "; ".join(f_fails) + note,
                 **base,
             )
-        ev = evaluate_entry(strategy, mi, cs, i)
+        ev = evaluate_entry(strategy, mi, cs, i, volume_applicable=vol_ok)
         if not ev.met and not ev.failed:
             why = (
                 "no entry conditions enabled"
@@ -207,8 +248,11 @@ class DefaultStrategyEngine:
                 reason=f"Entry conditions not met ({logic}): {detail}" + note,
                 **base,
             )
-        size_pct, size_note = self._size(r.position_size_pct, cs)
-        notional = portfolio.equity * size_pct / 100
+        size_pct, notional, size_note, blocked = self._size(
+            strategy.symbol, r.position_size_pct, portfolio.equity, cs, base, ev.met
+        )
+        if blocked is not None:
+            return blocked
         return Signal(
             action=Action.BUY,
             conditions_met=ev.met,
@@ -318,8 +362,16 @@ class DefaultStrategyEngine:
         extra: dict = {}
         size_note = ""
         if d.action == Action.BUY:
-            size_pct, size_note = self._size(presets.BASE_SIZE_PCT[config.style] * sel.size_multiplier, cs)
-            notional = config.capital * size_pct / 100
+            size_pct, notional, size_note, blocked = self._size(
+                config.symbol,
+                presets.BASE_SIZE_PCT[config.style] * sel.size_multiplier,
+                config.capital,
+                cs,
+                {**base, "strategy": sel.preset.value, "preset": sel.preset},
+                d.met,
+            )
+            if blocked is not None:
+                return blocked
         elif d.action == Action.SELL:
             target = min(held, key=lambda p: p.opened_at)  # oldest position, keyed by id (one SELL per Signal)
             size_pct = 100.0

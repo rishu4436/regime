@@ -31,6 +31,13 @@ from .helpers import entry_scenario, sma_entry_strategy
 H = timedelta(hours=1)
 
 
+def strat(**kw):
+    """The helpers' SMA entry on a bStock (24/7, real DEX volume -> the full volume rules apply)."""
+    s = sma_entry_strategy(**kw)
+    s.symbol = "NVDAB"
+    return s
+
+
 def shifted(cs: list[Candle], last_at: datetime) -> list[Candle]:
     d = last_at - cs[-1].timestamp
     return [c.model_copy(update={"timestamp": c.timestamp + d}) for c in cs]
@@ -55,7 +62,7 @@ FRESH = WED_1400 + 30 * timedelta(minutes=1)  # bar opened 14:00, now 14:30
 
 
 def test_default_engine_unchanged_and_live_allows_fresh_in_session():
-    s = sma_entry_strategy()  # position_size_pct 50
+    s = strat()  # position_size_pct 50
     base = DefaultStrategyEngine().evaluate_manual(s, ENTRY, pf())
     assert base.action == Action.BUY and base.proposed_size_pct == 50 and "live-safe" not in base.reason
     sig = live(FRESH).evaluate_manual(s, ENTRY, pf())
@@ -65,7 +72,7 @@ def test_default_engine_unchanged_and_live_allows_fresh_in_session():
 
 
 def test_size_caps_small_and_consistent_with_risk_usdt_caps():
-    s = sma_entry_strategy()
+    s = strat()
     s.risk.position_size_pct = 15
     assert live(FRESH).evaluate_manual(s, ENTRY, pf()).proposed_size_pct == 2.0
     s.risk.position_size_pct = 5
@@ -78,7 +85,7 @@ def test_size_caps_small_and_consistent_with_risk_usdt_caps():
 
 
 def test_auto_buy_is_capped():
-    cfg = AutoConfig(symbol="NVDAon", capital=1000, style=TraderStyle.BALANCED)
+    cfg = AutoConfig(symbol="NVDAB", capital=1000, style=TraderStyle.BALANCED)
     base = DefaultStrategyEngine().evaluate_auto(cfg, UPTREND, pf())
     assert base.action == Action.BUY and base.proposed_size_pct == pytest.approx(10 * 1.0, rel=0.6)
     sig = live(FRESH).evaluate_auto(cfg, UPTREND, pf())
@@ -95,20 +102,20 @@ def test_auto_buy_is_capped():
     ],
 )
 def test_stale_and_future_data_block_entries(now, blocker):
-    s = sma_entry_strategy()
+    s = strat()
     sig = live(now).evaluate_manual(s, ENTRY, pf())
     assert sig.action == Action.STAY_OUT and blocker in sig.conditions_failed
     assert sig.reason.startswith("Live safety blocked entry")
-    auto = live(now).evaluate_auto(AutoConfig(symbol="NVDAon", capital=1000, style=TraderStyle.BALANCED), UPTREND, pf())
+    auto = live(now).evaluate_auto(AutoConfig(symbol="NVDAB", capital=1000, style=TraderStyle.BALANCED), UPTREND, pf())
     assert auto.action == Action.STAY_OUT and blocker in auto.conditions_failed
 
 
 def test_two_bars_old_is_still_fresh():
-    assert live(WED_1400 + 2 * H).evaluate_manual(sma_entry_strategy(), ENTRY, pf()).action == Action.BUY
+    assert live(WED_1400 + 2 * H).evaluate_manual(strat(), ENTRY, pf()).action == Action.BUY
 
 
 def test_market_hours_off_by_default_24_7():
-    s = sma_entry_strategy()
+    s = strat()
     assert LiveSafetyConfig().market_hours.enabled is False
     for last in (datetime(2026, 1, 7, 3, tzinfo=timezone.utc), datetime(2026, 1, 10, 15, tzinfo=timezone.utc)):
         cs = shifted(ENTRY, last)  # 03:00 Wednesday, Saturday afternoon
@@ -116,7 +123,7 @@ def test_market_hours_off_by_default_24_7():
 
 
 def test_market_hours_opt_in_for_stock_tokens():
-    s = sma_entry_strategy()
+    s = strat()
     on = MarketHoursFilter(enabled=True)
     early = shifted(ENTRY, datetime(2026, 1, 7, 12, tzinfo=timezone.utc))
     sig = live(early[-1].timestamp + 10 * timedelta(minutes=1), market_hours=on).evaluate_manual(s, early, pf())
@@ -142,14 +149,14 @@ def with_volumes(cs: list[Candle], vols: list[float]) -> list[Candle]:
 
 def test_thin_liquidity_blocks_entry():
     cs = with_volumes(ENTRY, [0.0] * 16 + [5.0, 0.0, 0.0, 5.0])  # 2 of 20 bars traded (overnight)
-    sig = live(FRESH).evaluate_manual(sma_entry_strategy(), cs, pf())
+    sig = live(FRESH).evaluate_manual(strat(), cs, pf())
     assert sig.action == Action.STAY_OUT and sig.conditions_failed == ["live_thin_liquidity"]
     assert "10% of last 20 bars traded" in sig.reason
-    assert DefaultStrategyEngine().evaluate_manual(sma_entry_strategy(), cs, pf()).action == Action.BUY  # sim unchanged
+    assert DefaultStrategyEngine().evaluate_manual(strat(), cs, pf()).action == Action.BUY  # sim unchanged
 
 
 def test_thin_but_tradeable_liquidity_halves_size():
-    s = sma_entry_strategy()  # 50% -> live-safe 2%
+    s = strat()  # 50% -> live-safe 2%
     half = with_volumes(ENTRY, [0.0, 5.0] * 10)  # 50% of bars traded
     sig = live(FRESH).evaluate_manual(s, half, pf())
     assert sig.action == Action.BUY and sig.proposed_size_pct == 1.0 and "thin liquidity" in sig.reason
@@ -169,14 +176,14 @@ def test_liquidity_unit():
 
 def test_no_volume_on_last_bar_blocks():
     cs = ENTRY[:-1] + [ENTRY[-1].model_copy(update={"volume": 0.0})]
-    sig = live(FRESH).evaluate_manual(sma_entry_strategy(), cs, pf())
+    sig = live(FRESH).evaluate_manual(strat(), cs, pf())
     assert sig.action == Action.STAY_OUT and sig.conditions_failed == ["live_no_volume"]
-    assert live(FRESH, require_volume=False).evaluate_manual(sma_entry_strategy(), cs, pf()).action == Action.BUY
+    assert live(FRESH, require_volume=False).evaluate_manual(strat(), cs, pf()).action == Action.BUY
 
 
 def test_sell_is_never_blocked():
-    s = sma_entry_strategy()
-    pos = Position(symbol="NVDAon", quantity=2, avg_entry_price=101, strategy="MANUAL:test")
+    s = strat()
+    pos = Position(symbol="NVDAB", quantity=2, avg_entry_price=101, strategy="MANUAL:test")
     cs = shifted(entry_scenario([(101, 102, 90, 91)], tail=0), datetime(2026, 1, 10, 3, tzinfo=timezone.utc))
     cs[-1] = cs[-1].model_copy(update={"volume": 0.0})
     eng = DefaultStrategyEngine(live_safe=True, manual_price_exits=True, clock=lambda: cs[-1].timestamp + 50 * H)
@@ -187,7 +194,7 @@ def test_sell_is_never_blocked():
 
 
 def test_warming_up_indicator_blocks_live_entry_only():
-    s = sma_entry_strategy()
+    s = strat()
     s.entry.price_above_ema.enabled = True
     s.entry.price_above_ema.period = 500  # never ready on 61 bars -> skipped
     assert DefaultStrategyEngine().evaluate_manual(s, ENTRY, pf()).action == Action.BUY  # sim: skipped != false
@@ -197,7 +204,7 @@ def test_warming_up_indicator_blocks_live_entry_only():
 
 
 def test_insufficient_data_stays_out_in_live():
-    sig = live(FRESH).evaluate_manual(sma_entry_strategy(), ENTRY[-30:], pf())
+    sig = live(FRESH).evaluate_manual(strat(), ENTRY[-30:], pf())
     assert sig.action == Action.STAY_OUT and sig.conditions_failed == ["insufficient_data"]
 
 

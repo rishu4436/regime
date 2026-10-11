@@ -18,11 +18,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence
 
 from backend.contracts import Candle, MarketHoursFilter
 
-from .data import STOCK_TOKEN_TYPES, as_utc, infer_token_type, staleness
+from .data import FAMILY_ONDO, FAMILY_XSTOCK, STOCK_TOKEN_TYPES, as_utc, infer_token_type, staleness, token_family
 from .manual import in_market_hours
 
 
@@ -42,6 +42,21 @@ class LiveSafetyConfig:
     thin_active_fraction: float = 0.6  # < 60% of bars traded -> size reduced
     thin_relative_volume: float = 0.25  # last bar volume < 25% of the window's mean traded volume -> size reduced
     thin_size_factor: float = 0.5
+    # Token families (data.token_family): xStock has ~zero liquidity on BSC -> no entries by default.
+    blocked_families: frozenset = frozenset({FAMILY_XSTOCK})
+    # Families whose candles carry no on-chain bar volume (Ondo off-hours: volume 0, price ~= reference): volume
+    # conditions / the min-volume filter are NOT APPLICABLE and the no-volume / thin-liquidity gates are skipped.
+    # Stale-data refusal still applies.
+    volume_exempt_families: frozenset = frozenset({FAMILY_ONDO})
+    # Minimum order per family (Ondo rejects < 20 USD with 40375). A smaller BUY is bumped up to the floor if the
+    # floor <= max_order_usdt (and <= the equity basis), else STAY_OUT 'live_below_min_order'.
+    min_order_usdt: Mapping[str, float] = field(default_factory=lambda: {FAMILY_ONDO: 20.0})
+    bump_to_min_order: bool = True
+    max_order_usdt: float = 25.0  # never propose more than this per BUY (Bot 3's live per-order cap)
+    equity_hint_usdt: Optional[float] = None  # if set, size from min(equity, hint) (e.g. the real wallet balance)
+    # Market context (DefaultStrategyEngine.set_market_context): quote price impact gates.
+    impact_halve_pct: float = 1.0  # impact > 1% -> size x0.5
+    impact_max_pct: float = 2.0  # impact > 2% -> STAY_OUT 'live_price_impact'
 
     def __post_init__(self) -> None:
         if not (0 < self.size_factor <= 1) or not (0 < self.max_size_pct <= 100):
@@ -52,6 +67,12 @@ class LiveSafetyConfig:
             raise ValueError("liquidity_lookback >= 1 and 0 <= min_active_fraction <= thin_active_fraction <= 1")
         if not (0 < self.thin_size_factor <= 1) or self.thin_relative_volume < 0:
             raise ValueError("thin_size_factor must be in (0, 1] and thin_relative_volume >= 0")
+        if self.max_order_usdt <= 0 or any(v < 0 for v in self.min_order_usdt.values()):
+            raise ValueError("max_order_usdt must be > 0 and min_order_usdt values >= 0")
+        if self.equity_hint_usdt is not None and self.equity_hint_usdt <= 0:
+            raise ValueError("equity_hint_usdt must be > 0")
+        if not (0 < self.impact_halve_pct <= self.impact_max_pct):
+            raise ValueError("0 < impact_halve_pct <= impact_max_pct")
 
 
 @dataclass(frozen=True)
@@ -87,13 +108,20 @@ def cap_size_pct(pct: float, cfg: LiveSafetyConfig, liquidity_factor: float = 1.
     return min(pct * cfg.size_factor, cfg.max_size_pct) * liquidity_factor
 
 
+def volume_applicable(symbol: str, cfg: LiveSafetyConfig) -> bool:
+    return token_family(symbol) not in cfg.volume_exempt_families
+
+
 def entry_blockers(
     symbol: str, candles: Sequence[Candle], bar_seconds: int, now: datetime, cfg: LiveSafetyConfig
 ) -> list[tuple[str, str]]:
     """(name, human reason) for every live-safety rule that blocks a NEW entry. Empty list = allowed."""
     out: list[tuple[str, str]] = []
+    fam = token_family(symbol)
+    if fam in cfg.blocked_families:
+        out.append(("live_illiquid_family", f"{symbol} is a {fam} token: no usable on-chain liquidity on BSC"))
     if not candles:
-        return [("live_no_data", "no valid candles")]
+        return out + [("live_no_data", "no valid candles")]
     last = candles[-1]
     now = as_utc(now)
     age = staleness(last.timestamp, now, bar_seconds)
@@ -118,6 +146,8 @@ def entry_blockers(
             )
         if not in_market_hours(now, mh):
             out.append(("live_market_hours_now", f"now ({now.isoformat()}) is outside the stock session {window}"))
+    if fam in cfg.volume_exempt_families:  # e.g. Ondo: zero bar volume is normal, not a liquidity signal
+        return out
     if cfg.require_volume and last.volume <= 0:
         out.append(("live_no_volume", "last bar has no on-chain volume (illiquid / closed)"))
     liq = liquidity(candles, cfg.liquidity_lookback)
@@ -130,3 +160,112 @@ def entry_blockers(
             )
         )
     return out
+
+
+# ---------------------------------------------------------------- market context (optional, from the loop)
+PAUSED_STATUSES = frozenset({"paused", "pause", "closed"})
+PAUSED_REASONS = frozenset({"ASSET_PAUSED", "MARKET_PAUSED", "MAINTENANCE", "MARKET_MAINTENANCE", "UNSUPPORTED"})
+
+
+def _num(v: Any) -> Optional[float]:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if f == f and f not in (float("inf"), float("-inf")) else None
+
+
+def normalize_market_context(ctx: Optional[Mapping[str, Any]]) -> Optional[dict]:
+    """Accepts the engine shape ``{status, price_impact_pct, reference_price, equity}`` and the raw Binance
+    ``statusInfo`` shape (``marketStatus``/``openState``/``reasonCode``). Unknown keys are ignored."""
+    if ctx is None:
+        return None
+    status = ctx.get("status", ctx.get("marketStatus"))
+    return {
+        "status": str(status).lower() if status is not None else None,
+        "open_state": ctx.get("openState", ctx.get("open_state")),
+        "reason_code": (str(ctx.get("reasonCode", ctx.get("reason_code")) or "").upper() or None),
+        "price_impact_pct": _num(ctx.get("price_impact_pct", ctx.get("priceImpactPercent"))),
+        "reference_price": _num(ctx.get("reference_price", ctx.get("referencePrice"))),
+        "equity": _num(ctx.get("equity")),
+    }
+
+
+def market_blockers(symbol: str, ctx: Optional[dict], cfg: LiveSafetyConfig) -> list[tuple[str, str]]:
+    if not ctx:
+        return []
+    out = []
+    st, rc = ctx.get("status"), ctx.get("reason_code")
+    if st in PAUSED_STATUSES or ctx.get("open_state") is False or rc in PAUSED_REASONS:
+        out.append(
+            ("live_token_paused", f"{symbol} not tradable now (status {st}, openState {ctx.get('open_state')}, {rc})")
+        )
+    imp = ctx.get("price_impact_pct")
+    if imp is not None and imp > cfg.impact_max_pct:
+        out.append(("live_price_impact", f"quote price impact {imp:.2f}% > {cfg.impact_max_pct:g}%"))
+    return out
+
+
+@dataclass
+class SizeDecision:
+    pct: float
+    notional: float
+    note: str
+    blocker: Optional[tuple[str, str]] = None
+
+
+def live_size(
+    symbol: str,
+    proposed_pct: float,
+    equity: float,
+    candles: Sequence[Candle],
+    cfg: LiveSafetyConfig,
+    ctx: Optional[dict] = None,
+) -> SizeDecision:
+    """Live-safe BUY size: x size_factor, cap max_size_pct, x thin-liquidity factor (volume families only),
+    x0.5 on price impact > impact_halve_pct; then the per-family min-order floor and the max_order_usdt cap."""
+    fam = token_family(symbol)
+    basis = equity
+    hint = ctx.get("equity") if ctx else None
+    for h in (hint, cfg.equity_hint_usdt):
+        if h is not None and h > 0:
+            basis = min(basis, h)
+    steps = [f"{proposed_pct:g}% x{cfg.size_factor:g} capped at {cfg.max_size_pct:g}%"]
+    pct = min(proposed_pct * cfg.size_factor, cfg.max_size_pct)
+    if fam not in cfg.volume_exempt_families:
+        factor, thin = thin_liquidity_factor(candles, cfg)
+        if thin:
+            pct *= factor
+            steps.append(thin)
+    halved = False
+    imp = ctx.get("price_impact_pct") if ctx else None
+    if imp is not None and imp > cfg.impact_halve_pct:
+        pct *= 0.5
+        halved = True
+        steps.append(f"price impact {imp:.2f}% > {cfg.impact_halve_pct:g}% x0.5")
+    notional = basis * pct / 100
+    if basis != equity:
+        steps.append(f"equity basis {basis:g}")
+    floor = cfg.min_order_usdt.get(fam, 0.0)
+    if floor > 0 and notional < floor:
+        can_bump = cfg.bump_to_min_order and not halved and floor <= cfg.max_order_usdt and floor <= basis
+        if not can_bump:
+            why = (
+                "price impact halved the size"
+                if halved
+                else f"floor > max order {cfg.max_order_usdt:g} USDT"
+                if floor > cfg.max_order_usdt
+                else f"floor > equity {basis:g}"
+                if floor > basis
+                else "bumping disabled"
+            )
+            msg = f"{notional:.2f} USDT is below the {fam} minimum order {floor:g} USDT ({why})"
+            return SizeDecision(0.0, 0.0, "", ("live_below_min_order", msg))
+        steps.append(f"bumped {notional:.2f} -> {fam} min order {floor:g} USDT")
+        notional = floor
+    if notional > cfg.max_order_usdt:
+        steps.append(f"capped at {cfg.max_order_usdt:g} USDT")
+        notional = cfg.max_order_usdt
+    pct = notional / equity * 100 if equity > 0 else 0.0  # Signal convention: % of the engine's equity/capital
+    note = f" [live-safe size {', '.join(steps)} -> {pct:.4g}% = {notional:.2f} USDT]"
+    return SizeDecision(pct, notional, note)

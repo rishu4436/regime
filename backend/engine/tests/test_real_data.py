@@ -307,7 +307,7 @@ def test_round_the_clock_data_regime_and_timeframe():
 @pytest.mark.parametrize("style", list(TraderStyle))
 def test_round_the_clock_live_entries_are_small_and_skip_dead_hours(style):
     cs = round_the_clock_candles(days=21, seed=9, drift=0.0008)
-    cfg = AutoConfig(symbol="NVDAon", capital=1000, style=style)
+    cfg = AutoConfig(symbol="NVDAB", capital=1000, style=style)
     buys, blocked = 0, 0
     for k in range(61, len(cs) + 1):
         now = cs[k - 1].timestamp + timedelta(minutes=30)
