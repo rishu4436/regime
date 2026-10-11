@@ -55,7 +55,8 @@ export function ManualBuilder({ strategy: s, setStrategy, capital, setCapital, r
     try {
       const out = await api.llmParse(text, s.symbol);
       setParseNotes(out.kind === "MANUAL" ? (out.notes ?? []).filter(Boolean) : []);
-      if (out.kind === "MANUAL") { setStrategy({ ...fillStrategy(out.strategy), id: undefined }); toast("Form filled from your description. Review it, then run a backtest", "success"); }
+      if (out.kind === "MANUAL") { // the parser always returns the contract default (CONFIRMATION); keep the form's Autonomous / Ask me first choice
+        setStrategy({ ...fillStrategy(out.strategy), activation: s.activation, id: undefined }); toast("Form filled from your description. Review it, then run a backtest", "success"); }
       else { onAutoParsed(out.config); toast("That sounds like Auto Mode, so I opened it with your settings", "info"); }
     } catch (err) { toast(`Couldn't parse that: ${err instanceof Error ? err.message : err}`, "error"); }
     finally { setBusy(null); }

@@ -94,7 +94,7 @@ function Shell() {
         {error && <div className="banner amber"><span className="grow">Backend unreachable: {error}</span><span className="small muted">Start the API or run with VITE_API_MODE=mock</span></div>}
         {tab === "dashboard" && <Dashboard status={status} refresh={refresh} tick={tick} alertsVersion={alertsVersion} go={go} />}
         {tab === "manual" && <ManualBuilder strategy={strategy} setStrategy={setStrategy} capital={capital} setCapital={setCapital} run={run} setRun={setRun}
-          onActivated={() => { refresh(); setTab("dashboard"); }} onAutoParsed={(c) => { setAutoCfg({ ...autoCfg, ...c }); setTab("auto"); }} />}
+          onActivated={() => { refresh(); setTab("dashboard"); }} onAutoParsed={(c) => { setAutoCfg({ ...autoCfg, ...c, activation: autoCfg.activation }); setTab("auto"); }} />}
         {tab === "auto" && <AutoMode config={autoCfg} setConfig={setAutoCfg} status={status} tick={tick} onActivated={() => { refresh(); setTab("dashboard"); }} />}
         {tab === "backtest" && <BacktestView run={run} onOpenBuilder={() => setTab("manual")} />}
       </main>
