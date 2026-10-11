@@ -188,11 +188,13 @@ class BawExecutor:
         return live_gate(self._envmap, self.require_risk_allow_live)
 
     # ------------------------------------------------------------------ LiveExecutor
-    def execute(self, order: OrderRequest, quote: Quote, ctx: RouteContext, path: ExecutionPath) -> ExecutionResult:
+    def execute(self, order: OrderRequest, quote: Quote, ctx: RouteContext, path: ExecutionPath,
+                max_slippage_pct: Optional[float] = None) -> ExecutionResult:
         qty = order.quantity if (order.side == OrderSide.SELL and order.quantity) else ctx.from_qty
         notional = ctx.from_qty if order.side == OrderSide.BUY else (quote.notional or order.notional)
         return self.execute_order(order, from_token=ctx.from_token, to_token=ctx.to_token, from_qty=qty,
-                                  notional_usdt=notional, path=path, quote=quote, chain_id=ctx.chain_id or self.chain_id)
+                                  notional_usdt=notional, path=path, quote=quote, chain_id=ctx.chain_id or self.chain_id,
+                                  max_slippage_pct=max_slippage_pct)
 
     def execute_order(self, order: OrderRequest, from_token: str, to_token: str, from_qty: float,
                       notional_usdt: float, path: ExecutionPath = ExecutionPath.SWAP, quote: Optional[Quote] = None,

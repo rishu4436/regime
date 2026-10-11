@@ -253,11 +253,11 @@ class SimulatedBinanceClient(SimWalletMixin, TokenStatusMixin, MockExchangeClien
             return reject(f"{code} market closed for {order.symbol}")
         return None
 
-    def execute_swap(self, order: OrderRequest, quote: Quote) -> ExecutionResult:
+    def execute_swap(self, order: OrderRequest, quote: Quote, max_slippage_pct: Optional[float] = None) -> ExecutionResult:
         self._maybe_sleep()
         return self._venue_check(order, quote, ExecutionPath.SWAP) or self._finish(order, quote, ExecutionPath.SWAP)
 
-    def execute_rfq(self, order: OrderRequest, quote: Quote) -> ExecutionResult:
+    def execute_rfq(self, order: OrderRequest, quote: Quote, max_slippage_pct: Optional[float] = None) -> ExecutionResult:
         self._maybe_sleep()
         return self._venue_check(order, quote, ExecutionPath.RFQ) or self._finish(order, quote, ExecutionPath.RFQ)
 

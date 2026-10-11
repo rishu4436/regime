@@ -266,3 +266,17 @@ def test_failed_row_with_slippage_message(tmp_path):
     fake = FakeBaw(market_order_list=lambda argv: ok(listing(row)) if "--orderId" in argv else ok(listing()))
     r = run(make(fake, tmp_path))
     assert r.status == OrderStatus.FAILED and result_reason(r) == B.SLIPPAGE_EXCEEDED
+
+
+def test_execute_signature_accepts_max_slippage_pct():
+    import inspect
+    from backend.exchange.baw_executor import BawExecutor
+    assert "max_slippage_pct" in inspect.signature(BawExecutor.execute).parameters
+
+
+def test_execute_passes_per_call_slippage(tmp_path):
+    fake = FakeBaw()
+    order, quote, ctx = buy()
+    make(fake, tmp_path).execute(order, quote, ctx, ExecutionPath.SWAP, max_slippage_pct=0.4)
+    a = fake.argv("market-order swap")
+    assert a[a.index("--slippage") + 1] == "0.4"
