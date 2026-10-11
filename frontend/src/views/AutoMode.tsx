@@ -3,8 +3,9 @@ import { PresetNameValues, RegimeValues, TimeframeValues, TraderStyleValues, typ
 import { ensureLoop } from "./Dashboard";
 import { api } from "../api";
 import { RegimeBadge } from "../components/Badges";
-import { Card, NumberInput, Segmented, Toggle, useToast } from "../components/ui";
-import { PRESET_INFO, REGIME_INFO, STYLE_INFO, STYLE_MAP } from "../lib/auto";
+import { Card, NumberInput, Segmented, Skeleton, Toggle, useToast } from "../components/ui";
+import { PRESET_INFO, REGIME_INFO, STYLE_INFO } from "../lib/auto";
+import type { PresetsTable } from "../api/types";
 import { strategyLabel, TOKENS } from "../lib/strategy";
 
 interface Props { config: AutoConfig; setConfig: (c: AutoConfig) => void; status: StatusSnapshot | null; onActivated: () => void; tick: number }
@@ -21,8 +22,14 @@ export function AutoMode({ config: c, setConfig, status, onActivated, tick }: Pr
     api.getSelection(c.symbol, style, c.timeframe ?? "1h").then(setSel).catch(() => setSel(null));
   }, [c.symbol, c.timeframe, style, tick]);
   const regime = ra?.regime ?? null;
-  const pick = sel?.preset ?? (regime ? STYLE_MAP[regime][style][0] : null);
-  const mult = sel?.size_multiplier ?? (regime ? STYLE_MAP[regime][style][1] : 1);
+  // the engine's full map(regime, style) table: GET /api/auto/presets-table
+  const [table, setTable] = useState<PresetsTable | null>(null);
+  const [tableErr, setTableErr] = useState<string | null>(null);
+  useEffect(() => { api.getPresetsTable().then((t) => { setTable(t); setTableErr(null); }).catch((e) => setTableErr(e instanceof Error ? e.message : String(e))); }, []);
+  const cell = (r: string, st: string) => table?.entries.find((e) => e.regime === r && e.style === st);
+  const fromTable = regime ? cell(regime, style) : undefined;
+  const pick = sel ? sel.preset ?? null : fromTable?.preset ?? null;
+  const mult = sel?.size_multiplier ?? fromTable?.size_multiplier ?? 1;
   const pickOn = pick != null && enabled.includes(pick);
   const isActive = status?.agent_mode === "AUTO";
 
@@ -90,24 +97,32 @@ export function AutoMode({ config: c, setConfig, status, onActivated, tick }: Pr
             <b>Live:</b> {strategyLabel(status?.active_strategy)} · {status?.last_decision?.reason ?? "waiting for the next bar"}
           </div>}
         </Card>
-        <Card title="Regime × style → preset" extra={<span className="faint small">indicative; the engine (Bot 2) decides</span>} pad={false}>
+        <Card title="Regime × style → preset"
+          extra={table && <span className={`pill ${table.source.startsWith("engine:") ? "ok" : "warn"}`} title="Where the table comes from">{table.source}</span>} pad={false}>
           <div className="table-wrap" style={{ padding: "4px 8px 8px", maxHeight: "none" }}>
-            <table className="map-table">
-              <thead><tr><th>Regime</th>{TraderStyleValues.map((s) => <th key={s} style={s === style ? { color: "#c7d2fe" } : undefined}>{STYLE_INFO[s].label.split(" / ")[0]}</th>)}</tr></thead>
-              <tbody>
-                {RegimeValues.map((r) => (
-                  <tr key={r}>
-                    <td><RegimeBadge regime={r} /></td>
-                    {TraderStyleValues.map((s) => {
-                      const [p, m] = STYLE_MAP[r][s], hl = r === regime && s === style;
-                      return <td key={s} className={hl ? "hl" : ""} style={{ opacity: p && !enabled.includes(p) ? 0.4 : 1 }}>
-                        {p ? PRESET_INFO[p].label : <span className="faint">stay out</span>}{p && m !== 1 ? <span className="faint small"> ×{m}</span> : null}
-                      </td>;
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            {tableErr ? <div className="empty">Couldn't load the presets table: {tableErr}</div> : !table ? <Skeleton h={260} /> : (
+              <table className="map-table">
+                <thead><tr><th>Regime</th>{TraderStyleValues.map((s) => <th key={s} style={s === style ? { color: "#c7d2fe" } : undefined}>{STYLE_INFO[s].label.split(" / ")[0]}</th>)}</tr></thead>
+                <tbody>
+                  {RegimeValues.map((r) => (
+                    <tr key={r}>
+                      <td><RegimeBadge regime={r} /></td>
+                      {TraderStyleValues.map((s) => {
+                        const e = cell(r, s), hl = r === regime && s === style, p = e?.preset ?? null;
+                        return (
+                          <td key={s} className={`wrap${hl ? " hl" : ""}`} style={{ minWidth: 170, opacity: p && !enabled.includes(p) ? 0.45 : 1, verticalAlign: "top" }}>
+                            <div>{!e ? <span className="faint">—</span> : p ? <b>{PRESET_INFO[p].label}</b> : <span className="neg">Stay out</span>}
+                              {e && p && <span className={`small ${e.size_multiplier !== 1 ? "pos" : "faint"}`}> ×{e.size_multiplier}</span>}</div>
+                            {e?.reason && <div className="faint small" style={{ marginTop: 3, whiteSpace: "normal" }}>{e.reason}</div>}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {table && <div className="note" style={{ padding: "0 4px" }}>All presets enabled. Cells dimmed when you've disabled that preset; the agent then stays out instead.</div>}
           </div>
         </Card>
         <Card title="Preset agents">
