@@ -112,6 +112,53 @@ _BLOCKED_SEG_RE = re.compile(r"Blocked \([a-z0-9_]+\):[^;]*")
 _UNSIGNED_SEG_RE = re.compile(r"(?:quote )?price impact [^;()]*\((?:direction not reported|counted as adverse)[^)]*\)", re.I)
 
 
+# 'RSI_EXIT: RSI(14)=74.1 > 70' -> 'RSI exit, RSI(14)=74.1 is above 70' (label keeps its own capitals, comparators in words)
+_EXIT_PREFIX_RE = re.compile(r"^(" + "|".join(k for k in EXIT_LABEL) + r"):\s*([^;]*)")
+_CMP_WORDS = ((">=", "is at or above"), ("<=", "is at or below"), (">", "is above"), ("<", "is below"))
+
+
+def _cmp_words(t: str) -> str:
+    for op, words in _CMP_WORDS:
+        o = re.escape(op)
+        t = re.sub(r"\s+" + o + r"(?!=)\s+|\s*" + o + r"(?!=)\s*(?=[-+]?\d)", f" {words} ", t)
+    return t
+
+
+def _exit_prefix(m: "re.Match[str]") -> str:
+    label = EXIT_LABEL[m.group(1)]
+    rest = _cmp_words(m.group(2).strip())
+    return label[:1].upper() + label[1:] + (f", {rest}" if rest else "")
+
+
+# Loop reason 'BUY not executed: awaiting your approval of the pending BUY (30600a72...); ...' is shown to the user:
+# lowercase the actions and drop the internal id in parentheses.
+_PAREN_ID_RE = re.compile(r"\s*\((?:id[:\s]*)?(?:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}|[0-9a-f]{8,})\)", re.I)
+
+
+def _pending_soften(t: str) -> str:
+    t = re.sub(r"^\s*(BUY|SELL|STAY_OUT) not executed:", lambda m: _human(m.group(1)).capitalize() + " not executed:", t)
+    t = re.sub(r"\b(pending|the|a|your) (BUY|SELL)\b", lambda m: f"{m.group(1)} {m.group(2).lower()}", t)
+    if re.search(r"pending|approv|confirm", t, re.I):
+        t = _PAREN_ID_RE.sub("", t)
+    return t
+
+
+MODE_TEXT: dict[str, str] = {"SIM": "simulation", "PAPER": "paper trading", "LIVE": "live"}
+ROUTE_TEXT: dict[str, str] = {"SWAP": "a swap", "RFQ": "an RFQ quote"}
+
+
+def mode_text(d: Decision) -> str:
+    """'manual mode, simulation' / 'auto mode, paper trading' (LIVE decisions have their own wording)."""
+    tm = str(getattr(d.mode, "value", d.mode) or "")
+    return f"{str(getattr(d.agent_mode, 'value', d.agent_mode)).lower()} mode, {MODE_TEXT.get(tm.upper(), tm.lower())}"
+
+
+def route_text(route: Any) -> str:
+    """SWAP / RFQ -> 'a swap' / 'an RFQ quote' (unknown routes as given)."""
+    v = str(getattr(route, "value", route) or "")
+    return ROUTE_TEXT.get(v.upper(), v)
+
+
 def humanize_reason(text: Optional[str], keywords: bool = False) -> str:
     """Engine / risk reason string -> plain words: regime + style -> preset mapping, 'Blocked (check): ...',
     exit codes, condition names, live-safe size notes; env-var names removed. Numbers are kept."""
@@ -130,7 +177,8 @@ def humanize_reason(text: Optional[str], keywords: bool = False) -> str:
                          f"{PRESET_LABEL.get(m.group(3), m.group(3))}", t)
     t = re.sub(r"\b([a-z][a-z ]*?) \+ (PATIENT|BALANCED|ACTIVE):",
                lambda m: f"{m.group(1)} market with the {STYLE_LABEL[m.group(2)]} style:", t)
-    t = re.sub(r"^(" + "|".join(k for k in EXIT_LABEL) + r"):", lambda m: EXIT_LABEL[m.group(1)].capitalize() + ":", t)
+    t = _pending_soften(t)
+    t = _EXIT_PREFIX_RE.sub(_exit_prefix, t)
     t = _EXIT_RE.sub(lambda m: EXIT_LABEL[m.group(1)], t)
     t = _PRESET_RE.sub(lambda m: PRESET_LABEL[m.group(1)], t)
     t = live_facts.ENV_NAME_RE.sub("a live-trading setting", t)
@@ -343,7 +391,7 @@ def explain_decision(d: Decision) -> str:
     if live_facts.is_live(d):
         return explain_live_decision(d)
     verb = {Action.BUY: "Buy", Action.SELL: "Sell", Action.STAY_OUT: "Stay out of"}[d.action]
-    parts = [f"{verb} {d.symbol} ({d.agent_mode.value} mode, {d.mode.value})."]
+    parts = [f"{verb} {d.symbol} ({mode_text(d)})."]
     ctx = f"Strategy: {strategy_label(d.strategy)}"
     if d.regime is not None:
         ctx += f", market regime: {_human(d.regime.value)}"
@@ -379,7 +427,7 @@ def explain_decision(d: Decision) -> str:
             else:
                 parts.append(f"Risk layer blocked the trade: {_sentence(reasons or 'no reason given')}")
     if ex is not None and not waiting:
-        txt = f"Execution: {status_text(ex.status)} via {ex.path.value}"
+        txt = f"Execution: {status_text(ex.status)} via {route_text(ex.path)}"
         if ex.filled_quantity:
             txt += f", {ex.filled_quantity:g} {ex.symbol} @ {_price(ex.avg_price)} ({_money(ex.notional)}, fee {_money(ex.fee)})"
         if ex.error:
@@ -409,7 +457,7 @@ def live_execution_sentence(d: Decision, own: bool = True) -> Optional[str]:
     status = (f["status"] or "").upper()
     side = (f["side"] or ("SELL" if d.action == Action.SELL else "BUY")).upper()
     sym = f["symbol"] or d.symbol
-    route = f" via {f['route']}" if f["route"] else ""
+    route = f" via {route_text(f['route'])}" if f["route"] else ""
     how = " on its own" if own else " after your OK"
     if status in ("FILLED", "PARTIALLY_FILLED") and (f["quantity"] or f["amount_usdt"]):
         amt = f"{f['amount_usdt']:,.2f} USDT" if f["amount_usdt"] is not None else "an unreported USDT amount"

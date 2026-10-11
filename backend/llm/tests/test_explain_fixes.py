@@ -170,7 +170,7 @@ def test_f3_engine_reason_translated():
                                   "uptrend (macd_above_signal failed)")
     assert t.startswith("Market regime strong uptrend") and "with the Patient style selects Trend following" in t
     assert "preferred Smart DCA is disabled" in t and "MACD above its signal line failed" in t and not SNAKE.search(t)
-    assert templates.humanize_reason("TAKE_PROFIT: high 101.97 reached target 93.48").startswith("Take-profit: high 101.97")
+    assert templates.humanize_reason("TAKE_PROFIT: high 101.97 reached target 93.48").startswith("Take-profit, high 101.97")
     assert "with the Balanced style: policy is to pause" in templates.humanize_reason(
         "Regime HIGH_VOLATILITY (x); HIGH_VOLATILITY + BALANCED: policy is to pause / stay out")
 
@@ -197,19 +197,19 @@ def test_f3_risk_exit_reason_plain():
                position_id="75b28244aaaa", reason="TAKE_PROFIT: high 101.9712 reached target 93.4797",
                conditions_met=["TAKE_PROFIT"], price=101.83)
     txt = templates.explain_decision(_d(sig, None, _ex(TradingMode.SIM, side=OrderSide.SELL, avg_price=101.83), TradingMode.SIM))
-    assert "Reason: Take-profit: high 101.9712" in txt and "Conditions met: take-profit." in txt and not SNAKE.search(txt)
+    assert "Reason: Take-profit, high 101.9712" in txt and "Conditions met: take-profit." in txt and not SNAKE.search(txt)
 
 
 # ------------------------------------------------------------------ F4: 'waiting' only when nothing executed
 def test_f4_filled_after_confirmation_does_not_say_waiting_and_status_words():
     sig = _sig()
     txt = templates.explain_decision(_d(sig, _verdict(sig, conf=True), _ex(TradingMode.SIM), TradingMode.SIM))
-    assert "waiting" not in txt and "Execution: filled via SWAP" in txt
+    assert "waiting" not in txt and "Execution: filled via a swap" in txt
     pend = templates.explain_decision(_awaiting_loop_shape(TradingMode.SIM))
     assert "waiting for your confirmation before executing" in pend and "PENDING_CONFIRMATION" not in pend
     exp = templates.explain_decision(_d(sig, _verdict(sig), _ex(TradingMode.SIM, status=OrderStatus.EXPIRED,
                                                                 filled_quantity=0.0), TradingMode.SIM))
-    assert "Execution: expired via SWAP" in exp and "EXPIRED" not in exp
+    assert "Execution: expired via a swap" in exp and "EXPIRED" not in exp
 
 
 # ------------------------------------------------------------------ F5: same code translation in every mode
@@ -309,14 +309,14 @@ def test_goes_above_rsi_exit_and_goes_below_entry():
 def test_default_entry_is_ema20_with_note():
     s, notes = keyword_parse_with_notes("Trade NVDA with take profit 10% and stop loss 4%")
     enabled = [k for k, v in s.entry.model_dump().items() if isinstance(v, dict) and v.get("enabled")]
-    assert enabled == ["price_above_ema"] and s.entry.price_above_ema.period == 20 and notes == [DEFAULT_ENTRY_NOTE]
+    assert enabled == ["price_above_ema"] and s.entry.price_above_ema.period == 20 and notes[0] == DEFAULT_ENTRY_NOTE
     assert s.exit.take_profit_pct == 10 and s.exit.stop_loss_pct == 4
     _, notes2 = keyword_parse_with_notes("Buy when RSI below 30")
-    assert notes2 == []
+    assert DEFAULT_ENTRY_NOTE not in notes2
     exp = DefaultExplainer()
     out, n = exp.parse_strategy_with_notes("take profit 8%")
-    assert isinstance(out, ManualStrategy) and out.entry.price_above_ema.enabled and n == [DEFAULT_ENTRY_NOTE]
-    assert exp.last_parse_notes == [DEFAULT_ENTRY_NOTE]
+    assert isinstance(out, ManualStrategy) and out.entry.price_above_ema.enabled and n[0] == DEFAULT_ENTRY_NOTE
+    assert exp.last_parse_notes[0] == DEFAULT_ENTRY_NOTE
 
 
 def test_default_entry_on_llm_path(make_client, reply):
@@ -326,8 +326,8 @@ def test_default_entry_on_llm_path(make_client, reply):
     client, _ = make_client(reply(raw))
     exp = DefaultExplainer(client)
     out = exp.parse_strategy_from_text("take profit 9% on nvidia")
-    assert exp.last_source == "grok" and out.entry.price_above_ema.period == 20 and exp.last_parse_notes == [DEFAULT_ENTRY_NOTE]
+    assert exp.last_source == "grok" and out.entry.price_above_ema.period == 20 and exp.last_parse_notes[0] == DEFAULT_ENTRY_NOTE
     raw2 = json.dumps({"kind": "manual", "strategy": {"entry": {"rsi_below": {"enabled": True, "threshold": 30}}}})
     client2, _ = make_client(reply(raw2))
     exp2 = DefaultExplainer(client2)
-    assert exp2.parse_strategy_from_text("buy when RSI below 30").entry.rsi_below.enabled and exp2.last_parse_notes == []
+    assert exp2.parse_strategy_from_text("buy when RSI below 30").entry.rsi_below.enabled and DEFAULT_ENTRY_NOTE not in exp2.last_parse_notes

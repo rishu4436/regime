@@ -18,7 +18,7 @@ from backend.contracts import Alert, AutoConfig, Decision, ManualStrategy, Perfo
 from . import live as live_facts
 from . import prompts, templates
 from .client import GrokClient, GrokConfig, LLMError
-from .parser import (DEFAULT_ENTRY_NOTE, StrategyValidationError, keyword_parse_with_notes, text_has_entry_rule,
+from .parser import (DEFAULT_ENTRY_NOTE, StrategyValidationError, keyword_parse_with_notes, strategy_notes, text_has_entry_rule,
                      validate_llm_strategy)
 
 log = logging.getLogger(__name__)
@@ -116,8 +116,8 @@ class DefaultExplainer:
             msgs = prompts.parse_messages(text, default_symbol, ManualStrategy.model_json_schema(), AutoConfig.model_json_schema())
             raw = self.client.chat(msgs, temperature=0.0, max_tokens=1500)
             out = validate_llm_strategy(raw, text, default_symbol)
-            self.last_parse_notes = ([DEFAULT_ENTRY_NOTE] if isinstance(out, ManualStrategy)
-                                     and not text_has_entry_rule(text) else [])
+            self.last_parse_notes = (strategy_notes(text, out, not text_has_entry_rule(text))
+                                     if isinstance(out, ManualStrategy) else [])
             return out
 
         def via_keywords() -> Union[ManualStrategy, AutoConfig]:

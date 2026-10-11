@@ -47,6 +47,59 @@ _ABOVE = r"(?:>|above|over|greater than|rises above|crosses above|goes above|mov
 _BELOW = r"(?:<|below|under|less than|drops below|falls below|goes below|dips below|moves below|gets below|drops under)"
 
 
+# Volume entry: 'volume spike', 'volume is above (its) average', 'volume goes above average', 'volume is high',
+# 'volume higher than average', 'high volume', 'above-average volume', 'volume is running above average', ...
+_VOLUME_ENTRY_RE = re.compile(
+    r"volume\s+(?:is\s+(?:running\s+|getting\s+)?|goes\s+|gets\s+|rises\s+|climbs\s+|moves\s+|jumps\s+|spikes\s+|runs\s+|stays\s+|are\s+)?"
+    r"(?:spik|surg|above|over|>|higher|greater|bigger|larger|high\b|elevated|strong|heavy|rising|increas|picks? up|\d+(?:\.\d+)?\s*x)"
+    r"|(?:high|heavy|strong|elevated|rising|increasing|big|large|above[\s-]+(?:the\s+)?(?:avg|average))\s+volume"
+    r"|volume\s+(?:spike|surge|breakout)", re.I)
+RSI_EXIT_NOTE = ("RSI exit at {thr:g} is on by default (sells when RSI goes above {thr:g}); turn it off in the form if you "
+                 "only want take-profit and stop-loss.")
+# indicator word in the entry text -> the entry condition it should have produced
+_INDICATOR_WORDS: list[tuple[str, str]] = [
+    (r"\bvolume\b", "volume_above_avg"), (r"\bmacd\b", "macd_bullish_cross"), (r"\brsi\b|oversold", "rsi_below"),
+    (r"bollinger|lower band", "bollinger_lower"), (r"\bema\b|exponential moving average", "price_above_ema"),
+    (r"\bsma\b|simple moving average|(?<!exponential )moving average", "price_above_sma"), (r"breakout|breaks?\s", "breakout"),
+]
+_RSI_EXIT_MENTION_RE = re.compile(r"rsi\s*exit|(?:sell|exit|close|get out|take profit)[^.;]*\brsi\b|\brsi\b[^.;]*\b(?:sell|exit)", re.I)
+
+
+def unparsed_notes(text: str, enabled: set[str]) -> list[str]:
+    """'Couldn't understand "<phrase>"; it was left out' for indicator words in the entry part that produced no
+    entry condition (best effort: nothing is silently dropped)."""
+    t = re.sub(r"(?:no|without (?:an? )?)\s*rsi\s*exit|rsi\s*(?:\(\s*\d+\s*\)\s*)?period\s*(?:of\s*)?\d+", " ", (text or "").lower())
+    entry_part = t
+    for chunk in re.findall(r"(?:sell|exit|close|get out)[^.;]*", t):
+        entry_part = entry_part.replace(chunk, " ")
+    cond_part = re.split(r"take[\s-]?profit|stop|trailing|position size|\bsize\b|cool[\s-]?down|\bmax|min(?:imum)?\s*volume|"
+                         r"require|filter|market hours", entry_part)[0]
+    pieces = [p.strip(" ,.;") for p in re.split(r",|;|\band\b|\bor\b|\bthen\b", cond_part) if p.strip(" ,.;")]
+    notes: list[str] = []
+    for word, cond in _INDICATOR_WORDS:
+        if cond in enabled:
+            continue
+        for piece in pieces:
+            if re.search(word, piece):
+                phrase = re.sub(r"^(?:buy|enter|go long|long)\s+(?:when|if|on)?\s*", "", piece).strip() or piece
+                note = f'Couldn\'t understand "{phrase}"; it was left out.'
+                if note not in notes:
+                    notes.append(note)
+                break
+    return notes
+
+
+def strategy_notes(text: str, strategy: ManualStrategy, default_entry_used: bool) -> list[str]:
+    """User-facing notes for a parsed manual strategy (keyword or Grok path)."""
+    notes: list[str] = [DEFAULT_ENTRY_NOTE] if default_entry_used else []
+    enabled = {n for n in _ENTRY_NAMES if getattr(strategy.entry, n).enabled}
+    if not default_entry_used:
+        notes += unparsed_notes(text, enabled)
+    if strategy.exit.rsi_above.enabled and not _RSI_EXIT_MENTION_RE.search(text or ""):
+        notes.append(RSI_EXIT_NOTE.format(thr=strategy.exit.rsi_above.threshold))
+    return notes
+
+
 class StrategyValidationError(ValueError):
     pass
 
@@ -207,7 +260,7 @@ def parse_manual_with_notes(text: str, default_symbol: Optional[str]) -> tuple[M
         e["macd_bullish_cross"]["enabled"] = True; mentioned.add("macd_bullish_cross")
     if re.search(r"bollinger|lower band|\bbb\b", entry_part):
         e["bollinger_lower"]["enabled"] = True; mentioned.add("bollinger_lower")
-    if re.search(r"volume (?:spike|surge|above|>)|high volume|above[\s-]average volume", entry_part) and not re.search(r"min(imum)?\s*volume|require", entry_part):
+    if _VOLUME_ENTRY_RE.search(entry_part) and not re.search(r"min(imum)?\s*volume|require", entry_part):
         e["volume_above_avg"]["enabled"] = True; mentioned.add("volume_above_avg")
         m = _num(r"volume[^.;]*?" + _NUM + r"\s*x", entry_part)
         if m and m > 0:
@@ -285,11 +338,13 @@ def parse_manual_with_notes(text: str, default_symbol: Optional[str]) -> tuple[M
     name = re.search(r"(?:call(?:ed)? it|name(?:d)?(?: it)?)\s*[\"']?([\w\s-]{1,40}?)[\"']?(?:[.,;]|$)", text, re.I)
     s["name"] = name.group(1).strip() if name else f"{s['symbol']} rule set"
     try:
-        return ManualStrategy.model_validate(s), notes
+        out = ManualStrategy.model_validate(s)
+        return out, strategy_notes(text, out, bool(notes))
     except ValidationError:  # should be unreachable; never let the parser raise on odd input
         fb = ManualStrategy(symbol=s["symbol"]).model_dump()
         default_entry(fb["entry"])
-        return ManualStrategy.model_validate(fb), [DEFAULT_ENTRY_NOTE]
+        out = ManualStrategy.model_validate(fb)
+        return out, strategy_notes(text, out, True)
 
 
 def keyword_parse(text: str, default_symbol: Optional[str] = None) -> ParsedStrategy:
@@ -307,7 +362,7 @@ def keyword_parse_with_notes(text: str, default_symbol: Optional[str] = None) ->
 
 def text_has_entry_rule(text: str) -> bool:
     """True if the user's text names at least one entry condition (keyword parser's view)."""
-    return not parse_manual_with_notes(text or "", None)[1]
+    return DEFAULT_ENTRY_NOTE not in parse_manual_with_notes(text or "", None)[1]
 
 
 # --------------------------------------------------------------------------- LLM output validation / repair
@@ -408,6 +463,24 @@ def _validate_with_repair(data: dict[str, Any], model: type[BaseModel], max_roun
     raise StrategyValidationError("could not repair LLM output")
 
 
+def _backfill_entry(result: ManualStrategy, text: str, default_symbol: Optional[str]) -> ManualStrategy:
+    """Entry conditions the keyword parser clearly found in the text but the LLM left out (e.g. 'volume is above
+    average') are switched on, with the keyword parser's parameters. Never removes what the LLM set."""
+    kw = parse_manual_with_notes(text, default_symbol)[0]
+    d = result.model_dump()
+    added = False
+    for name in _ENTRY_NAMES:
+        if getattr(kw.entry, name).enabled and not d["entry"][name].get("enabled"):
+            d["entry"][name] = getattr(kw.entry, name).model_dump()
+            added = True
+    if not added:
+        return result
+    try:
+        return ManualStrategy.model_validate(d)
+    except ValidationError:  # pragma: no cover - defensive
+        return result
+
+
 def validate_llm_strategy(raw: str, text: str, default_symbol: Optional[str] = None) -> ParsedStrategy:
     """Validate (and minimally repair) an LLM reply of the form {"kind": "manual"|"auto", "strategy": {...}}.
 
@@ -441,6 +514,8 @@ def validate_llm_strategy(raw: str, text: str, default_symbol: Optional[str] = N
         d = result.model_dump()
         default_entry(d["entry"])
         result = ManualStrategy.model_validate(d)
+    elif kind == "manual" and isinstance(result, ManualStrategy):
+        result = _backfill_entry(result, text, default_symbol)
     if kind == "auto" and not isinstance(result, AutoConfig):  # pragma: no cover - defensive
         raise StrategyValidationError("wrong model")
     return result  # type: ignore[return-value]

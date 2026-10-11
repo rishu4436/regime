@@ -4,15 +4,15 @@ from backend.llm import templates
 
 def test_explain_buy_mentions_everything(buy_decision):
     txt = templates.explain_decision(buy_decision)
-    assert txt.startswith("Buy NVDAon (AUTO mode, SIM).")
+    assert txt.startswith("Buy NVDAon (auto mode, simulation).")
     for s in ["Trend following", "strong uptrend", "price above its EMA", "MACD crossed above its signal line",
-              "volume above average", "Risk check passed", "filled", "SWAP", "$997.50"]:
+              "volume above average", "Risk check passed", "filled", "via a swap", "$997.50"]:
         assert s in txt, s
 
 
 def test_explain_blocked(blocked_decision):
     txt = templates.explain_decision(blocked_decision)
-    assert txt.startswith("Stay out of TSLAx (MANUAL mode")
+    assert txt.startswith("Stay out of TSLAx (manual mode")
     assert "Risk layer blocked the trade: cooldown active (2 of 5 bars)." in txt and "high volatility" in txt
 
 

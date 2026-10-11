@@ -46,7 +46,7 @@ def _blocked(*reasons, checks=()):
 def test_live_filled_buy_names_real_funds_amount_route_fill_tx_and_bscscan():
     txt = templates.explain_decision(_decision(ex=_ex()))
     assert "LIVE, real funds, autonomous" in txt
-    assert "Regime bought NVDAB on its own with real funds on BNB Chain mainnet: 24.99 USDT via SWAP at a fill price of 182.4" in txt
+    assert "Regime bought NVDAB on its own with real funds on BNB Chain mainnet: 24.99 USDT via a swap at a fill price of 182.4" in txt
     assert f"Tx hash {TX}: https://bscscan.com/tx/{TX}." in txt
     assert not APPROVAL.search(txt)
 
@@ -66,7 +66,7 @@ def test_live_rfq_sell_exit_with_dict_like_extra_fields():
     ex = _ex(symbol="NVDAon", side=OrderSide.SELL, path=ExecutionPath.RFQ, avg_price=150.1, notional=20.5, tx_hash=None)
     d = _decision(sig, None, ex, action=Action.SELL)
     txt = templates.explain_decision(d)
-    assert "Regime sold NVDAon on its own with real funds" in txt and "via RFQ" in txt and "150.1" in txt
+    assert "Regime sold NVDAon on its own with real funds" in txt and "via an RFQ quote" in txt and "150.1" in txt
     assert "Exit trigger: the trailing stop was hit." in txt and "Sold position" not in txt
 
 
@@ -100,7 +100,7 @@ def test_failed_live_execution_maps_exchange_error_and_keeps_tx():
 
 def test_sim_output_unchanged(buy_decision):
     txt = templates.explain_decision(buy_decision)
-    assert txt.startswith("Buy NVDAon (AUTO mode, SIM).") and "LIVE" not in txt
+    assert txt.startswith("Buy NVDAon (auto mode, simulation).") and "LIVE" not in txt
 
 
 # ------------------------------------------------------------------ risk blocks (Bot 3 bot3/live real strings)
