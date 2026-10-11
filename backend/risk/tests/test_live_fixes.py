@@ -3,8 +3,8 @@ from datetime import timedelta
 
 import pytest
 
-from backend.contracts import ControlState, ManualStrategy, PositionRiskRules, TradingMode
-from backend.risk import DefaultRiskManager, LiveContext, LiveRiskProfile, RiskConfig
+from backend.contracts import Action, ActivationMode, ControlState, ManualStrategy, PositionRiskRules, TradingMode
+from backend.risk import DefaultRiskManager, LiveContext, LiveRiskProfile, RiskConfig, SymbolRiskRules
 from backend.risk.live import TokenStatus, WalletLimits
 
 from .conftest import T0, make_portfolio, pos
@@ -87,8 +87,9 @@ def test_bump_respects_open_exposure_room(clock):
     rm = live_rm(clock)  # exposure cap 50, 45 open -> room 5 < 10
     p = wallet(200, positions=[pos("AAPLon", qty=0.45, entry=100)])
     v = rm.check(lbuy("NVDAB", proposed_notional=2.0), p, lctl(), context=wctx(200))
-    assert not v.approved and names(v)["live_max_exposure"].passed
+    assert not v.approved and not names(v)["live_max_exposure"].passed   # the hard cap is the reported reason
     assert "cannot raise" in names(v)["min_order_notional"].detail
+    assert v.reasons == [r for r in v.reasons if r.startswith("Blocked (live_max_exposure): LIVE exposure limit reached")]
 
 
 def test_bump_can_be_turned_off(clock):
@@ -197,3 +198,56 @@ def test_min_wallet_matches_check(clock):
     assert ok.approved and ok.adjusted_notional == pytest.approx(20.0), ok.reasons
     bad = rm.check(lbuy("NVDAon", proposed_notional=1.0), wallet(mw - 0.01), lctl(), context=wctx(mw - 0.01, tmin=20.0))
     assert not bad.approved
+
+
+# ------------------------------------------------------------------ 5. a cap that cut the order below the minimum is the reason
+def test_token_exposure_used_up_reports_exposure_not_min_order(clock):
+    rm = DefaultRiskManager(ControlState(confirmation_mode=False), config=RiskConfig(), clock=clock)
+    p = make_portfolio(cash=7000, positions=[pos("NVDAB", qty=30, entry=100)])  # 3000 of 30% * 10000 used
+    v = rm.check(lbuy("NVDAB"), p, ControlState(confirmation_mode=False))
+    assert not v.approved and [c.name for c in v.checks if not c.passed] == ["max_token_exposure"]
+    assert v.reasons == [r for r in v.reasons if "NVDAB exposure limit reached: 3,000.00 of 3,000.00 USDT used" in r]
+    assert "blocked by max_token_exposure" in names(v)["min_order_notional"].detail
+
+
+def test_total_exposure_used_up_reports_total_exposure(clock):
+    rm = DefaultRiskManager(ControlState(confirmation_mode=False), config=RiskConfig(), clock=clock)
+    held = [pos("AAPLon", qty=29.95, entry=100), pos("MSFTon", qty=30, entry=100)]
+    p = make_portfolio(cash=4005, positions=held)  # 5995 of 60% * 10000 = 6000 used -> 5 left < 10
+    v = rm.check(lbuy("NVDAB"), p, ControlState(confirmation_mode=False))
+    assert not v.approved and [c.name for c in v.checks if not c.passed] == ["max_total_exposure"]
+    assert "Total exposure limit reached: 5,995.00 of 6,000.00 USDT used" in v.reasons[0]
+
+
+def test_partial_cut_still_above_min_is_approved(clock):
+    rm = DefaultRiskManager(ControlState(confirmation_mode=False), config=RiskConfig(), clock=clock)
+    p = make_portfolio(cash=7500, positions=[pos("NVDAB", qty=25, entry=100)])
+    v = rm.check(lbuy("NVDAB"), p, ControlState(confirmation_mode=False))
+    assert v.approved and v.adjusted_notional == pytest.approx(500) and all(c.passed for c in v.checks)
+
+
+# ------------------------------------------------------------------ 6. global confirmation toggle takes priority
+@pytest.mark.parametrize("activation", [ActivationMode.CONFIRMATION, ActivationMode.AUTO_EXECUTE, None])
+def test_global_confirmation_toggle_wins_over_activation(clock, activation):
+    rm = DefaultRiskManager(ControlState(confirmation_mode=False), config=RiskConfig(), clock=clock)
+    rm.set_symbol_rules("NVDAon", SymbolRiskRules(activation=activation))
+    off = rm.check(lbuy(), make_portfolio(), ControlState(confirmation_mode=False))
+    assert off.approved and not off.requires_confirmation
+    on = rm.check(lbuy(), make_portfolio(), ControlState(confirmation_mode=True))
+    assert on.approved and on.requires_confirmation
+
+
+def test_global_confirmation_toggle_for_strategy_sells(clock):
+    rm = DefaultRiskManager(ControlState(confirmation_mode=False), config=RiskConfig(), clock=clock)
+    rm.set_symbol_rules("NVDAon", SymbolRiskRules(activation=ActivationMode.CONFIRMATION))
+    p = make_portfolio(cash=9000, positions=[pos()])
+    s = lbuy().model_copy(update={"action": Action.SELL})
+    assert not rm.check(s, p, ControlState(confirmation_mode=False)).requires_confirmation
+    assert rm.check(s, p, ControlState(confirmation_mode=True)).requires_confirmation
+
+
+def test_live_confirmation_follows_global_toggle(clock):
+    rm = live_rm(clock)
+    rm.set_symbol_rules("NVDAB", SymbolRiskRules(activation=ActivationMode.CONFIRMATION))
+    v = rm.check(lbuy("NVDAB", proposed_notional=10.0), wallet(100), lctl(), context=wctx(100))
+    assert v.approved and not v.requires_confirmation

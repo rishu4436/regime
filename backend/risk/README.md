@@ -84,13 +84,19 @@ increased) by cash, per-token exposure, total exposure (exposure valued at `curr
 enabled, max-loss-per-trade (`notional <= starting_capital * max_loss% / stop_loss%`). Each reduction is a passed check
 with "reduced from X to Y"; if the result is below `min_order_notional` the verdict is blocked (in LIVE it is first
 raised to the minimum if every hard cap allows it - see "LIVE min-order bump").
+**If a cap cut the order below the minimum, that cap is the reported reason** (its check fails, e.g.
+`Blocked (max_token_exposure): NVDAB exposure limit reached: 3,000.00 of 3,000.00 USDT used ...`) and
+`min_order_notional` passes with "blocked by <cap>". When a LIVE bump is refused, the tightest hard cap is reported.
+`min_order_notional` itself fails only when nothing cut the order (the requested size was simply too small).
 
 **Default max open positions = 3.** The contract's `PositionRiskRules.max_open_positions` defaults to 1. Risk uses
 `RiskConfig.default_max_open_positions` (3) whenever the rules in force did not set the field **explicitly**
 (pydantic `model_fields_set`) - for `RiskConfig.position_rules` and for a symbol / ManualStrategy override alike.
 An explicit value (e.g. a ManualStrategy JSON carrying `"max_open_positions": 1`) always wins. Applied in `rules_for`.
 
-**Confirmation:** `requires_confirmation = approved and (control.confirmation_mode or symbol activation == CONFIRMATION)`.
+**Confirmation:** `requires_confirmation = approved and control.confirmation_mode`. The **global toggle
+(`ControlState.confirmation_mode`) takes priority**: on -> every entry / strategy SELL waits for the user, off -> none
+does, whatever the strategy's `activation` says (activation is informational only).
 Protective SELLs (`exit_reason` in STOP_LOSS / TAKE_PROFIT / TRAILING_STOP / MAX_LOSS / EMERGENCY_STOP, i.e. what
 `check_exits` produces; see `is_risk_exit`) and any SELL during emergency stop never
 wait for confirmation (`risk_exits_bypass_confirmation=True`). Strategy SELLs (e.g. RSI exit from the engine) do.

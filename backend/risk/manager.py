@@ -585,6 +585,8 @@ class DefaultRiskManager:
         gates_ok = all(c.passed for c in checks)
         notional = 0.0
         hard_ceiling = float("inf")  # min of the HARD caps (never exceeded, even by the LIVE min-order bump)
+        hard_binding: Optional[tuple[int, str]] = None    # (check index, limit-reached text) of the tightest hard cap
+        last_cut: Optional[tuple[int, str]] = None        # (check index, limit-reached text) of the last cap that reduced
         if equity <= 0:
             checks.append(RiskCheck(name="position_size", passed=False, detail="Portfolio equity is zero - cannot size an order"))
         else:
@@ -603,11 +605,15 @@ class DefaultRiskManager:
                 f"{src}; size {pct:.2f}% of equity {_fmt(equity)} = {_fmt(notional)} USDT"
                 + (f" (capped at max {base_pct}%)" if want_pct > base_pct else ""))))
 
-            def cap(name: str, limit: float, what: str, hard: bool = False) -> None:
-                nonlocal notional, hard_ceiling
-                if hard:
-                    hard_ceiling = min(hard_ceiling, max(limit, 0.0))
+            def cap(name: str, limit: float, what: str, hard: bool = False, reached: str = "") -> None:
+                """reached = text used if THIS cap turns out to be what pushed the order under the minimum."""
+                nonlocal notional, hard_ceiling, hard_binding, last_cut
+                reached = reached or f"{what} - limit reached"
+                if hard and max(limit, 0.0) < hard_ceiling:
+                    hard_ceiling = max(limit, 0.0)
+                    hard_binding = (len(checks), reached)
                 if notional > limit:
+                    last_cut = (len(checks), reached)
                     checks.append(RiskCheck(name=name, passed=True,
                                             detail=f"{what}: reduced from {_fmt(notional)} to {_fmt(max(limit, 0))} USDT"))
                     notional = max(limit, 0.0)
@@ -618,11 +624,15 @@ class DefaultRiskManager:
             token_exp = sum(self._position_value(p) for p in portfolio.positions if p.symbol == signal.symbol)
             token_lim = equity * cfg.max_token_exposure_pct / 100.0
             cap("max_token_exposure", token_lim - token_exp,
-                f"{signal.symbol} exposure {_fmt(token_exp)} USDT, limit {cfg.max_token_exposure_pct}% = {_fmt(token_lim)} USDT")
+                f"{signal.symbol} exposure {_fmt(token_exp)} USDT, limit {cfg.max_token_exposure_pct}% = {_fmt(token_lim)} USDT",
+                reached=(f"{signal.symbol} exposure limit reached: {_fmt(token_exp)} of {_fmt(token_lim)} USDT used "
+                         f"({cfg.max_token_exposure_pct}% of equity)"))
             total_exp = sum(self._position_value(p) for p in portfolio.positions)
             total_lim = equity * cfg.max_total_exposure_pct / 100.0
             cap("max_total_exposure", total_lim - total_exp,
-                f"Total exposure {_fmt(total_exp)} USDT, limit {cfg.max_total_exposure_pct}% = {_fmt(total_lim)} USDT")
+                f"Total exposure {_fmt(total_exp)} USDT, limit {cfg.max_total_exposure_pct}% = {_fmt(total_lim)} USDT",
+                reached=(f"Total exposure limit reached: {_fmt(total_exp)} of {_fmt(total_lim)} USDT used "
+                         f"({cfg.max_total_exposure_pct}% of equity)"))
 
             if prules.max_loss_per_trade_pct:
                 max_loss = portfolio.starting_capital * prules.max_loss_per_trade_pct / 100.0
@@ -636,10 +646,14 @@ class DefaultRiskManager:
             if live:
                 cap("live_order_cap", lp.max_order_notional_usdt, f"LIVE per-order cap {_fmt(lp.max_order_notional_usdt)} USDT", hard=True)
                 cap("live_max_exposure", lp.max_open_exposure_usdt - total_exp,
-                    f"LIVE open exposure {_fmt(total_exp)} USDT, cap {_fmt(lp.max_open_exposure_usdt)} USDT", hard=True)
+                    f"LIVE open exposure {_fmt(total_exp)} USDT, cap {_fmt(lp.max_open_exposure_usdt)} USDT", hard=True,
+                    reached=(f"LIVE exposure limit reached: {_fmt(total_exp)} of {_fmt(lp.max_open_exposure_usdt)} "
+                             "USDT used"))
                 used = self.daily_live_notional_used(ctx)
                 cap("live_daily_notional", lp.max_daily_notional_usdt - used,
-                    f"LIVE bought today {_fmt(used)} USDT, daily cap {_fmt(lp.max_daily_notional_usdt)} USDT", hard=True)
+                    f"LIVE bought today {_fmt(used)} USDT, daily cap {_fmt(lp.max_daily_notional_usdt)} USDT", hard=True,
+                    reached=(f"LIVE daily buy limit reached: {_fmt(used)} of {_fmt(lp.max_daily_notional_usdt)} "
+                             "USDT used today"))
                 wl = ctx.wallet_limits
                 if wl is not None:
                     if wl.per_tx_limit_usdt is not None:
@@ -676,6 +690,11 @@ class DefaultRiskManager:
                     bump_note = (f"cannot raise to {_fmt(min_n)} USDT: a hard cap allows at most "
                                  f"{_fmt(max(hard_ceiling, 0.0))} USDT")
             ok = notional >= max(min_n, 1e-9) - 1e-9
+            # If a cap cut the order under the minimum, THAT cap is the blocking rule (QA: "exposure limit reached",
+            # not "0.00 USDT, minimum 10"). LIVE bump refused -> the tightest hard cap; otherwise the last cap that cut.
+            binding = None
+            if not ok:
+                binding = hard_binding if bump_note.startswith("cannot raise") else last_cut
             if ok and bump_note.startswith("raised"):
                 detail = f"Order {bump_note}"
             else:
@@ -683,7 +702,17 @@ class DefaultRiskManager:
                           + (f" ({signal.symbol} token minimum)" if token_bound else "")
                           + ("" if ok else (" - below token minimum order" if token_bound else " - too small"))
                           + (f"; {bump_note}" if bump_note else ""))
-            checks.append(RiskCheck(name="min_order_notional", passed=ok, detail=detail))
+            if binding is not None:
+                idx, reached = binding
+                cut = checks[idx]
+                room = max(hard_ceiling, 0.0) if binding is hard_binding else notional
+                checks[idx] = cut.model_copy(update={"passed": False, "detail": (
+                    f"{reached}: only {_fmt(room)} USDT left for this order, below the {_fmt(min_n)} USDT minimum "
+                    f"({cut.detail})")})
+                checks.append(RiskCheck(name="min_order_notional", passed=True, detail=(
+                    f"{detail} - blocked by {cut.name}, not by the minimum itself")))
+            else:
+                checks.append(RiskCheck(name="min_order_notional", passed=ok, detail=detail))
             if live:
                 self._live_quote_checks(signal, ctx, notional, checks)
                 if ctx.quote is not None and ctx.balances is not None:
@@ -694,7 +723,7 @@ class DefaultRiskManager:
                         f"{_fmt(stable)} minus buffer {_fmt(lp.fee_buffer_usdt)}" + ("" if ok else " - insufficient balance"))))
 
         approved = gates_ok and all(c.passed for c in checks)
-        needs_conf = ctl.confirmation_mode or activation == ActivationMode.CONFIRMATION
+        needs_conf = self._needs_confirmation(ctl, activation)
         if approved:
             checks.append(RiskCheck(name="confirmation", passed=True, detail=(
                 "Confirmation mode: waiting for the user to approve this order" if needs_conf
@@ -733,7 +762,7 @@ class DefaultRiskManager:
         needs_conf = False
         if approved:
             _, _, activation = cfg.rules_for(signal.symbol)
-            wants_conf = ctl.confirmation_mode or activation == ActivationMode.CONFIRMATION
+            wants_conf = self._needs_confirmation(ctl, activation)
             bypass = (risk_exit and cfg.risk_exits_bypass_confirmation) or ctl.emergency_stopped
             needs_conf = wants_conf and not bypass
             checks.append(RiskCheck(name="confirmation", passed=True, detail=(
@@ -745,6 +774,12 @@ class DefaultRiskManager:
         equity = self._equity(portfolio)
         size_pct = min(100.0, notional / equity * 100.0) if equity > 0 else 0.0
         return self._verdict(signal, approved, checks, size_pct, notional, needs_conf)
+
+    @staticmethod
+    def _needs_confirmation(ctl: ControlState, activation: Optional[ActivationMode]) -> bool:
+        """The global ControlState.confirmation_mode toggle takes priority: on -> the user must approve, off -> no
+        approval, whatever the strategy's ``activation`` says (activation is informational only)."""
+        return bool(ctl.confirmation_mode)
 
     def _verdict(self, signal: Signal, approved: bool, checks: list[RiskCheck], size_pct: float, notional: float,
                  requires_confirmation: bool) -> RiskVerdict:

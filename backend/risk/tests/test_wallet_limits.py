@@ -53,7 +53,7 @@ def test_wallet_daily_exhausted_floors_at_zero_and_blocks(clock):
     w = wl(daily_limit_usdt=50.0, daily_used_usdt=70.0)
     assert w.daily_remaining_usdt() == 0.0
     v = check(live_rm(clock), wallet_limits=w)
-    assert not v.approved and not names(v)["min_order_notional"].passed
+    assert not v.approved and not names(v)["wallet_daily_limit"].passed and names(v)["min_order_notional"].passed
     assert "reduced from 25.00 to 0.00" in names(v)["wallet_daily_limit"].detail
 
 
@@ -209,7 +209,12 @@ def test_token_min_order_blocks_below(clock):
     v = check(live_rm(clock), wallet_limits=wl(per_tx_limit_usdt=15.0), quote=quote(notional=15.0),
               token_status=TokenStatus(min_order_usdt=20.0))
     c = names(v)["min_order_notional"]
-    assert not v.approved and not c.passed and "below token minimum order" in c.detail
+    assert not v.approved and "below token minimum order" in c.detail
+    assert not names(v)["wallet_per_tx_cap"].passed and "only 15.00 USDT left" in names(v)["wallet_per_tx_cap"].detail
+    # with no cap cutting it, the token minimum itself is the blocking rule
+    v = check(live_rm(clock, bump_to_min_order=False), sig=lbuy(proposed_notional=12.0), quote=quote(notional=12.0),
+              token_status=TokenStatus(min_order_usdt=30.0))
+    assert not v.approved and not names(v)["min_order_notional"].passed
 
 
 def test_token_min_order_passes_above(clock):
@@ -264,7 +269,7 @@ def test_exit_reserve_then_min_order_blocks(clock):
     pf = lpf(cash=200.0, positions=[pos(symbol="AAPLon", qty=0.2, entry=100.0)])
     v = check(multi_rm(clock), pf=pf, wallet_limits=wl(daily_left_usdt=30.0))
     assert not v.approved and "reduced from" in names(v)["wallet_exit_reserve"].detail
-    assert not names(v)["min_order_notional"].passed
+    assert not names(v)["wallet_exit_reserve"].passed and names(v)["min_order_notional"].passed
 
 
 def test_exit_reserve_floors_at_zero_when_exposure_exceeds_quota(clock):

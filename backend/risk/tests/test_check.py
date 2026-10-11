@@ -130,7 +130,10 @@ def test_token_exposure_cap(clock):
     assert "reduced" in names(v)["max_token_exposure"].detail
     p = make_portfolio(cash=7000, positions=[pos(qty=30, entry=100)])
     v = rm.check(buy(), p, ctl())
-    assert not v.approved and not names(v)["min_order_notional"].passed
+    # the exposure cap is reported as the blocking rule, not the 10 USDT minimum
+    assert not v.approved and not names(v)["max_token_exposure"].passed and names(v)["min_order_notional"].passed
+    assert v.reasons[0].startswith("Blocked (max_token_exposure): NVDAon exposure limit reached: 3,000.00 of 3,000.00 USDT used")
+    assert len(v.reasons) == 1
 
 
 def test_total_exposure_cap(clock):
@@ -160,8 +163,11 @@ def test_max_loss_per_trade_off_by_default_and_shrinks_size(rm):
 
 
 def test_min_order_notional(rm):
-    v = rm.check(buy(), make_portfolio(cash=5, equity=10000), ctl())
-    assert not v.approved and not names(v)["min_order_notional"].passed
+    v = rm.check(buy(), make_portfolio(cash=5, equity=10000), ctl())  # cash cut it to 5 -> cash is the reason
+    assert not v.approved and not names(v)["cash_available"].passed and names(v)["min_order_notional"].passed
+    v = rm.check(buy(proposed_notional=5.0), make_portfolio(), ctl())   # nothing cut it: the minimum itself blocks
+    assert not v.approved and not names(v)["min_order_notional"].passed and "too small" in v.reasons[0]
+    assert all(c.passed for c in v.checks if c.name != "min_order_notional")
 
 
 def test_zero_equity_blocks(rm):
@@ -200,7 +206,9 @@ def test_apply_manual_strategy_rules(rm):
     p3 = make_portfolio(cash=7000, positions=[pos(), pos("AAPLon"), pos("MSFTon")])
     assert not rm.check(buy("NVDAon"), p3, ctl()).approved
     rm.set_symbol_rules("TSLAx", SymbolRiskRules(activation=ActivationMode.CONFIRMATION))
-    assert rm.check(buy("TSLAx"), make_portfolio(), ctl()).requires_confirmation
+    # the global confirmation toggle (ControlState) takes priority over the strategy's activation
+    assert not rm.check(buy("TSLAx"), make_portfolio(), ctl()).requires_confirmation
+    assert rm.check(buy("TSLAx"), make_portfolio(), ctl(confirmation_mode=True)).requires_confirmation
     rm.set_symbol_rules("TSLAx", None)
     assert "TSLAx" not in rm.config.symbol_rules
 

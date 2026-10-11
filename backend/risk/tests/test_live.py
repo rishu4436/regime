@@ -155,7 +155,8 @@ def test_open_exposure_cap(clock):
     assert v.approved and v.adjusted_notional == pytest.approx(10) and "reduced" in names(v)["live_max_exposure"].detail
     p = lpf(cash=155, positions=[pos("TSLAx", qty=0.225, entry=200)])  # 45 open -> 5 left < 10 minimum
     v = rm.check(lbuy(), p, lctl(), context=ctx(quote=quote(notional=5)))
-    assert not v.approved and not names(v)["min_order_notional"].passed
+    assert not v.approved and not names(v)["live_max_exposure"].passed and names(v)["min_order_notional"].passed
+    assert "LIVE exposure limit reached: 45.00 of 50.00 USDT used" in v.reasons[0]
 
 
 def test_daily_notional_from_context(clock):
