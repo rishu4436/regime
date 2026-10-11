@@ -266,3 +266,4 @@ td.trunc { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
 .feed-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 3px; }
 .feed-exec { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 5px; }
 @media (max-width: 700px) { .feed-row { grid-template-columns: 1fr; gap: 4px; } }
+.pill.fam-xStock { opacity: .6; }

@@ -12,6 +12,9 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { Card, Skeleton, useToast } from "./ui";
 
 const NA = <span className="faint">not available</span>;
+/** Token family from the symbol suffix: …B = bStock, …on = Ondo, …x = xStock. */
+export const tokenFamily = (sym: string) => (/on$/.test(sym) ? "Ondo" : /x$/.test(sym) ? "xStock" : /B$/.test(sym) ? "bStock" : null);
+export const FamilyBadge = ({ symbol }: { symbol: string }) => { const f = tokenFamily(symbol); return f ? <span className={`pill fam-${f}`} title={`${f} token`}>{f}</span> : null; };
 const AUTO_STOP = /daily loss|automatic|auto-stop|stopped automatically/i;
 
 /** Red, non-dismissible LIVE / MAINNET banner shown (sticky) on every tab whenever the backend runs LIVE. */
@@ -250,7 +253,7 @@ export function ActivityFeed({ decisions }: { decisions: Decision[] }) {
             <div key={d.id} className="feed-row">
               <div className="feed-time small muted">{time(d.timestamp)}</div>
               <div className="feed-body">
-                <div className="feed-head"><ActionBadge action={d.action} /><b>{d.symbol}</b><span className="small muted trunc">{strategyLabel(d.strategy)}</span>
+                <div className="feed-head"><ActionBadge action={d.action} /><b>{d.symbol}</b><FamilyBadge symbol={d.symbol} /><span className="small muted trunc">{strategyLabel(d.strategy)}</span>
                   {ex?.real_funds && <span className="pill bad" title="Real funds on mainnet">real funds</span>}</div>
                 <div className="small">{d.explanation ?? d.reason}</div>{d.explanation && d.explanation !== d.reason && <div className="faint small">{d.reason}</div>}
                 {(failed.length > 0 || passed > 0) && (

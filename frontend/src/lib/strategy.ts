@@ -230,7 +230,7 @@ export const CONDITION_LABEL: Record<string, string> = {
   live_quote: "Valid quote", live_quote_notional: "Quote amount matches", live_slippage: "Slippage within limit",
   live_wallet_quote: "Wallet can cover quote", live_daily_notional: "Daily traded cap", live_max_exposure: "Max open exposure",
   live_order_cap: "Per-order cap", live_wallet_balance: "Wallet balance",
-  live_below_min_order: "Below minimum order", live_illiquid_family: "xStock excluded (no liquidity on BNB Chain)", live_token_paused: "Token paused",
+  live_below_min_order: "Below minimum order", live_illiquid_family: "xStock excluded (no liquidity on BNB Chain)", live_token_paused: "Token paused", live_price_impact: "Price impact too high, over 2%",
 };
 /** Friendly label for a Signal.conditions_met/failed id (rule field, risk check, preset condition or ExitReason). */
 export const conditionLabel = (id: string) =>
