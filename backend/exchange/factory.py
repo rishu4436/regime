@@ -10,6 +10,8 @@ Env vars (never commit values):
   BINANCE_LIVE_EXECUTOR     agentic_wallet (default, `baw` CLI) | web3_api (needs a WalletSigner in code)
   BINANCE_LIVE_MAX_NOTIONAL per-order cap in USDT for LIVE (default 25)
   BINANCE_WEB3_BASE_URL     override base URL (default https://web3.binance.com/build)
+  BINANCE_ENABLE_XSTOCK     "true" re-enables xStock (…x) tokens; off by default (zero BSC liquidity measured)
+  BINANCE_PUBLIC_STATUS     "false" disables the public no-key RWA status/multiplier lookups (default on)
 """
 from __future__ import annotations
 
@@ -40,8 +42,13 @@ def get_exchange_client(mode: TradingMode | None = None, executor: Optional[obje
     from .live import BinanceWeb3Client
 
     wallet = os.getenv("BINANCE_WALLET_ADDRESS") or None
+    public = None
+    if os.getenv("BINANCE_PUBLIC_STATUS", "true").strip().lower() != "false":
+        from .web3_api import PublicRwaClient
+
+        public = PublicRwaClient()
     if mode == TradingMode.PAPER:
-        return BinanceWeb3Client(_api_from_env(), mode=TradingMode.PAPER, wallet_address=wallet)
+        return BinanceWeb3Client(_api_from_env(), mode=TradingMode.PAPER, wallet_address=wallet, public=public)
 
     # LIVE: explicit opt-in, keys, and an executor.
     if os.getenv("BINANCE_LIVE_ENABLED", "").strip().lower() != "true":
@@ -59,4 +66,4 @@ def get_exchange_client(mode: TradingMode | None = None, executor: Optional[obje
             raise ConfigError("BINANCE_LIVE_EXECUTOR=web3_api needs a WalletSigner: pass executor=Web3ApiExecutor(api, signer)")
     max_notional = float(os.getenv("BINANCE_LIVE_MAX_NOTIONAL", "25"))
     return BinanceWeb3Client(api, mode=TradingMode.LIVE, wallet_address=wallet, executor=executor,  # type: ignore[arg-type]
-                             live_enabled=True, max_live_notional=max_notional)
+                             live_enabled=True, max_live_notional=max_notional, public=public)

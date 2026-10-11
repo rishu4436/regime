@@ -1,6 +1,13 @@
+import pytest
 from backend.contracts import ExecutionPath, OrderRequest, OrderSide, OrderStatus, Timeframe
 from backend.exchange.sim import SimulatedBinanceClient
 from backend.mocks import MockExchangeClient
+
+
+@pytest.fixture(autouse=True)
+def _xstock_on(monkeypatch):
+    """These tests cover xStock routing mechanics; xStock is disabled by default (see test_token_status.py)."""
+    monkeypatch.setenv("BINANCE_ENABLE_XSTOCK", "true")
 
 
 def full(c, sym="NVDAon", tf=Timeframe.H1):

@@ -9,6 +9,12 @@ from backend.exchange.live import BinanceWeb3Client
 from backend.exchange.tests._fakes import err, ok
 from backend.exchange.tokens import QUOTE_ASSETS
 
+
+@pytest.fixture(autouse=True)
+def _xstock_on(monkeypatch):
+    """These tests cover xStock routing mechanics; xStock is disabled by default (see test_token_status.py)."""
+    monkeypatch.setenv("BINANCE_ENABLE_XSTOCK", "true")
+
 NVDA = "0xa9ee28c80f960b889dfbd1902055218cba016f75"
 TSLA = "0x8ad3c73f833d3f9a523ab01476625f269aeb7cf0"
 USDT = QUOTE_ASSETS["56"].address

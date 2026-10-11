@@ -80,3 +80,20 @@ and a LIVE client (signed HMAC requests + Agentic Wallet) — LIVE must be opt-i
 - Unit tests live in this directory's `tests/` and pass with `pytest` from the repo root; the whole suite stays green.
 - Works fully in **SIM** mode with `backend.mocks` (no network, no API keys).
 - No edits outside the owned directory. Contract changes go through the coordinator (see CONTRIBUTING.md).
+
+## Token status & non-exception quotes (bot4/token-status)
+Extras beside the contract (`backend/exchange/status.py`; contracts unchanged). Available on `SimulatedBinanceClient`
+and `BinanceWeb3Client` (PAPER/LIVE):
+
+- `get_token_status(symbol) -> TokenStatus` with `trading_status` (`TRADING | OFFHOURS | CLOSED | NO_LIQUIDITY | UNKNOWN`),
+  `tradable`, `reason`, `min_order_usdt` (Ondo 20, else 10), `max_order_usdt`, `shares_multiplier`, `reference_price`,
+  `price`, raw `market_status` / `reason_code` / `reason_msg`, `next_open_time`, `next_close_time`, `source`; `.to_dict()`.
+- `quote_or_reason(symbol, side, notional) -> QuoteResult` never raises for market state: `ok`, `quote` (contract Quote),
+  `reason` (`market_closed | insufficient_liquidity | below_minimum | xstock_disabled | above_maximum`), `message`,
+  `error_code`, `trading_status`, `min_order_usdt`, `price_impact_pct`, `reference_price`, `shares_multiplier`,
+  `token_status`; `.to_dict()`. Auth/config errors still raise. SELLs are never blocked by the minimum.
+- `quote_meta(quote_id) -> QuoteResult | None` for quotes made with plain `get_quote`.
+- `QuoteUnavailable.reason` carries the same reason code (40367/40369 -> market_closed, 40374 -> insufficient_liquidity,
+  40375 -> below_minimum, 40366 -> above_maximum).
+- xStock (`…x`) is disabled by default: `BINANCE_ENABLE_XSTOCK=true` re-enables it.
+- SIM: bStock TRADING 24/7, Ondo OFFHOURS Sat/Sun UTC, xStock NO_LIQUIDITY; `set_trading_status()` forces one.
