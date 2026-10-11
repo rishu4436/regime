@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { TokenPicker } from "../components/TokenPicker";
+import { WatchlistPicker } from "../components/Watchlist";
+import { isUnknownWatchlistField, usesWatchlist, watchlistExtras } from "../lib/watchlist";
 import { DEFAULT_INITIAL_CAPITAL, TimeframeValues, type AutoConfig, type ManualStrategy, type Timeframe } from "../contracts";
 import { api } from "../api";
 import { ApiError } from "../api/types";
@@ -24,7 +25,8 @@ interface Props {
 /** Bars per backtest; also the limit of the history candles request for its chart. */
 const BACKTEST_BARS = 500;
 export function toContract(s: FullStrategy, keepId = false): ManualStrategy {
-  const { id, created_at, ...rest } = s;
+  // watchlist / auto_pick are UI state here; they are only sent on activation (see activate) so save/validate stay contract-exact
+  const { id, created_at, watchlist: _w, auto_pick: _a, ...rest } = s;
   return structuredClone(keepId && id ? { ...rest, id, created_at } : rest);
 }
 
@@ -92,7 +94,16 @@ export function ManualBuilder({ strategy: s, setStrategy, capital, setCapital, r
   };
   const activate = async () => {
     setBusy("act");
-    try { await api.activateManual(s.id ? { strategy_id: s.id } : { strategy: toContract(s) }); await ensureLoop(); toast(`"${s.name}" is live on ${s.symbol} (${s.activation === "CONFIRMATION" ? "confirmation" : "auto-execute"})`, "success"); onActivated(); }
+    try {
+      const multi = usesWatchlist(s, s.symbol);
+      const plain = s.id ? { strategy_id: s.id } : { strategy: toContract(s) };
+      if (!multi) await api.activateManual(plain);
+      else await api.activateManual({ strategy: { ...toContract(s, true), ...watchlistExtras(s, s.symbol) } }).catch((e) => {
+        if (!isUnknownWatchlistField(e)) throw e;
+        toast(`This agent doesn't support a watchlist yet: trading ${s.symbol} only`, "warn");
+        return api.activateManual(plain);
+      });
+      await ensureLoop(); toast(`"${s.name}" is live on ${s.symbol} (${s.activation === "CONFIRMATION" ? "confirmation" : "auto-execute"})`, "success"); onActivated(); }
     catch (err) { toast(`Activation failed: ${err instanceof Error ? err.message : err}`, "error"); }
     finally { setBusy(null); }
   };
@@ -150,7 +161,8 @@ export function ManualBuilder({ strategy: s, setStrategy, capital, setCapital, r
               <div style={{ gridColumn: "1 / -1" }}><span className="lbl">Strategy name</span>
                 <input type="text" value={s.name} onChange={(ev) => up((d) => { d.name = ev.target.value; })} /></div>
               <div><span className="lbl">Tokenized stock<TokenStatusBadge symbol={s.symbol} /></span>
-                <TokenPicker value={s.symbol} onChange={(v) => up((d) => { d.symbol = v; })} simOnly={simOnly} /></div>
+                <WatchlistPicker value={{ symbol: s.symbol, watchlist: s.watchlist, auto_pick: s.auto_pick }} simOnly={simOnly}
+                  onChange={(v) => up((d) => { d.symbol = v.symbol; d.watchlist = v.watchlist; d.auto_pick = v.auto_pick; })} /></div>
               <div><span className="lbl">Timeframe</span>
                 <select value={s.timeframe} onChange={(ev) => up((d) => { d.timeframe = ev.target.value as Timeframe; })}>{TimeframeValues.map((t) => <option key={t}>{t}</option>)}</select></div>
             </div>

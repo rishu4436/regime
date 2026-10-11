@@ -9,6 +9,7 @@ import { ModeBadge, RegimeBadge } from "./components/Badges";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Toggle, ToastProvider } from "./components/ui";
 import { useStatus } from "./lib/useStatus";
+import type { WatchlistFields } from "./api/types";
 import { defaultStrategy, fillStrategy, type FullStrategy } from "./lib/strategy";
 import { AutoMode } from "./views/AutoMode";
 import type { BacktestRun } from "./views/BacktestResults";
@@ -47,7 +48,7 @@ function Shell() {
   const setStrategy = (st: FullStrategy) => { setStrategyState(st); try { localStorage.setItem(LS_KEY, JSON.stringify(st)); } catch { /* private mode */ } };
   const [capital, setCapital] = useState(DEFAULT_INITIAL_CAPITAL);
   const [run, setRun] = useState<BacktestRun | null>(null);
-  const [autoCfg, setAutoCfg] = useState<AutoConfig>({ symbol: "NVDAB", style: "BALANCED", enabled_presets: [...PresetNameValues], capital: DEFAULT_INITIAL_CAPITAL, timeframe: "1h", activation: "AUTO_EXECUTE" });
+  const [autoCfg, setAutoCfg] = useState<AutoConfig & WatchlistFields>({ symbol: "NVDAB", style: "BALANCED", enabled_presets: [...PresetNameValues], capital: DEFAULT_INITIAL_CAPITAL, timeframe: "1h", activation: "AUTO_EXECUTE" });
 
   const nav = TABS.map((t) => (
     <button key={t.id} className={`nav-item${tab === t.id ? " active" : ""}`} onClick={() => setTab(t.id)}>

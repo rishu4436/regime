@@ -1,17 +1,18 @@
 import { useEffect, useState } from "react";
-import { TokenPicker } from "../components/TokenPicker";
+import { WatchlistPicker } from "../components/Watchlist";
+import { isUnknownWatchlistField, usesWatchlist, watchlistExtras } from "../lib/watchlist";
 import { PresetNameValues, RegimeValues, TimeframeValues, TraderStyleValues, type AutoConfig, type RegimeAnalysis, type StatusSnapshot, type StrategySelection, type Timeframe } from "../contracts";
 import { ensureLoop } from "./Dashboard";
 import { api } from "../api";
 import { RegimeBadge } from "../components/Badges";
 import { Card, NumberInput, Segmented, Skeleton, Toggle, useToast } from "../components/ui";
 import { PRESET_INFO, REGIME_INFO, STYLE_INFO } from "../lib/auto";
-import type { PresetsTable } from "../api/types";
+import type { PresetsTable, WatchlistFields } from "../api/types";
 import { strategyLabel, humanReason } from "../lib/strategy";
 import { useLive } from "../lib/live";
 import { TokenStatusBadge } from "../components/Live";
 
-interface Props { config: AutoConfig; setConfig: (c: AutoConfig) => void; status: StatusSnapshot | null; onActivated: () => void; tick: number }
+interface Props { config: AutoConfig & WatchlistFields; setConfig: (c: AutoConfig & WatchlistFields) => void; status: StatusSnapshot | null; onActivated: () => void; tick: number }
 
 export function AutoMode({ config: c, setConfig, status, onActivated, tick }: Props) {
   const { system } = useLive(); const simOnly = !system || system.trading_mode === "SIM"; // xStock only selectable in SIM
@@ -44,7 +45,19 @@ export function AutoMode({ config: c, setConfig, status, onActivated, tick }: Pr
   };
   const activate = async () => {
     setBusy(true);
-    try { await api.activateAuto({ ...c, enabled_presets: enabled }); await ensureLoop(); toast(`Auto mode live: ${STYLE_INFO[style].label} on ${c.symbol}`, "success"); onActivated(); }
+    try {
+      const { watchlist: _w, auto_pick: _a, ...plain } = c;
+      const body: AutoConfig = { ...plain, enabled_presets: enabled };
+      const multi = usesWatchlist(c, c.symbol);
+      if (!multi) await api.activateAuto(body);
+      else await api.activateAuto({ ...body, ...watchlistExtras(c, c.symbol) } as AutoConfig).catch((e) => {
+        if (!isUnknownWatchlistField(e)) throw e;
+        toast(`This agent doesn't support a watchlist yet: trading ${c.symbol} only`, "warn");
+        return api.activateAuto(body);
+      });
+      await ensureLoop();
+      toast(`Auto mode live: ${STYLE_INFO[style].label} on ${c.auto_pick?.enabled ? "auto-picked tokens" : multi ? `${(c.watchlist ?? []).length} tokens` : c.symbol}`, "success"); onActivated();
+    }
     catch (e) { toast(`Activation failed: ${e instanceof Error ? e.message : e}`, "error"); } finally { setBusy(false); }
   };
 
@@ -54,8 +67,9 @@ export function AutoMode({ config: c, setConfig, status, onActivated, tick }: Pr
         <Card title="Auto agent" extra={isActive && <span className="pill ok"><span className="live-dot" />Active</span>}>
           <div className="stack" style={{ gap: 14 }}>
             <div className="field-grid">
-              <div><span className="lbl">Tokenized stock<TokenStatusBadge symbol={c.symbol} /></span>
-                <TokenPicker value={c.symbol} onChange={(v) => setConfig({ ...c, symbol: v })} simOnly={simOnly} /></div>
+              <div><span className="lbl">Tokenized stocks<TokenStatusBadge symbol={c.symbol} /></span>
+                <WatchlistPicker value={{ symbol: c.symbol, watchlist: c.watchlist, auto_pick: c.auto_pick }} simOnly={simOnly}
+                  onChange={(v) => setConfig({ ...c, symbol: v.symbol, watchlist: v.watchlist, auto_pick: v.auto_pick })} /></div>
               <div><span className="lbl">Timeframe</span>
                 <select value={c.timeframe ?? "1h"} onChange={(e) => setConfig({ ...c, timeframe: e.target.value as Timeframe })}>{TimeframeValues.map((t) => <option key={t}>{t}</option>)}</select></div>
               <div><span className="lbl">Capital allocated</span><NumberInput value={c.capital} min={1} step={500} suffix="USDT" onChange={(v) => setConfig({ ...c, capital: v ?? 1 })} /></div>
