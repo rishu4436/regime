@@ -326,8 +326,11 @@ New `LiveSafetyConfig` fields:
 1. proposed % ×0.25, capped at 2%
 2. thin-liquidity ×0.5 (volume families only)
 3. notional on min(equity, hint)
-4. below the family's min order → bump to the floor, but only if the floor ≤ `max_order_usdt` and the floor ≤ the
-   equity basis. Otherwise STAY_OUT `live_below_min_order`.
+4. below the minimum order → raise it to the floor, as risk does. The floor is the market context's
+   `min_order_usdt` / `minOrderUsdt` when present, otherwise the family default. The engine only refuses
+   (STAY_OUT `live_below_min_order`) when the floor can never be met: the floor > `max_order_usdt`, or a *known*
+   equity (engine equity/capital > 0, context `equity`, or `equity_hint_usdt`) is below the floor. With unknown
+   equity it buys at the floor (`proposed_size_pct` 0) and leaves the final say to risk.
 5. Never above `max_order_usdt` (25 USDT).
 
 `proposed_size_pct` is always `notional / equity × 100`.
@@ -342,6 +345,9 @@ New `LiveSafetyConfig` fields:
   size change.
 - `reference_price`
 - `equity`
+- `min_order_usdt` or `minOrderUsdt`: the token's minimum order (e.g. `get_token_status().min_order_usdt`).
+  Strings are parsed with `float()`; `None`, unparseable or negative values are ignored. It overrides the family
+  default, and `0` means no floor.
 
 Effects on BUYs only (SELLs are never blocked):
 - off-hours, closed, no liquidity, paused, `openState=false`, a reasonCode of ASSET_PAUSED / MARKET_PAUSED /

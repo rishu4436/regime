@@ -276,6 +276,7 @@ def test_price_impact_gate_matches_risk_1pct():
         "price_impact_pct": None,
         "reference_price": None,
         "equity": None,
+        "min_order_usdt": None,
     }
 
 
@@ -288,3 +289,60 @@ def test_config_validation_new_fields():
     ):
         with pytest.raises(ValueError):
             LiveSafetyConfig(**bad)
+
+
+# ---------------------------------------------------------------- min order from the market context (aligned with risk)
+def _buy(sym, ctx, equity, pct=10, **cfg):
+    s = always_in(sym, volume=False)
+    s.risk.position_size_pct = pct  # x0.25, capped at 2%
+    eng = live(market_context={sym: ctx} if ctx is not None else None, **cfg)
+    port = pf(equity) if equity > 0 else Portfolio(starting_capital=1000, cash=0, equity=0)
+    return eng.evaluate_manual(s, extended(sym), port)
+
+
+def test_context_min_order_raises_bstock_buy():
+    sig = _buy("NVDAB", {"status": "trading", "min_order_usdt": 10}, 300)  # 2% of 300 = 6 -> raised to 10
+    assert sig.action == Action.BUY and sig.proposed_notional == pytest.approx(10.0)
+    assert sig.proposed_size_pct == pytest.approx(10 / 300 * 100) and "token minimum 10" in sig.reason
+    assert _buy("NVDAB", None, 300).proposed_notional == pytest.approx(6.0)  # no context: bStock has no floor
+
+
+def test_context_min_order_ondo_and_override():
+    assert _buy("NVDAon", {"min_order_usdt": 20}, 300).proposed_notional == pytest.approx(20.0)
+    assert _buy("NVDAon", {"minOrderUsdt": "20"}, 300).proposed_notional == pytest.approx(20.0)  # camelCase, string
+    # the context overrides the family default in both directions
+    assert _buy("NVDAon", {"min_order_usdt": 5}, 300).proposed_notional == pytest.approx(6.0)
+    assert _buy("NVDAon", {"min_order_usdt": 0}, 100).proposed_notional == pytest.approx(2.0)
+    assert _buy("NVDAon", {"min_order_usdt": 15}, 100).proposed_notional == pytest.approx(15.0)
+
+
+@pytest.mark.parametrize("raw", ["10", "10.0", " 10 ", 10, 10.0])
+def test_context_min_order_string_parsed(raw):
+    assert _buy("NVDAB", {"min_order_usdt": raw}, 300).proposed_notional == pytest.approx(10.0)
+
+
+@pytest.mark.parametrize("raw", [None, "", "n/a", "nan", "inf", -5, [10]])
+def test_context_min_order_garbage_ignored(raw):
+    # ignored -> family default: bStock none (6 USDT), Ondo 20
+    assert _buy("NVDAB", {"min_order_usdt": raw}, 300).proposed_notional == pytest.approx(6.0)
+    assert _buy("NVDAon", {"minOrderUsdt": raw}, 300).proposed_notional == pytest.approx(20.0)
+
+
+def test_context_min_order_above_cap_stays_out():
+    sig = _buy("NVDAB", {"min_order_usdt": "30"}, 300)  # floor 30 > max order 25
+    assert sig.action == Action.STAY_OUT and sig.conditions_failed == ["live_below_min_order"]
+    assert "max order 25" in sig.reason
+    assert _buy("NVDAB", {"min_order_usdt": 25}, 300).proposed_notional == pytest.approx(25.0)  # == cap: allowed
+
+
+def test_min_order_equity_unknown_buys_equity_below_floor_stays_out():
+    # engine equity 0 (e.g. wallet balance not loaded) and no equity hint -> unknown -> let risk decide
+    unknown = _buy("NVDAon", {"min_order_usdt": 20}, 0)
+    assert unknown.action == Action.BUY and unknown.proposed_notional == pytest.approx(20.0)
+    assert unknown.proposed_size_pct == 0.0
+    below = _buy("NVDAon", {"min_order_usdt": 20}, 15)  # known equity 15 < floor 20
+    assert below.action == Action.STAY_OUT and below.conditions_failed == ["live_below_min_order"]
+    assert "floor > equity 15" in below.reason
+    hint = _buy("NVDAon", {"min_order_usdt": 20, "equity": "12"}, 1000)  # context equity hint is a known equity
+    assert hint.conditions_failed == ["live_below_min_order"]
+    assert _buy("NVDAon", {"min_order_usdt": 20}, 20).proposed_notional == pytest.approx(20.0)  # equity == floor

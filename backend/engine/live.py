@@ -48,8 +48,9 @@ class LiveSafetyConfig:
     # conditions / the min-volume filter are NOT APPLICABLE and the no-volume / thin-liquidity gates are skipped.
     # Stale-data refusal still applies.
     volume_exempt_families: frozenset = frozenset({FAMILY_ONDO})
-    # Minimum order per family (Ondo rejects < 20 USD with 40375). A smaller BUY is bumped up to the floor if the
-    # floor <= max_order_usdt (and <= the equity basis), else STAY_OUT 'live_below_min_order'.
+    # Minimum order per family (Ondo rejects < 20 USD with 40375); a market-context ``min_order_usdt`` (the token's
+    # own minimum, e.g. get_token_status().min_order_usdt) overrides it. A smaller BUY is raised to the floor when
+    # floor <= max_order_usdt and (equity unknown or floor <= equity), like risk does; else 'live_below_min_order'.
     min_order_usdt: Mapping[str, float] = field(default_factory=lambda: {FAMILY_ONDO: 20.0})
     bump_to_min_order: bool = True
     max_order_usdt: float = 25.0  # never propose more than this per BUY (Bot 3's live per-order cap)
@@ -177,6 +178,12 @@ def _num(v: Any) -> Optional[float]:
     return f if f == f and f not in (float("inf"), float("-inf")) else None
 
 
+def _nonneg(v: Any) -> Optional[float]:
+    """Defensive parse for a minimum order: float() of numbers/strings; None, unparseable, NaN/inf or < 0 -> None."""
+    f = _num(v)
+    return f if f is not None and f >= 0 else None
+
+
 def parse_price_impact(ctx: Mapping[str, Any]) -> Optional[float]:
     """Price impact in PERCENT units from ``price_impact_pct`` or the Web3 quote's ``priceImpactPercent`` (Bot 4
     sends a string, e.g. '0.35' = 0.35%). Parsed with float(); None / unparseable / NaN / inf -> None (unknown)."""
@@ -188,8 +195,8 @@ def parse_price_impact(ctx: Mapping[str, Any]) -> Optional[float]:
 
 
 def normalize_market_context(ctx: Optional[Mapping[str, Any]]) -> Optional[dict]:
-    """Accepts the engine shape ``{status, price_impact_pct, reference_price, equity}`` and the raw Binance
-    ``statusInfo`` shape (``marketStatus``/``openState``/``reasonCode``). Unknown keys are ignored."""
+    """Accepts the engine shape ``{status, price_impact_pct, reference_price, equity, min_order_usdt}`` and the raw
+    Binance ``statusInfo`` shape (``marketStatus``/``openState``/``reasonCode``). Unknown keys are ignored."""
     if ctx is None:
         return None
     status = ctx.get("status", ctx.get("marketStatus"))
@@ -204,6 +211,7 @@ def normalize_market_context(ctx: Optional[Mapping[str, Any]]) -> Optional[dict]
         "price_impact_pct": parse_price_impact(ctx),
         "reference_price": _num(ctx.get("reference_price", ctx.get("referencePrice"))),
         "equity": _num(ctx.get("equity")),
+        "min_order_usdt": _nonneg(ctx.get("min_order_usdt", ctx.get("minOrderUsdt"))),
     }
 
 
@@ -248,11 +256,9 @@ def live_size(
     """Live-safe BUY size: x size_factor, cap max_size_pct, x thin-liquidity factor (volume families only); then
     the per-family min-order floor and the max_order_usdt cap. (Price impact is a gate, not a size factor.)"""
     fam = token_family(symbol)
-    basis = equity
-    hint = ctx.get("equity") if ctx else None
-    for h in (hint, cfg.equity_hint_usdt):
-        if h is not None and h > 0:
-            basis = min(basis, h)
+    # Equity basis: the smallest KNOWN equity (engine equity/capital, context ``equity``, config hint); None = unknown.
+    known = [e for e in (equity, ctx.get("equity") if ctx else None, cfg.equity_hint_usdt) if e is not None and e > 0]
+    basis = min(known) if known else None
     steps = [f"{proposed_pct:g}% x{cfg.size_factor:g} capped at {cfg.max_size_pct:g}%"]
     pct = min(proposed_pct * cfg.size_factor, cfg.max_size_pct)
     if fam not in cfg.volume_exempt_families:
@@ -260,27 +266,32 @@ def live_size(
         if thin:
             pct *= factor
             steps.append(thin)
-    notional = basis * pct / 100
-    if basis != equity:
+    notional = basis * pct / 100 if basis is not None else 0.0
+    if basis is not None and basis != equity:
         steps.append(f"equity basis {basis:g}")
-    floor = cfg.min_order_usdt.get(fam, 0.0)
+    ctx_floor = ctx.get("min_order_usdt") if ctx else None
+    floor = ctx_floor if ctx_floor is not None else cfg.min_order_usdt.get(fam, 0.0)
+    src = "token minimum" if ctx_floor is not None else f"{fam} minimum"
     if floor > 0 and notional < floor:
-        can_bump = cfg.bump_to_min_order and floor <= cfg.max_order_usdt and floor <= basis
-        if not can_bump:
-            why = (
-                f"floor > max order {cfg.max_order_usdt:g} USDT"
-                if floor > cfg.max_order_usdt
-                else f"floor > equity {basis:g}"
-                if floor > basis
-                else "bumping disabled"
-            )
-            msg = f"{notional:.2f} USDT is below the {fam} minimum order {floor:g} USDT ({why})"
+        # Mirror risk (Bot 3 raises small live buys to the token minimum when its caps allow): only refuse when the
+        # floor can never be met: above the per-order cap, or above a KNOWN equity.
+        if floor > cfg.max_order_usdt:
+            why = f"floor > max order {cfg.max_order_usdt:g} USDT"
+        elif basis is not None and basis < floor:
+            why = f"floor > equity {basis:g}"
+        elif not cfg.bump_to_min_order:
+            why = "raising to the minimum is disabled"
+        else:
+            why = None
+        if why is not None:
+            msg = f"{notional:.2f} USDT is below the {src} order {floor:g} USDT ({why})"
             return SizeDecision(0.0, 0.0, "", ("live_below_min_order", msg))
-        steps.append(f"bumped {notional:.2f} -> {fam} min order {floor:g} USDT")
+        steps.append(f"raised {notional:.2f} -> {src} {floor:g} USDT")
         notional = floor
     if notional > cfg.max_order_usdt:
         steps.append(f"capped at {cfg.max_order_usdt:g} USDT")
         notional = cfg.max_order_usdt
-    pct = notional / equity * 100 if equity > 0 else 0.0  # Signal convention: % of the engine's equity/capital
+    # Signal convention: % of the engine's equity/capital (0 when that is unknown); the contract caps it at 100.
+    pct = min(notional / equity * 100, 100.0) if equity > 0 else 0.0
     note = f" [live-safe size {', '.join(steps)} -> {pct:.4g}% = {notional:.2f} USDT]"
     return SizeDecision(pct, notional, note)
