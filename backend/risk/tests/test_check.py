@@ -72,9 +72,10 @@ def test_live_blocked_by_default(rm):
     v = rm.check(buy(), make_portfolio(), ctl(trading_mode=TradingMode.LIVE))
     assert not v.approved and "LIVE" in names(v)["trading_mode"].detail
     v = rm.check(sell(), make_portfolio(positions=[pos()]), ctl(trading_mode=TradingMode.LIVE))
-    assert not v.approved
+    assert v.approved and "closing positions is allowed" in names(v)["trading_mode"].detail  # exits never trapped
+    # allow_live=True passes the gate; the LIVE profile guards are covered in test_live.py
     rm2 = DefaultRiskManager(config=RiskConfig(allow_live=True))
-    assert rm2.check(buy(), make_portfolio(), ctl(trading_mode=TradingMode.LIVE)).approved
+    assert names(rm2.check(buy(), make_portfolio(), ctl(trading_mode=TradingMode.LIVE)))["trading_mode"].passed
 
 
 def test_max_open_positions(rm):

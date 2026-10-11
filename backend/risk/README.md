@@ -135,7 +135,7 @@ never ratchets.
 `emergency_stopped=True` (`paused` untouched), blocks every BUY and makes `check_exits` emit an `EMERGENCY_STOP` SELL for
 every position (closing SELLs still pass `check`); `reset_emergency_stop()` (interface method) clears it and leaves
 `paused` as it was; `set_confirmation_mode(bool)`; `set_trading_mode(mode)` refuses LIVE unless
-`RiskConfig.allow_live=True` (default False, and `check` blocks everything in LIVE without it). Every change sets
+`RiskConfig.allow_live=True` (default False; without it `check` blocks every LIVE BUY, closing SELLs still pass). Every change sets
 `reason` and `updated_at`.
 
 ### Notes for other bots
@@ -148,3 +148,150 @@ every position (closing SELLs still pass `check`); `reset_emergency_stop()` (int
 - **Bot 1 (UI):** show `RiskVerdict.checks` as a pass/fail list with `detail`, `reasons[0]` as the headline, the
   control `reason`, a separate "Reset emergency stop" button, and `exit_levels()` (SL / TP / trail lines) per position.
 - **Bot 2:** match the exit semantics above in `backtest_manual`.
+
+---
+
+## LIVE (real funds) profile — `live.py`
+
+Applied **automatically** whenever the trading mode is LIVE (manager control state, the `control` passed to `check`,
+or `Portfolio.mode`). SIM/PAPER are unaffected. The agent is **autonomous**: a LIVE BUY that passes every hard limit is
+approved with `requires_confirmation=False`; confirmation is only requested if the user explicitly turns confirmation
+mode on (or the strategy's activation is `CONFIRMATION`). Protective SELLs (SL/TP/trailing/max-loss/emergency) are never
+blocked by a LIVE guard and never wait.
+
+### Three switches (all required for a LIVE BUY)
+| Switch | Owner | Effect |
+|---|---|---|
+| `LIVE_TRADING_ENABLED=true` | Bot 6 app | app refuses to run the LIVE loop otherwise |
+| `BINANCE_LIVE_ENABLED=true` | Bot 4 exchange | LIVE exchange client cannot be built otherwise |
+| `RiskConfig.allow_live=True` | Bot 3 risk | otherwise every LIVE BUY fails check `trading_mode` |
+
+`DefaultRiskManager()` without `config=` uses `RiskConfig.from_env()`, which sets `allow_live=True` only when
+`RISK_ALLOW_LIVE`, `LIVE_TRADING_ENABLED` and `BINANCE_LIVE_ENABLED` are all exactly `true`. An explicit
+`RiskConfig(allow_live=True)` (tests / code) bypasses env. No secrets are read.
+
+### `LiveRiskProfile` (`RiskConfig.live`) — defaults
+| Field | Default | Env override (`from_env`) | Check name |
+|---|---|---|---|
+| `max_order_notional_usdt` | 25 | `RISK_LIVE_MAX_ORDER_USDT` | `live_order_cap` (reduces size) |
+| `max_daily_loss_usdt` | 25 | `RISK_LIVE_MAX_DAILY_LOSS_USDT` | `live_daily_loss_cap` (**auto emergency stop**) |
+| `max_daily_notional_usdt` | 100 | `RISK_LIVE_MAX_DAILY_NOTIONAL_USDT` | `live_daily_notional` (reduces size) |
+| `max_open_exposure_usdt` | 50 | `RISK_LIVE_MAX_EXPOSURE_USDT` | `live_max_exposure` (reduces size) |
+| `max_data_age_seconds` | 900 | `RISK_LIVE_MAX_DATA_AGE_S` | `live_stale_data` |
+| `max_future_skew_seconds` | 60 | — | `live_stale_data` |
+| `max_quote_age_seconds` | 30 (quote TTL) | — | `live_quote` |
+| `max_slippage_pct` | 1.0 | `RISK_LIVE_MAX_SLIPPAGE_PCT` | `live_slippage` |
+| `require_quote` | False | — | `live_quote` |
+| `market_hours_enabled` / `market_open_utc` / `market_close_utc` / `market_weekdays_only` | False (24/7) / 13:30 / 20:00 / True | `RISK_LIVE_MARKET_HOURS=true` to enable | `live_market_hours` |
+| `market_hours_exempt_symbols` | [] | — | `live_market_hours` |
+| `require_wallet_balances` | True | — | `live_gas_reserve` |
+| `quote_asset` / `fee_buffer_usdt` | USDT / 1.0 | `RISK_LIVE_FEE_BUFFER_USDT` | `live_wallet_balance` (reduces), `live_wallet_quote` |
+| `gas_asset` / `min_gas_reserve` | BNB / 0.002 | `RISK_LIVE_MIN_BNB` | `live_gas_reserve` |
+
+Size caps only **reduce** the order (each logged as "reduced from X to Y"); if it ends below `min_order_notional`
+(10 USDT) the BUY is blocked. The other guards block outright.
+
+Semantics:
+- **Daily loss** = `-(Portfolio.daily_pnl + Σ unrealized)` where unrealized = `qty * (current_price - entry)` (or
+  `Position.unrealized_pnl` if no `current_price`). Unrealized includes positions opened before today. When it reaches the
+  cap, `check()` or `check_exits()` sets `emergency_stopped=True` with the reason
+  "Auto emergency stop: LIVE daily loss X USDT reached the cap of Y USDT ...". `check_exits` then emits `EMERGENCY_STOP`
+  SELLs for every position. Only `reset_emergency_stop()` clears it.
+- **Daily notional** = LIVE BUY fills today (UTC). This is the larger of the internal ledger fed by `record_execution(result)`
+  (LIVE, BUY, FILLED/PARTIALLY_FILLED only) and `LiveContext.daily_live_notional_usdt` (use this so the count survives
+  restarts). SELLs don't count.
+- **Stale data** uses `LiveContext.data_timestamp`, or `bar.timestamp + bar_interval` (bar close). `Candle.timestamp` is the
+  bar OPEN time, so a 1h bar's open is always more than 900 s old: pass `data_timestamp` = when the price was fetched (or the bar
+  close). Missing → blocked. Naive datetimes are treated as UTC.
+- **Quote** (if supplied): symbol/side must match; it must not be expired or older than `max_quote_age_seconds`.
+  `|quote.price - ref| / ref` and `quote.slippage_bps/100` must both be `<= max_slippage_pct` (ref =
+  `context.reference_price` → `signal.price` → `context.bar.close`; none → blocked). `quote.notional` must be `<=` the approved
+  size. With balances, `quote.notional + quote.fee <= stable balance - fee buffer`.
+- **Market hours**: 13:30–20:00 UTC Mon–Fri matches the US session during EDT. During EST the session is 14:30–21:00 UTC, so
+  adjust `market_open_utc`/`market_close_utc`. Exchange holidays are not modelled. Uses `context.now` or the clock.
+- **Balances**: `{"USDT": 40.0, "BNB": 0.01}` (keys are case-insensitive). BUY notional is capped at `USDT - fee_buffer`. BNB must be
+  `>= min_gas_reserve`. If no balances are given and `require_wallet_balances` is set → blocked.
+
+### What the loop (Bot 6) must pass in LIVE
+```python
+ctx = LiveContext(now=utc_now(), data_timestamp=<price fetch time or bar close>, bar=last_bar, reference_price=last_price,
+                  balances=wallet_balances,                 # e.g. from baw / exchange: {"USDT": .., "BNB": ..}
+                  daily_live_notional_usdt=<persisted LIVE BUY notional today>)   # optional; ledger also used
+v = risk.check(signal, portfolio, control, context=ctx)      # phase 1: size (adjusted_notional)
+q = exchange.get_quote(sym, BUY, v.adjusted_notional)
+v = risk.check(signal, portfolio, control, context=ctx.model_copy(update={"quote": q, "now": utc_now()}))  # phase 2
+if v.approved: res = exchange.execute_swap(order, q); risk.record_execution(res)
+risk.check_exits(portfolio, prices, bars)                    # every tick (also enforces the daily loss cap)
+risk.live_limits(portfolio, ctx)                             # -> dict for GET /api/wallet "limits"
+```
+`live_limits()` returns `live_allowed, per_order_cap_usdt, daily_loss_cap_usdt, daily_notional_cap_usdt,
+max_exposure_usdt, max_slippage_pct, stale_after_s, bnb_gas_reserve, fee_buffer_usdt, market_hours_utc,
+daily_used_usdt, daily_loss_usdt, open_exposure_usdt`. The last two are `None` without a portfolio.
+
+### Wallet limits, token status, token minimums, blocked symbols (LIVE BUYs only)
+
+SELLs (protective exits and strategy sells) and `check_exits` are **never** affected by anything in this section.
+
+**Wallet limits — `LiveContext.wallet_limits: WalletLimits`.** The Agentic Wallet enforces its own spending controls
+(set in the Binance App, read-only from `baw`). Risk applies whichever is **stricter**, ours (`LiveRiskProfile`) or the
+wallet's, so a BUY is shrunk/blocked before the wallet would reject it.
+
+| Check | Effect |
+|---|---|
+| `wallet_limits` | informational pass "Wallet limits not supplied - only our own LIVE limits apply"; **blocks** if `LiveRiskProfile.require_wallet_limits=True` (default False) |
+| `wallet_allowed_token` | blocks when `allowed_tokens` is set and the symbol (or `token_address` on the signal/quote, if present) is not in it; case-insensitive |
+| `wallet_per_tx_cap` | reduces size to `per_tx_limit_usdt` |
+| `wallet_daily_limit` | reduces size to `min(daily_limit - daily_used, daily_left)`, floored at 0 |
+| `live_quote_notional` | quote notional must be ≤ approved size and ≤ the **effective** per-order cap |
+
+`min_order_notional` still runs afterwards, so a wallet-shrunk order under the minimum is blocked.
+
+Fill it from `baw wallet settings --json` (envelope or `data`):
+```python
+wl = WalletLimits.from_baw(json.loads(out), fetched_at=utc_now(), allowed_tokens=cfg_allow_list_or_None)
+ctx = LiveContext(..., wallet_limits=wl)
+```
+Mapping (source: official `wallet settings` reference,
+<https://github.com/binance/binance-skills-hub/blob/main/skills/binance-web3/binance-agentic-wallet/references/wallet-setting.md>,
+also listed in Bot 4's `binance-research.md` §3):
+
+| baw key (documented) | WalletLimits field |
+|---|---|
+| `dailyLimit` | `daily_limit_usdt` (baw reports USD; treated as USDT 1:1) |
+| `quotaUsed` / `quotaLeft` / `quotaDate` | `daily_used_usdt` / `daily_left_usdt` / `quota_date` |
+| `tradeAllTokens` | `trade_all_tokens` (True → `allowed_tokens=None`) |
+
+**Provisional (NOT backed by any doc):** `baw` documents **no per-transaction limit** and does **not return the token
+allow-list** (only `tradeAllTokens: false`). `from_baw` tolerates aliases such as `perTxLimit`, `perTransactionLimit`,
+`singleTxLimit`, `allowedTokens`, `tokenWhitelist`, `allowedContracts` in case a CLI version or wrapper returns them; otherwise
+pass `allowed_tokens=` explicitly. With `tradeAllTokens=false` and no list, `wallet_allowed_token` passes with a "not
+verified" note (the wallet itself will still reject). Prediction/DeFi/x402/dev-mode quotas are separate and ignored.
+Bot 4's dedicated `agentic-wallet-deep-research.md` did not exist yet when this was written.
+
+`live_limits(portfolio, ctx)` reports **effective** values: `per_order_cap_usdt`, `daily_notional_cap_usdt` and
+`daily_limit_usdt` (same value), `daily_used_usdt` (from the side that binds), `daily_remaining_usdt`, plus
+`limit_source: {per_order_cap_usdt, daily_limit_usdt}` = `"risk"` or `"wallet"`, `allowed_tokens`, `risk_limits` (ours,
+raw) and `wallet_limits` (raw wallet values, or None).
+
+**Token status — `LiveContext.token_status: TokenStatus`** (`trading_status`, `min_order_usdt`, `reference_price_only`;
+a plain dict works). Check `live_token_status` blocks unless `trading_status == "trading"` and `reference_price_only` is
+False, e.g. "NVDAon is off-hours - price is reference only - no LIVE BUY". Missing → informational pass.
+
+**Token minimum order:** in LIVE the minimum is `max(min_order_notional (10), token_status.min_order_usdt)` (Ondo: 20 USD).
+Below it, `min_order_notional` fails with "below token minimum order".
+
+**Blocked symbols:** `LiveRiskProfile.blocked_symbol_suffixes = ["x"]` (case-sensitive `endswith`). Check
+`live_symbol_allowed` blocks e.g. `TSLAx` (xStocks have no liquidity on BNB Chain); `NVDAX`/`NVDAon` pass. Set `[]` to disable.
+
+**Exit-quota reserve (wallet `dailyLimit` counts SELLs too, per Bot 4).** With a wallet daily limit/quota known and
+`LiveRiskProfile.reserve_wallet_quota_for_exits=True` (default), check `wallet_exit_reserve` shrinks a LIVE BUY to
+`N <= (quota_left - open_exposure) / 2`, so after buying, the remaining quota can still sell every open position including
+this one ("keeping X USDT of it to sell open positions ..."). Then `min_order_notional` blocks if too small. SELLs untouched.
+`live_limits()` adds `exit_quota_shortfall_usdt` = `max(0, open_exposure - quota_left)` (None if portfolio or wallet quota
+unknown) and `warnings: [{code, message}]` (always present, `[]` = none): `exit_quota_shortfall`, and
+`wallet_limits_stale` when `wallet_limits.fetched_at` is older than 15 min (vs `context.now` or the clock).
+
+**Exchange price impact.** `LiveContext.price_impact_pct` (Web3 quote `priceImpactPercent`, in %, sign ignored) — or a
+price-impact attribute on `Quote` if the contract ever adds one — replaces the quote-vs-reference comparison in
+`live_slippage` ("Exchange-reported price impact ..."). Without it the old reference-price fallback runs. The quote's
+`slippage_bps` tolerance is checked either way.
