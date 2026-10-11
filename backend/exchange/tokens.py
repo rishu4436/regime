@@ -44,6 +44,12 @@ DEFAULT_TOKENS: list[TokenInfo] = [
               contract_address="0x431a3bee82e2ca41e49895cbece5bb0f76a89b7a", underlying="AAPL", decimals=18),
     TokenInfo(symbol="SPYon", name="SPDR S&P 500 ETF (Ondo tokenized)", token_type=TokenType.ONDO, chain="BSC",
               chain_id=BSC, contract_address="0x6a708ead771238919d85930b5a0f10454e1c331a", underlying="SPY", decimals=18),
+    # NVDAB: the 24/7 demo token (bStock trades around the clock; ~$579k volume over the 2026-10-10/11 weekend).
+    TokenInfo(symbol="NVDAB", name="NVIDIA BStock", token_type=TokenType.BSTOCK, chain="BSC", chain_id=BSC,
+              contract_address="0x02fca66c1d1afb4e2a7884261eb00f63598a7436", underlying="NVDA", decimals=18),
+    # TSLAon: Ondo, in the weekend off-hours session list (status TRADING on 2026-10-11).
+    TokenInfo(symbol="TSLAon", name="Tesla (Ondo tokenized)", token_type=TokenType.ONDO, chain="BSC", chain_id=BSC,
+              contract_address="0x2494b603319d4d9f9715c9f4496d9e0364b59d93", underlying="TSLA", decimals=18),
     TokenInfo(symbol="METAx", name="Meta xStock", token_type=TokenType.XSTOCK, chain="BSC", chain_id=BSC,
               contract_address="0x96702be57cd9777f835117a809c7124fe4ec989a", underlying="META", decimals=18),
 ]

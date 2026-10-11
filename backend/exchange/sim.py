@@ -112,6 +112,14 @@ class SimulatedBinanceClient(TokenStatusMixin, MockExchangeClient):
             if s in real else t
             for s, t in self._tokens.items()
         }
+        # Real tokens the shared mocks don't have yet (NVDAB is the 24/7 demo token). SIM start prices:
+        # NVDAB ~230.5 USDT from a real 25 USDT quote on 2026-10-11; TSLAon reuses the mock TSLA start (200).
+        sim_start = {"NVDAB": 230.5, "TSLAon": 200.0}
+        sim_regime = {"NVDAB": Regime.MILD_UPTREND, "TSLAon": Regime.HIGH_VOLATILITY}
+        for sym, t in real.items():
+            if sym not in self._tokens:
+                self._tokens[sym] = t.model_copy(update={"price": sim_start.get(sym, 100.0)})
+                self._regimes.setdefault(sym, sim_regime.get(sym, Regime.SIDEWAYS))
         self.enforce_market_hours = enforce_market_hours
         self.enforce_paths = enforce_paths
         self._latency = latency_s

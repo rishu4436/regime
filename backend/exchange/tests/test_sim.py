@@ -19,10 +19,10 @@ def test_protocol_and_tokens_have_real_contracts(clock):
     c = SimulatedBinanceClient(clock=clock)
     assert isinstance(c, ExchangeClient) and c.mode == TradingMode.SIM
     toks = {t.symbol: t for t in c.search_tokens("")}
-    assert set(toks) == {"NVDAon", "TSLAx", "AAPLB", "SPYon", "METAx"}
+    assert set(toks) == {"NVDAon", "TSLAx", "AAPLB", "SPYon", "METAx", "NVDAB", "TSLAon"}
     assert toks["NVDAon"].chain_id == "56" and toks["NVDAon"].contract_address.startswith("0xa9ee")
     assert all(t.price and t.price > 0 for t in toks.values())
-    assert [t.symbol for t in c.search_tokens("tesla")] == ["TSLAx"]
+    assert [t.symbol for t in c.search_tokens("tesla")] == ["TSLAx", "TSLAon"]
 
 
 def test_routing_by_issuer(clock):
