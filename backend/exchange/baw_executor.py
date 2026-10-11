@@ -183,6 +183,34 @@ class BawExecutor:
         self._wallet_cache: Optional[tuple[float, dict]] = None
         self._bnb_price: Optional[float] = None
 
+    # ------------------------------------------------------------------ runtime limits
+    def set_live_limits(self, max_order_usdt: float, max_sell_usdt: Optional[float] = None) -> dict:
+        """Change the per-BUY cap at runtime (Bot 6's PUT /api/settings/limits; same value as risk and engine).
+        Validated: > 0 and <= BINANCE_LIVE_HARD_MAX_ORDER_USDT when that is set (ValueError otherwise; nothing changes).
+        The exit (SELL) cap becomes `max_sell_usdt` if given, else max(BINANCE_LIVE_MAX_SELL_USDT if set, 2 x buy cap),
+        so a position bought at the new cap can always be closed. Takes effect on the next order."""
+        from .limits import hard_max_order_usdt, validate_max_order_usdt
+
+        ceiling = hard_max_order_usdt(self._envmap)
+        buy = validate_max_order_usdt(max_order_usdt, ceiling)
+        if max_sell_usdt is not None:
+            sell = validate_max_order_usdt(max_sell_usdt, None, "max_sell_usdt")
+            if sell < buy:
+                raise ValueError(f"max_sell_usdt {sell:.2f} must be >= max_order_usdt {buy:.2f} (exits must fit)")
+        else:
+            env_sell = str(_env(self._envmap).get("BINANCE_LIVE_MAX_SELL_USDT", "")).strip()
+            sell = max(_float_env("BINANCE_LIVE_MAX_SELL_USDT", 0.0, self._envmap) if env_sell else 0.0, 2 * buy)
+        self.max_order_usdt, self.max_sell_usdt = buy, sell
+        self._wallet_cache = None  # wallet snapshot carries per_order_cap_usdt
+        return self.live_limits()
+
+    def live_limits(self) -> dict:
+        from .limits import hard_max_order_usdt
+
+        return {"max_order_usdt": self.max_order_usdt, "max_sell_usdt": self.max_sell_usdt,
+                "default_max_order_usdt": max_order_usdt(self._envmap),
+                "hard_max_order_usdt": hard_max_order_usdt(self._envmap)}
+
     # ------------------------------------------------------------------ gate
     def gate(self) -> tuple[bool, list[str]]:
         return live_gate(self._envmap, self.require_risk_allow_live)

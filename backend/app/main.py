@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -77,8 +77,14 @@ def make_wallet_connect(settings: Settings):
     return WalletConnect(cli=BawCli(cmd=fake))
 
 
-def require_local(request: Request) -> None:
-    """Wallet sign-in is localhost-only (the Vite dev proxy also connects from localhost)."""
+WALLET_403 = ("Wallet sign-in only works on the PC running the Regime backend "
+              "(open the dashboard at http://localhost there).")
+LIMITS_403 = ("Trading limits can only be changed on the PC running the Regime backend "
+              "(open the dashboard at http://localhost there).")
+
+
+def require_local(request: Request, message: str = WALLET_403) -> None:
+    """Wallet sign-in and trading limits are localhost-only (the Vite dev proxy also connects from localhost)."""
     host = (request.client.host if request.client else "") or ""
     fwd = [h.strip() for h in (request.headers.get("x-forwarded-for") or "").split(",") if h.strip()]
     # a LAN visitor talking to the backend directly (Host http://192.168.x.y:8000) is refused
@@ -88,8 +94,7 @@ def require_local(request: Request) -> None:
     origin = (request.headers.get("origin") or "").strip().lower()
     oh = urlsplit(origin).hostname if origin and origin != "null" else "localhost"
     if host not in LOCAL_HOSTS or any(h not in LOCAL_HOSTS for h in fwd) or hh not in LOCAL_HOSTS or oh not in LOCAL_HOSTS:
-        raise HTTPException(403, "Wallet sign-in only works on the PC running the Regime backend "
-                                 "(open the dashboard at http://localhost there).")
+        raise HTTPException(403, message)
 
 
 def create_app(settings: Optional[Settings] = None, components: Optional[Components] = None) -> FastAPI:
@@ -196,6 +201,30 @@ def create_app(settings: Optional[Settings] = None, components: Optional[Compone
         """Check saved positions against the connected wallet, drop those it doesn't hold, clear the block (localhost only)."""
         require_local(request)
         return WalletReconcileResult.model_validate(guard(L.reconcile_wallet))
+
+    # ---------------------------------------------------------------- trading limits (localhost only)
+    @app.get("/api/settings/limits")
+    def get_limits(request: Request) -> dict:
+        """{order_mode, order_usdt, order_pct, max_order_usdt, max_total_usdt, max_per_token_usdt, daily_loss_usdt,
+        daily_buy_usdt, defaults, wallet_daily_limit_usdt, notes, is_default}."""
+        require_local(request, LIMITS_403)
+        return L.limits_view()
+
+    @app.put("/api/settings/limits")
+    def put_limits(request: Request, body: dict = Body(...)) -> dict:
+        """Partial or full update; validated by risk first (422 + plain detail, nothing changes), then applied to risk,
+        engine and exchange at once and saved to LOG_DIR/limits.json. Never clears pause or an emergency stop."""
+        require_local(request, LIMITS_403)
+        try:
+            return L.set_limits(body)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+
+    @app.post("/api/settings/limits/reset")
+    def reset_limits(request: Request) -> dict:
+        """Reset to safe defaults (the values risk started with); deletes limits.json."""
+        require_local(request, LIMITS_403)
+        return L.reset_limits()
 
     # ---------------------------------------------------------------- market data
     @app.get("/api/tokens", response_model=list[TokenView])

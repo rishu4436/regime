@@ -31,6 +31,7 @@ from backend.contracts import (
 from .errors import INVALID_PARAMS, ExchangeError, QuoteUnavailable, Web3ApiError
 from .executors import LiveExecutor, RouteContext
 from .tokens import (
+    BSC as BSC_CHAIN,
     CHAIN_NAMES,
     DEFAULT_TOKENS,
     QUOTE_ASSETS,
@@ -52,6 +53,16 @@ from .status import (
     reason_for_error_code,
     status_from_candles,
     xstock_enabled,
+)
+from .universe import (
+    PRICE_INFO_BATCH,
+    UNIVERSE_TTL_S,
+    apply_price_info,
+    merge_rows,
+    rows_from_public_list,
+    rows_from_rwa_tokens,
+    rows_from_tokens,
+    token_info_from_row,
 )
 from .web3_api import PublicRwaClient, Web3ApiClient
 
@@ -80,6 +91,7 @@ class BinanceWeb3Client(TokenStatusMixin):
         public: Optional[PublicRwaClient] = None,
         enable_xstock: Optional[bool] = None,
         status_ttl_s: float = 60.0,
+        universe_ttl_s: float = UNIVERSE_TTL_S,
     ) -> None:
         if mode == TradingMode.SIM:
             raise ValueError("use SimulatedBinanceClient for SIM")
@@ -101,6 +113,13 @@ class BinanceWeb3Client(TokenStatusMixin):
         self._status_cache: dict[str, TokenStatus] = {}
         self._quote_meta = {}
         self._candle_sleep: Callable[[float], None] = time.sleep
+        # Full token universe (list_tokens), cached universe_ttl_s; rows by symbol + when fetched.
+        self._universe_ttl = timedelta(seconds=universe_ttl_s)
+        self._universe: Optional[tuple[datetime, list[dict]]] = None
+        self._universe_by_symbol: dict[str, dict] = {}
+        self.universe_source: Optional[str] = None  # rwa_tokens | public_list | registry (last list_tokens)
+        self.universe_error: Optional[str] = None
+        self.price_info_pause_s: float = 0.25        # 5 RPS per endpoint
 
     @property
     def mode(self) -> TradingMode:
@@ -108,13 +127,126 @@ class BinanceWeb3Client(TokenStatusMixin):
 
     # ------------------------------------------------------------------ tokens
     def _token(self, symbol: str) -> TokenInfo:
+        """Registry -> cached universe (list_tokens) -> `rwa/search` -> a fresh list_tokens() as a last resort."""
         if symbol in self._tokens:
             return self._tokens[symbol]
-        for t in self.search_tokens(symbol):
-            if t.symbol == symbol and t.chain_id in QUOTE_ASSETS:
-                self._tokens[symbol] = t
-                return t
+        row = self._universe_by_symbol.get(symbol)
+        if row is None:
+            try:
+                for t in self.search_tokens(symbol):
+                    if t.symbol == symbol and t.chain_id in QUOTE_ASSETS:
+                        self._tokens[symbol] = t
+                        return t
+            except ExchangeError as e:
+                log.warning("rwa search for %s failed: %s", symbol, e)
+            if self._universe is None:
+                self.list_tokens()
+                row = self._universe_by_symbol.get(symbol)
+        if row is not None and row.get("contract_address") and row.get("chain_id") in QUOTE_ASSETS:
+            t = token_info_from_row(row)
+            self._tokens[symbol] = t
+            return t
         raise QuoteUnavailable(f"unknown token {symbol!r}")
+
+    def list_tokens(self, refresh: bool = False) -> list[dict]:
+        """Every bStock / Ondo / xStock on BSC as rows (keys: see backend/exchange/universe.py): symbol, name, type,
+        contract_address, decimals, underlying, price, volume_24h, liquidity, min_order_usdt, max_order_usdt,
+        status, tradable, reason, ... Cached ~10 min (universe_ttl_s).
+
+        Sources: HMAC `GET /market/rwa/tokens?binanceChainId=56` (Ondo + bStock with name/price/status), then
+        `POST /market/price-info` in batches of 100 (DEX volume_24h, liquidity; best-effort), plus the public no-key
+        list for xStocks (kept NO_LIQUIDITY / xstock_disabled unless BINANCE_ENABLE_XSTOCK) and listed-but-unknown
+        tokens (tradable=False). On failure: the previous list if any, else the public list, else the registry.
+        Registry tokens are always included. max_order_usdt comes from a cached get_token_status (rwa/dynamic)."""
+        now = self._clock()
+        if self._universe and not refresh and now - self._universe[0] < self._universe_ttl:
+            return [dict(r) for r in self._universe[1]]
+        api_rows: list[dict] = []
+        public_rows: list[dict] = []
+        source, errors = "registry", []
+        try:
+            api_rows = rows_from_rwa_tokens(self.api.get_rwa_tokens(BSC_CHAIN), BSC_CHAIN, self.enable_xstock)
+            source = "rwa_tokens" if api_rows else source
+        except Exception as e:  # noqa: BLE001 - fall back below
+            errors.append(f"rwa/tokens: {e}")
+        if api_rows:
+            self._apply_price_info(api_rows)
+        if self.public is not None:
+            try:
+                public_rows = rows_from_public_list(self.public.rwa_token_list(), BSC_CHAIN, self.enable_xstock,
+                                                    unlisted=bool(api_rows))
+                if source == "registry" and public_rows:
+                    source = "public_list"
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"public list: {e}")
+        if not api_rows and not public_rows and self._universe:
+            log.warning("token list refresh failed (%s); keeping the previous list", "; ".join(errors))
+            self.universe_error = "; ".join(errors)
+            self._universe = (now, self._universe[1])  # retry after another TTL, not on every call
+            return [dict(r) for r in self._universe[1]]
+        if errors:
+            log.warning("token list: %s (source=%s)", "; ".join(errors), source)
+        registry = rows_from_tokens(self._tokens.values(), "registry", self.enable_xstock, unlisted=bool(api_rows))
+        rows = merge_rows(api_rows, public_rows, registry)
+        for r in rows:
+            st = self._status_cache.get(r["symbol"])
+            if st is not None and st.max_order_usdt:
+                r["max_order_usdt"] = st.max_order_usdt
+        self._universe = (now, rows)
+        self._universe_by_symbol = {r["symbol"]: r for r in rows}
+        self.universe_source, self.universe_error = source, ("; ".join(errors) or None)
+        return [dict(r) for r in rows]
+
+    def _apply_price_info(self, rows: list[dict]) -> None:
+        if not hasattr(self.api, "get_price_info"):
+            return
+        for i in range(0, len(rows), PRICE_INFO_BATCH):
+            batch = rows[i:i + PRICE_INFO_BATCH]
+            if i:
+                self._candle_sleep(self.price_info_pause_s)
+            try:
+                apply_price_info(batch, self.api.get_price_info(
+                    [{"binanceChainId": r["chain_id"], "tokenContractAddress": r["contract_address"]} for r in batch]))
+            except Exception as e:  # noqa: BLE001 - volume/liquidity are best-effort
+                log.warning("price-info batch %d failed: %s", i // PRICE_INFO_BATCH + 1, e)
+                return
+
+    # ------------------------------------------------------------------ runtime LIVE limits
+    def set_live_limits(self, max_order_usdt: float, max_sell_usdt: Optional[float] = None) -> dict:
+        """Runtime per-order cap for LIVE (Bot 6's PUT /api/settings/limits, same value as risk/engine).
+        Validated (> 0, <= BINANCE_LIVE_HARD_MAX_ORDER_USDT if set); raises ValueError and changes nothing otherwise.
+        With a baw executor the executor's BUY cap becomes max_order_usdt and its SELL (exit) cap
+        max_sell_usdt or max(BINANCE_LIVE_MAX_SELL_USDT, 2 x buy); the client-side notional cap follows the SELL cap.
+        PAPER clients store the value too (no orders are sent there)."""
+        from .limits import hard_max_order_usdt, validate_max_order_usdt
+
+        ex = self.executor
+        if ex is not None and hasattr(ex, "set_live_limits"):
+            lim = ex.set_live_limits(max_order_usdt, max_sell_usdt)
+            self.max_live_notional = max(lim["max_sell_usdt"], lim["max_order_usdt"])
+            return self.live_limits()
+        buy = validate_max_order_usdt(max_order_usdt, hard_max_order_usdt())
+        sell = validate_max_order_usdt(max_sell_usdt, None, "max_sell_usdt") if max_sell_usdt is not None else buy
+        if sell < buy:
+            raise ValueError(f"max_sell_usdt {sell:.2f} must be >= max_order_usdt {buy:.2f}")
+        self.max_live_notional = sell
+        self._runtime_max_order = buy
+        return self.live_limits()
+
+    def live_limits(self) -> dict:
+        """{max_order_usdt, max_sell_usdt, max_live_notional, default_max_order_usdt, hard_max_order_usdt}."""
+        from .baw_executor import max_order_usdt as env_max_order
+        from .limits import hard_max_order_usdt
+
+        ex = self.executor
+        if ex is not None and hasattr(ex, "live_limits"):
+            out = dict(ex.live_limits())
+        else:
+            buy = getattr(self, "_runtime_max_order", None) or min(self.max_live_notional, env_max_order())
+            out = {"max_order_usdt": buy, "max_sell_usdt": self.max_live_notional,
+                   "default_max_order_usdt": env_max_order(), "hard_max_order_usdt": hard_max_order_usdt()}
+        out["max_live_notional"] = self.max_live_notional
+        return out
 
     def search_tokens(self, query: str) -> list[TokenInfo]:
         """`GET /api/v1/dex/market/rwa/search`; empty query -> default tokens with prices."""

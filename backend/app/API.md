@@ -299,8 +299,34 @@ Mounted from Bot 5's `backend.agent_studio.api` (`app.include_router(agent_studi
   moves it). No response, error or log line contains it, and there is no export endpoint.
 - `bnb_balance` is one read-only `eth_getBalance` on a public BSC RPC, only when a key exists.
 
+## Trading limits from the dashboard (v0.9, localhost only)
+Same localhost check as wallet sign-in (403 for a LAN client, a forwarded non-local client or a LAN `Origin`).
+
+| Method | Path | Body | Response |
+|---|---|---|---|
+| GET | `/api/settings/limits` | - | `{order_mode, order_usdt, order_pct, max_order_usdt, max_total_usdt, max_per_token_usdt, daily_loss_usdt, daily_buy_usdt, defaults, wallet_daily_limit_usdt, notes, is_default}` |
+| PUT | `/api/settings/limits` | any subset of the panel fields (GET-only keys echoed back are ignored) | same as GET (+ `notes`, e.g. "daily buy limit raised"); 422 `{detail}` (plain sentence) when invalid, nothing changes |
+| POST | `/api/settings/limits/reset` | - | same as GET, back to `defaults` (a PUT with the default values does the same) |
+
+- Fields (USDT): `order_mode` `"strategy"` (default; `null` = strategy: the strategy sizes, `order_usdt`/`order_pct` are
+  `null`) \| `"fixed"` (`order_usdt` per LIVE BUY) \| `"pct"` (`order_pct` % of the wallet USDT, 2% of 10,000 = 200);
+  `max_order_usdt` per order; `max_total_usdt` total invested across tokens; `max_per_token_usdt` in one token;
+  `daily_loss_usdt` daily loss that triggers the automatic emergency stop; `daily_buy_usdt` LIVE buys per UTC day
+  (raised to 4 x per-order automatically when needed).
+- Defaults = the env values risk started with (RISK_LIVE_MAX_ORDER_USDT 25, RISK_LIVE_MAX_EXPOSURE_USDT 50,
+  RISK_LIVE_MAX_DAILY_LOSS_USDT 25, RISK_LIVE_MAX_DAILY_NOTIONAL_USDT 100; order_mode strategy).
+- Validation (Bot 3's risk): numbers > 0; `order_pct` <= 100; per-order <= total; per-token <= total; fixed order <=
+  per-order; in LIVE per-order <= the wallet's own `dailyLimit` (`wallet_daily_limit_usdt`, `null` when unknown or not
+  LIVE). `{order_mode:"strategy", order_usdt:null, order_pct:null}` always succeeds. The wallet's own quota stays the
+  final cap (risk applies the stricter one).
+- Applied at once, no restart: risk (`set_live_limits`), engine (`set_live_limits`: per-order cap + Auto size %), exchange
+  per-order cap, app LIVE caps. Saved to `LOG_DIR/limits.json` (deleted on reset), loaded at startup; each change is a
+  `LIMITS_CHANGED` alert (a line in `events.jsonl`). Never clears pause or an emergency stop. Fixed / % sizes apply to
+  LIVE orders (SIM keeps the strategy's size).
+
 ## Changelog
 - v0.9: LIVE wallet cache: `/api/wallet` + `/api/live/status` never call baw (`read_at`/`age_s`/`stale`); `WALLET_REFRESH_SEC` (300 s) + a fresh read before every order; network failures keep the last read, block BUYs, allow exits, back off 60/120/300 s.
+- v0.9: Trading limits `GET/PUT /api/settings/limits`, `POST /api/settings/limits/reset` (Trading limits panel, localhost only; order_mode strategy|fixed|pct).
 - v0.9: `/api/agent-studio/{status,create-key,register}` mounted (localhost only); `eth-account` main dependency, `bnbagent` optional `studio` extra.
 - v0.8: dashboard wallet sign-in (`POST/GET /api/wallet/connect`, `POST /api/wallet/reconcile`, localhost only), `wallet_block` in `/api/live/status`, "different wallet connected" LIVE block, fake baw for SIM/PAPER; app title "Regime".
 - v0.7: LIVE section (wallet, live status, cooldowns, in-flight buys with synthetic `pending` positions and `pending_exit` held exits, `order_in_flight`, executor extras on executions, `agent_identity` pass-through, `allowed_tokens` 'ALL'/'LIMITED' pass-through + `tradable_tokens`); `/api/portfolio` positions gain `pending`, `client_order_id`, `held_exit`; an unavailable quote is a STAY_OUT decision in every mode; `/api/tokens` adds `token_status`; activation defaults to `AUTO_EXECUTE` unless the request sets `activation`; `record_execution(res, quote_notional=)` at submission + after reconcile; slippage cap passed per order.
