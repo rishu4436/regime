@@ -68,8 +68,11 @@ export class MockApi implements ApiClient {
     return ok(TOKENS.filter((t) => !ql || t.symbol.toLowerCase().includes(ql) || t.name.toLowerCase().includes(ql))
       .map((t) => ({ ...t, price: this.last(t.symbol), volume_24h: this.candles[t.symbol].slice(-24).reduce((a, c) => a + c.volume * c.close, 0) })));
   }
-  getCandles(symbol: string, _tf: Timeframe = "1h", limit = 200) {
-    return this.candles[symbol] ? ok(this.candles[symbol].slice(-limit)) : fail(404, `unknown symbol ${symbol}`);
+  getCandles(symbol: string, timeframe: Timeframe = "1h", limit = 200, opts?: { history?: boolean }) {
+    if (!this.candles[symbol]) return fail(404, `unknown symbol ${symbol}`);
+    // history=true: the full seeded series the mock backtest runs on; default: the live loop's bars up to now
+    if (opts?.history) return ok(generateMixedCandles(symbol, START[symbol] ?? 100, limit, timeframe));
+    return ok(this.candles[symbol].slice(-limit));
   }
   getPrice(symbol: string) { return this.candles[symbol] ? ok({ symbol, price: this.last(symbol) }) : fail(404, `unknown symbol ${symbol}`); }
   getRegime(symbol: string) { return this.candles[symbol] ? ok(this.analyse(symbol)) : fail(404, `unknown symbol ${symbol}`); }
@@ -116,9 +119,7 @@ export class MockApi implements ApiClient {
     return ok(res, 300);
   }
   /** Same seeded series the mock backtest used, so the chart lines up with the trades. */
-  backtestCandles(symbol: string, timeframe: Timeframe = "1h", limit = 500) {
-    return ok(generateMixedCandles(symbol, START[symbol] ?? 100, limit, timeframe));
-  }
+  backtestCandles(symbol: string, timeframe: Timeframe = "1h", limit = 500) { return this.getCandles(symbol, timeframe, limit, { history: true }); }
 
   // ------------------------------------------------------------------ agent & loop
   activateManual(body: ActivateManualBody) {
