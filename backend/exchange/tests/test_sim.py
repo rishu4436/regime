@@ -22,7 +22,7 @@ def test_protocol_and_tokens_have_real_contracts(clock):
     assert set(toks) == {"NVDAon", "TSLAx", "AAPLB", "SPYon", "METAx", "NVDAB", "TSLAon"}
     assert toks["NVDAon"].chain_id == "56" and toks["NVDAon"].contract_address.startswith("0xa9ee")
     assert all(t.price and t.price > 0 for t in toks.values())
-    assert [t.symbol for t in c.search_tokens("tesla")] == ["TSLAx", "TSLAon"]
+    assert [t.symbol for t in c.search_tokens("tesla")] == ["TSLAx", "TSLAon", "TSLAB"]  # + SIM universe (TSLAB)
 
 
 def test_routing_by_issuer(clock):

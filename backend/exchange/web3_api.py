@@ -126,6 +126,21 @@ class Web3ApiClient:
         tokenContractAddress, tokenSymbol, assetType}]}]. platform_id: 'ondo' | 'bstock'."""
         return self.get("/api/v1/dex/market/rwa/search", keyword=keyword, platformId=platform_id) or []
 
+    def get_rwa_tokens(self, binance_chain_id: Optional[str] = None, platform_id: Optional[str] = None) -> list[dict]:
+        """GET /api/v1/dex/market/rwa/tokens ("Get RWA Token List"). Verified 2026-10-11 (BSC): 488 rows (442 Ondo +
+        46 bStock) of {binanceChainId, tokenContractAddress, platformId, assetType, tokenName, tokenSymbol, decimals,
+        underlyingTicker, underlyingName, tokenToShareRatio, tags, statusInfo, tokenPrice, referencePrice, volume24H
+        (underlying US volume), marketCap}. No paging; `tabId` was ignored. platform_id: 'ondo' | 'bstock'."""
+        data = self.get("/api/v1/dex/market/rwa/tokens", binanceChainId=binance_chain_id, platformId=platform_id)
+        if isinstance(data, dict):
+            data = data.get("list") or data.get("tokens") or []
+        return data or []
+
+    def get_price_info(self, tokens: Sequence[dict[str, str]]) -> list[dict]:
+        """POST /api/v1/dex/market/price-info (batch <= 100 {binanceChainId, tokenContractAddress}) -> price,
+        volume24H, buyVolume24H/sellVolume24H (DEX, USD), liquidity, holders, ... (verified 2026-10-11)."""
+        return self.post("/api/v1/dex/market/price-info", list(tokens)) or []
+
     # ------------------------------------------------------------------ Trading API (products/trading-api/*)
     def get_quote(self, binance_chain_id: str, from_token_address: str, to_token_address: str, amount: str,
                   user_wallet_address: Optional[str] = None, vendor: Optional[str] = None) -> list[dict]:
@@ -221,6 +236,12 @@ class PublicRwaClient:
         """GET v2/.../rwa/dynamic/ai -> {tokenInfo{price, sharesMultiplier}, stockInfo{price}, statusInfo, limitInfo}."""
         return self._get("/v2/public/wallet-direct/buw/wallet/market/token/rwa/dynamic/ai",
                          chainId=chain_id, contractAddress=contract_address) or {}
+
+    def rwa_token_list(self, list_type: Optional[int] = None) -> list[dict]:
+        """GET v1/.../rwa/stock/detail/list/ai[?type=1|2|3] -> every RWA deployment {chainId, contractAddress, symbol,
+        ticker, type (1 Ondo, 2 xStock, 3 bStock), multiplier, d (decimals)}. Same rows as baw's `stock/scaleui/list`."""
+        data = self._get("/v1/public/wallet-direct/buw/wallet/market/token/rwa/stock/detail/list/ai", type=list_type)
+        return data if isinstance(data, list) else []
 
     def asset_market_status(self, chain_id: str, contract_address: str) -> dict:
         """GET v1/.../rwa/asset/market/status/ai -> {openState, marketStatus, reasonCode, reasonMsg, nextOpenTime, ...}."""

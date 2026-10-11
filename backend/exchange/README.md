@@ -149,3 +149,17 @@ start a sign-in for this machine's wallet.
 `BinanceWeb3Client.get_candles` therefore makes one request for `limit <= 300` and otherwise pages backwards with
 `after=<oldest ts>`, dedupes by timestamp, stops on a short/empty page, and caps a call at 20 pages with a 0.25 s
 pause between pages (5 RPS per endpoint).
+
+## Full token universe and runtime per-order cap (bot4/all-tokens)
+
+- `client.list_tokens(refresh=False) -> list[dict]` (SIM, PAPER, LIVE): every bStock / Ondo / xStock on BSC.
+  PAPER/LIVE: `GET /api/v1/dex/market/rwa/tokens?binanceChainId=56` (Ondo + bStock, name/price/status) +
+  `POST /api/v1/dex/market/price-info` (DEX `volume_24h`, `liquidity`) + the public no-key list (xStocks and
+  tokens the API list lacks). Cached 10 min; falls back to the previous list, then the public list, then the registry.
+  Row keys: `symbol, name, type, token_type, chain, chain_id, contract_address, decimals, underlying, price, volume_24h,
+  liquidity, min_order_usdt, max_order_usdt, status, tradable, reason, reference_price, shares_multiplier,
+  underlying_volume_24h, market_cap, market_status, reason_code, next_open_time, tags, source`. No sector field:
+  the API has none. `search_tokens("")` is unchanged (the loop/feed list); `_token()` resolves any listed symbol.
+- `client.set_live_limits(max_order_usdt, max_sell_usdt=None) -> dict` and `client.live_limits() -> dict`:
+  runtime LIVE per-BUY cap (env `BINANCE_LIVE_MAX_ORDER_USDT` stays the default). ValueError if not > 0 or above
+  `BINANCE_LIVE_HARD_MAX_ORDER_USDT`. The exit cap becomes max(env sell cap, 2 x buy) unless given.
