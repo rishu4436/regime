@@ -43,12 +43,22 @@ class DefaultStrategyEngine:
     ``warmup_bars`` is the first bar index the backtest trades on (simulator: 60).
     """
 
-    def __init__(self, fee_pct: float = 0.0, slippage_bps: float = 0.0, warmup_bars: int = SIM_WARMUP_BARS) -> None:
+    def __init__(
+        self,
+        fee_pct: float = 0.0,
+        slippage_bps: float = 0.0,
+        warmup_bars: int = SIM_WARMUP_BARS,
+        manual_price_exits: bool = False,
+    ) -> None:
         if fee_pct < 0 or slippage_bps < 0 or warmup_bars < 0:
             raise ValueError("fee_pct, slippage_bps and warmup_bars must be >= 0")
         self.fee_pct = fee_pct
         self.slippage_bps = slippage_bps
         self.warmup_bars = warmup_bars
+        # Live SL/TP/trailing/max-loss are enforced by RiskManager.check_exits, which the loop runs BEFORE the engine
+        # and after which the app raises Position.highest_price with the current bar's high. Re-checking price exits
+        # here would duplicate them and use a stale (already raised) high-water mark, so they are off by default.
+        self.manual_price_exits = manual_price_exits
 
     # ------------------------------------------------------------------ regime / selection
     def detect_regime(self, candles: Sequence[Candle]) -> RegimeAnalysis:
@@ -62,9 +72,10 @@ class DefaultStrategyEngine:
 
     # ------------------------------------------------------------------ manual
     def evaluate_manual(self, strategy: ManualStrategy, candles: Sequence[Candle], portfolio: Portfolio) -> Signal:
-        """Evaluate the LAST candle: exits for open positions in ``strategy.symbol`` first (price exits per
-        ``exits`` on the bar's OHLC, then RSI/MACD on the close), otherwise the entry gate + hard filters +
-        AND/OR conditions. Returns BUY / SELL / STAY_OUT with the reason and condition names."""
+        """Evaluate the LAST candle: exits for open positions in ``strategy.symbol`` first (RSI/MACD on the close;
+        SL/TP/trailing only if ``manual_price_exits``, otherwise RiskManager.check_exits owns them), otherwise the
+        entry gate + hard filters + AND/OR conditions. Returns BUY / SELL / STAY_OUT with the reason and condition
+        names. SELLs carry exit_reason, position_id and price = intended fill (contracts v0.2)."""
         label = manual_strategy_label(strategy)
         base = dict(symbol=strategy.symbol, source=AgentMode.MANUAL, strategy=label)
         if not candles:
@@ -76,18 +87,9 @@ class DefaultStrategyEngine:
         mi = ManualIndicators.compute(strategy, cs)
         held = [p for p in portfolio.positions if p.symbol == strategy.symbol]
 
-        for p in held:
-            hit = self._manual_exit(strategy, mi, cs, p, portfolio)
-            if hit is not None:
-                reason, detail = hit
-                return Signal(
-                    action=Action.SELL,
-                    reason=f"Exit {reason.value}: {detail}",
-                    conditions_met=[reason.value],
-                    proposed_size_pct=100.0,
-                    proposed_notional=p.quantity * c.close,
-                    **base,
-                )
+        exit_sig = self._manual_exit_signal(strategy, mi, cs, held, portfolio, base)
+        if exit_sig is not None:
+            return exit_sig
 
         r = strategy.risk
         if len(held) >= r.max_open_positions:
@@ -145,25 +147,54 @@ class DefaultStrategyEngine:
             **base,
         )
 
-    @staticmethod
-    def _manual_exit(
-        s: ManualStrategy, mi: ManualIndicators, cs: Sequence[Candle], p: Position, portfolio: Portfolio
-    ) -> Optional[tuple[ExitReason, str]]:
+    def _manual_exit_signal(
+        self,
+        s: ManualStrategy,
+        mi: ManualIndicators,
+        cs: Sequence[Candle],
+        held: list[Position],
+        portfolio: Portfolio,
+        base: dict,
+    ) -> Optional[Signal]:
+        """One SELL for the first (oldest) position that should exit, keyed by Position.id.
+        Price exits (only if ``manual_price_exits``) follow ``exits`` exactly like Bot 3's check_exits, using
+        Position.highest_price as the prior-bar high-water mark; then RSI / MACD exits on the close."""
         c = cs[-1]
-        trail = None
-        if s.exit.trailing_stop.enabled:
-            hwm = p.highest_price if p.highest_price is not None else p.avg_entry_price
-            trail = max(
-                exits.initial_trail(p.avg_entry_price, s.exit.trailing_stop.pct),
-                hwm * (1 - s.exit.trailing_stop.pct / 100),
-            )
-        ml = exits.max_loss_level(p.avg_entry_price, p.quantity, portfolio.equity, s.risk.max_loss_per_trade_pct)
-        pe = exits.check_price_exit(
-            c.open, c.high, c.low, p.avg_entry_price, s.exit.take_profit_pct, s.exit.stop_loss_pct, trail, ml
+        ordered = sorted(held, key=lambda p: p.opened_at)
+        if self.manual_price_exits:
+            for p in ordered:
+                pct = p.trailing_stop_pct or (s.exit.trailing_stop.pct if s.exit.trailing_stop.enabled else None)
+                trail = exits.trail_from_hwm(max(p.highest_price or 0.0, p.avg_entry_price), pct) if pct else None
+                ml = exits.max_loss_level(
+                    p.avg_entry_price, p.quantity, portfolio.starting_capital, s.risk.max_loss_per_trade_pct
+                )
+                pe = exits.check_price_exit(
+                    c.open, c.high, c.low, p.avg_entry_price, s.exit.take_profit_pct, s.exit.stop_loss_pct,
+                    trail, ml, stop_loss_price=p.stop_loss_price, take_profit_price=p.take_profit_price,
+                )  # fmt: skip
+                if pe is not None:
+                    how = f"gapped through {pe.level:.6g}, fill at open" if pe.gap else "fill at level"
+                    return self._sell(p, pe.reason, pe.price, f"{pe.reason.value}: {how} {pe.price:.6g}", base)
+        ie = indicator_exit(s, mi, len(cs) - 1)
+        if ie is not None and ordered:
+            p = ordered[0]
+            extra = f" ({len(ordered) - 1} more position(s) also qualify)" if len(ordered) > 1 else ""
+            return self._sell(p, ie[0], c.close, f"{ie[0].value}: {ie[1]}{extra}", base)
+        return None
+
+    @staticmethod
+    def _sell(p: Position, reason: ExitReason, price: float, detail: str, base: dict) -> Signal:
+        b = {**base, "price": price}
+        return Signal(
+            action=Action.SELL,
+            reason=f"Exit {detail}",
+            conditions_met=[reason.value],
+            exit_reason=reason,
+            position_id=p.id,
+            proposed_size_pct=100.0,
+            proposed_notional=p.quantity * price,
+            **b,
         )
-        if pe is not None:
-            return pe.reason, f"{'gapped through' if pe.gap else 'hit'} level, fill ~{pe.price:.6g}"
-        return indicator_exit(s, mi, len(cs) - 1)
 
     # ------------------------------------------------------------------ auto
     def evaluate_auto(self, config: AutoConfig, candles: Sequence[Candle], portfolio: Portfolio) -> Signal:
@@ -182,12 +213,16 @@ class DefaultStrategyEngine:
         d = presets.evaluate_preset(sel.preset, config.style, cs, holding=bool(held))
         size_pct = 0.0
         notional = 0.0
+        extra: dict = {}
         if d.action == Action.BUY:
             size_pct = presets.BASE_SIZE_PCT[config.style] * sel.size_multiplier
             notional = config.capital * size_pct / 100
         elif d.action == Action.SELL:
+            target = min(held, key=lambda p: p.opened_at)  # oldest position, keyed by id (one SELL per Signal)
             size_pct = 100.0
-            notional = sum(p.quantity for p in held) * cs[-1].close
+            notional = target.quantity * cs[-1].close
+            extra["position_id"] = target.id
+            extra["exit_reason"] = d.exit_reason
         return Signal(
             action=d.action,
             strategy=sel.preset.value,
@@ -197,6 +232,7 @@ class DefaultStrategyEngine:
             conditions_failed=d.failed,
             proposed_size_pct=size_pct,
             proposed_notional=notional,
+            **extra,
             **base,
         )
 

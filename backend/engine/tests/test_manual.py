@@ -87,36 +87,57 @@ def test_cooldown_and_max_positions():
     assert sig.action == Action.STAY_OUT and sig.conditions_failed == ["max_open_positions"]
 
 
-def test_sell_on_exit_rules():
+def test_price_exits_left_to_risk_layer_by_default():
+    """Live SL/TP/trailing belong to RiskManager.check_exits (runs first in the loop) -> no duplicate SELL here."""
     s = sma_entry_strategy()
     pos = Position(symbol="NVDAon", quantity=2, avg_entry_price=101, strategy="MANUAL:test")
     cs = entry_scenario([(101, 115, 94, 110)], tail=0)  # same-bar SL+TP
     sig = ENG.evaluate_manual(s, cs, pf([pos]))
-    assert sig.action == Action.SELL and sig.conditions_met == [ExitReason.STOP_LOSS.value]
-    assert sig.proposed_notional == pytest.approx(2 * 110)
+    assert sig.action == Action.STAY_OUT and sig.conditions_failed == ["max_open_positions"]
+
+
+PX = DefaultStrategyEngine(manual_price_exits=True)
+
+
+def test_sell_on_price_exit_rules_when_enabled():
+    s = sma_entry_strategy()
+    pos = Position(symbol="NVDAon", quantity=2, avg_entry_price=101, strategy="MANUAL:test")
+    cs = entry_scenario([(101, 115, 94, 110)], tail=0)
+    sig = PX.evaluate_manual(s, cs, pf([pos]))
+    assert sig.action == Action.SELL and sig.exit_reason == ExitReason.STOP_LOSS
+    assert sig.position_id == pos.id and sig.price == pytest.approx(101 * 0.94)  # intended fill = SL level
+    assert sig.proposed_notional == pytest.approx(2 * 101 * 0.94)
     cs = entry_scenario([(120, 121, 119, 120)], tail=0)
-    assert ENG.evaluate_manual(s, cs, pf([pos])).conditions_met == [ExitReason.TAKE_PROFIT.value]
+    sig = PX.evaluate_manual(s, cs, pf([pos]))
+    assert (sig.exit_reason, sig.price) == (ExitReason.TAKE_PROFIT, 120)  # gap up -> open
 
 
-def test_trailing_uses_position_high_water_mark():
+def test_trailing_uses_position_high_water_mark_from_prior_bars():
     s = sma_entry_strategy()
     s.exit.trailing_stop.enabled = True
     s.exit.trailing_stop.pct = 4
     pos = Position(symbol="NVDAon", quantity=1, avg_entry_price=101, strategy="MANUAL:test", highest_price=110)
-    cs = entry_scenario([(108, 108.5, 105, 106)], tail=0)  # low 105 <= 110*0.96 = 105.6
-    sig = ENG.evaluate_manual(s, cs, pf([pos]))
-    assert sig.action == Action.SELL and sig.conditions_met == ["TRAILING_STOP"]
+    cs = entry_scenario([(108, 108.5, 105, 106)], tail=0)  # low 105 < 110*0.96 = 105.6
+    sig = PX.evaluate_manual(s, cs, pf([pos]))
+    assert sig.exit_reason == ExitReason.TRAILING_STOP and sig.price == pytest.approx(105.6)
+    cs = entry_scenario([(108, 108.5, 105.6, 106)], tail=0)  # touch only -> strict -> no trailing exit
+    assert PX.evaluate_manual(s, cs, pf([pos])).action == Action.STAY_OUT
 
 
-def test_rsi_exit_signal():
+def test_sell_targets_oldest_position_by_id():
+    from datetime import timedelta
+
     s = sma_entry_strategy()
-    s.exit.rsi_above.enabled = True
-    pos = Position(symbol="NVDAon", quantity=1, avg_entry_price=101, strategy="MANUAL:test")
-    cs = flat(30) + [
-        bar(30 + k, 100 + k * 0.5, 100 + (k + 1) * 0.5, 100 + k * 0.5, 100 + (k + 1) * 0.5) for k in range(10)
-    ]
-    sig = ENG.evaluate_manual(s, cs, pf([pos]))
-    assert sig.action == Action.SELL and sig.conditions_met == ["RSI_EXIT"]
+    s.risk.max_open_positions = 3
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    newer = Position(
+        symbol="NVDAon", quantity=1, avg_entry_price=101, strategy="MANUAL:test", opened_at=t0 + timedelta(1)
+    )
+    older = Position(symbol="NVDAon", quantity=3, avg_entry_price=101, strategy="MANUAL:test", opened_at=t0)
+    other = Position(symbol="TSLAx", quantity=5, avg_entry_price=50, strategy="MANUAL:x", opened_at=t0 - timedelta(1))
+    cs = entry_scenario([(90, 92, 89, 91)], tail=0)
+    sig = PX.evaluate_manual(s, cs, pf([newer, other, older]))
+    assert sig.position_id == older.id and sig.price == 90 and sig.proposed_notional == pytest.approx(270)
 
 
 def test_market_hours_and_min_volume_block_entries():

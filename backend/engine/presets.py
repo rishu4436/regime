@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import timezone
 from typing import Optional, Sequence
 
-from backend.contracts import Action, Candle, PresetName, Regime, TraderStyle
+from backend.contracts import Action, Candle, ExitReason, PresetName, Regime, TraderStyle
 
 from . import indicators as ind
 
@@ -86,6 +86,10 @@ class PresetDecision:
     reason: str
     met: list[str] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
+    # SELLs only. ExitReason has no generic "strategy exit" value (contract request), so presets map onto the
+    # closest one: Buy the Dip -> RSI_EXIT, Trend -> MACD_EXIT / TRAILING_STOP (EMA used as trailing line),
+    # Grid top cell -> TAKE_PROFIT.
+    exit_reason: Optional[ExitReason] = None
 
 
 def select(
@@ -177,6 +181,7 @@ def evaluate_preset(preset: PresetName, style: TraderStyle, candles: Sequence[Ca
                     Action.SELL,
                     f"Buy the Dip: RSI recovered to {rsi:.1f} > {sp.dip_exit_rsi:g}, taking the bounce",
                     ["rsi_recovered"],
+                    exit_reason=ExitReason.RSI_EXIT,
                 )
             return PresetDecision(
                 Action.STAY_OUT,
@@ -213,7 +218,8 @@ def evaluate_preset(preset: PresetName, style: TraderStyle, candles: Sequence[Ca
         if holding:
             if close < fast or not macd_up:
                 why = f"close below EMA{sp.trend_fast}" if close < fast else "MACD below signal"
-                return PresetDecision(Action.SELL, f"Trend: momentum lost ({why})", ["trend_broken"])
+                xr = ExitReason.TRAILING_STOP if close < fast else ExitReason.MACD_EXIT
+                return PresetDecision(Action.SELL, f"Trend: momentum lost ({why})", ["trend_broken"], exit_reason=xr)
             return PresetDecision(Action.STAY_OUT, "Trend: holding, trend intact", failed=["trend_broken"])
         conds = {"close_above_ema": close > fast, "ema_above_sma": fast > slow, "macd_above_signal": macd_up}
         met = [k for k, v in conds.items() if v]
@@ -237,7 +243,9 @@ def evaluate_preset(preset: PresetName, style: TraderStyle, candles: Sequence[Ca
         level = int(min(max((close - lo) / step, 0), sp.grid_levels - 1e-9))  # 0 = bottom cell
         pos = f"cell {level + 1}/{sp.grid_levels} of range {lo:.4g}-{hi:.4g}"
         if holding and level >= sp.grid_levels - 1:
-            return PresetDecision(Action.SELL, f"Grid: price in the top grid {pos}", ["top_cell"])
+            return PresetDecision(
+                Action.SELL, f"Grid: price in the top grid {pos}", ["top_cell"], exit_reason=ExitReason.TAKE_PROFIT
+            )
         if level == 0 and not (close < lo):
             return PresetDecision(Action.BUY, f"Grid: price in the bottom grid {pos}", ["bottom_cell"])
         if close < lo:

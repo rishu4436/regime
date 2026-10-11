@@ -4,6 +4,7 @@ from backend.contracts import (
     Action,
     AgentMode,
     AutoConfig,
+    ExitReason,
     Portfolio,
     Position,
     PresetName,
@@ -162,4 +163,5 @@ def test_auto_sell_notional_uses_held_quantity():
     assert sells, "expected at least one GRID sell while holding"
     k, s2 = sells[0]
     assert s2.proposed_size_pct == 100.0
+    assert s2.position_id == pos.id and s2.exit_reason == ExitReason.TAKE_PROFIT and s2.price == side[80 + k].close
     assert s2.proposed_notional == pytest.approx(2 * side[80 + k].close)
