@@ -80,6 +80,10 @@ class Pending:
     created: float = field(default_factory=time.monotonic)
 
 
+EXIT_JUMP_PCT = 0.03  # between-candle exits: a bigger move from the last close needs a 2nd reading
+EXIT_CONFIRM_PCT = 0.01  # ... within this of the first one
+
+
 class TradingLoop:
     def __init__(self, settings: Settings, comps: Components, bus: Optional[EventBus] = None) -> None:
         self.s, self.c = settings, comps
@@ -474,6 +478,8 @@ class TradingLoop:
                     return self._exits_on_price(sym)
                 return None
             bar = self._bar = window[-1]
+            self.__dict__.setdefault("_last_close", {})[sym] = bar.close  # reference for between-candle exit checks
+            self.__dict__.setdefault("_exit_confirm", {}).pop(sym, None)
             now = self._now()
             self._set_sim_price(sym, bar.close)
             self.book.on_bar(sym, bar, now)
@@ -611,6 +617,18 @@ class TradingLoop:
             return None
         if not price or price <= 0:
             return None
+        # Bot 3 / Bot 4: one bad print must not trigger a stop-loss. A price >3% from the last candle close (or with no
+        # candle yet) needs a second reading within 1% on the next wake-up before any exit runs on it.
+        ref = self.__dict__.setdefault("_last_close", {}).get(sym)
+        confirm = self.__dict__.setdefault("_exit_confirm", {})
+        if ref is None or abs(price / ref - 1.0) > EXIT_JUMP_PCT:
+            prev = confirm.get(sym)
+            if prev is None or abs(price / prev - 1.0) > EXIT_CONFIRM_PCT:
+                confirm[sym] = price
+                log.warning("exit deferred: price jump needs confirmation (%s %.6g vs last candle close %s)", sym, price,
+                            f"{ref:.6g}" if ref else "n/a")
+                return None
+        confirm.pop(sym, None)
         now = self._now()
         bar = Candle(timestamp=now, open=price, high=price, low=price, close=price, volume=0.0)
         out: list[Decision] = []
