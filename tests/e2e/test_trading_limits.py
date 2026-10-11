@@ -250,3 +250,13 @@ def test_sell_cap_has_headroom_and_never_shrinks():
     fresh = Ex()
     apply_exchange(fresh, {"max_order_usdt": 25, "max_per_token_usdt": 50, "max_total_usdt": 50})
     assert fresh.live_limits()["max_sell_usdt"] >= 55  # default 50 position worth 55
+
+
+def test_default_startup_applies_sell_headroom(tmp_path):
+    """No limits.json: the exchange SELL cap is already 2x the per-token cap at startup (Bot 4's gap)."""
+    c = _sim(tmp_path)
+    ex = c.app.state.st.loop.c.exchange
+    if callable(getattr(ex, "live_limits", None)):
+        d = c.get("/api/settings/limits").json()
+        assert d["is_default"] is True
+        assert ex.live_limits()["max_sell_usdt"] >= 2 * float(d["max_per_token_usdt"] or d["max_total_usdt"])
