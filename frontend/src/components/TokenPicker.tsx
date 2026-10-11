@@ -7,7 +7,13 @@ import { TOKENS, isXStock } from "../lib/strategy";
 import { useLive } from "../lib/live";
 
 type TokenStatus = { trading_status?: string | null; tradable?: boolean | null; min_order_usdt?: number | null; next_open_time?: string | null };
-export type TokenRow = { symbol: string; label: string; status: TokenStatus | null; price?: number | null; fromBackend: boolean };
+export type TokenRow = { symbol: string; label: string; status: TokenStatus | null; price?: number | null; fromBackend: boolean;
+  name?: string | null; type?: string | null; volume_24h?: number | null; liquidity?: number | null; narrative?: string | null };
+/** Bot 4's full token rows put status fields at the top level (status, tradable, min_order_usdt); older rows nest token_status. */
+type BackendToken = TokenInfo & { token_status?: TokenStatus | null; status?: string | null; tradable?: boolean | null; min_order_usdt?: number | null;
+  type?: string | null; liquidity?: number | null; narrative?: string | null; next_open_time?: string | null };
+const statusOf = (t: BackendToken): TokenStatus | null => t.token_status ?? (t.status != null || t.tradable != null || t.min_order_usdt != null
+  ? { trading_status: t.status ? String(t.status).toUpperCase() : null, tradable: t.tradable ?? null, min_order_usdt: t.min_order_usdt ?? null, next_open_time: t.next_open_time ?? null } : null);
 
 const STATUS_TEXT: Record<string, string> = { TRADING: "trading now", OFFHOURS: "market closed", PAUSED: "paused", HALTED: "halted", NO_LIQUIDITY: "no liquidity on BSC", DELISTED: "delisted" };
 const LIVE_MIN_ORDER = 10;
@@ -22,10 +28,11 @@ export function useTokenRows(): TokenRow[] {
     api.getTokens().then((list) => {
       if (off || !list?.length) return;
       const seen = new Set<string>();
-      const merged: TokenRow[] = (list as (TokenInfo & { token_status?: TokenStatus | null })[]).map((t) => {
+      const merged: TokenRow[] = (list as BackendToken[]).map((t) => {
         seen.add(t.symbol);
         const known = TOKENS.find((k) => k.symbol === t.symbol);
-        return { symbol: t.symbol, label: known?.label ?? `${t.symbol}${t.name ? ` (${t.name})` : ""}`, status: t.token_status ?? null, price: t.price ?? null, fromBackend: true };
+        return { symbol: t.symbol, label: known?.label ?? `${t.symbol}${t.name ? ` (${t.name})` : ""}`, status: statusOf(t), price: t.price ?? null, fromBackend: true,
+          name: t.name ?? null, type: t.type ?? t.token_type ?? null, volume_24h: t.volume_24h ?? null, liquidity: t.liquidity ?? null, narrative: t.narrative ?? null };
       });
       const all = [...merged, ...fallback.filter((f) => !seen.has(f.symbol))];
       cache = { at: Date.now(), rows: all }; setRows(all);
@@ -36,9 +43,9 @@ export function useTokenRows(): TokenRow[] {
 }
 
 /** Blocked for live buys: no liquidity / not tradable / xStock. Off-hours tokens stay selectable (exits + queued buys). */
-const blocked = (r: TokenRow) => r.status?.tradable === false || r.status?.trading_status === "NO_LIQUIDITY" || isXStock(r.symbol);
+export const blocked = (r: TokenRow) => r.status?.tradable === false || r.status?.trading_status === "NO_LIQUIDITY" || isXStock(r.symbol);
 const minOrder = (r: TokenRow) => Math.max(LIVE_MIN_ORDER, r.status?.min_order_usdt ?? 0);
-const detail = (r: TokenRow, live: boolean) => {
+export const detail = (r: TokenRow, live: boolean) => {
   const parts: string[] = [];
   const st = r.status?.trading_status; if (st) parts.push(STATUS_TEXT[st] ?? st.toLowerCase().replace(/_/g, " "));
   else if (isXStock(r.symbol)) parts.push(STATUS_TEXT.NO_LIQUIDITY);

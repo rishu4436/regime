@@ -4,6 +4,7 @@ import {
   DEFAULT_INITIAL_CAPITAL, SIM_WARMUP_BARS,
   type BacktestResult, type BacktestTrade, type Candle, type EquityPoint, type ExitReason, type ManualStrategy,
 } from "../contracts";
+import type { WatchlistFields } from "../api/types";
 import { bollinger, ema, macd, rsi, sma, volumeAvg } from "./indicators";
 
 export const TOKENS = [
@@ -15,7 +16,7 @@ export const TOKENS = [
 
 type DeepRequired<T> = { [K in keyof T]-?: T[K] extends object | undefined ? DeepRequired<NonNullable<T[K]>> : T[K] };
 /** ManualStrategy with every nested field present (what the builder edits). */
-export type FullStrategy = DeepRequired<Omit<ManualStrategy, "id" | "created_at">> & { id?: string; created_at?: string };
+export type FullStrategy = DeepRequired<Omit<ManualStrategy, "id" | "created_at">> & { id?: string; created_at?: string } & WatchlistFields;
 
 export function defaultStrategy(): FullStrategy {
   return {

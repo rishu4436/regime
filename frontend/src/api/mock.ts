@@ -10,7 +10,8 @@ import { detectRegime, presetWantsBuy, STYLE_MAP } from "../lib/auto";
 import { appendCandle, generateMixedCandles, rng } from "../lib/candles";
 import { parseStrategyText } from "../lib/parseText";
 import { backtest, conditionLabel, evaluateLast, fillStrategy, type FullStrategy } from "../lib/strategy";
-import { ApiError, type ActivateManualBody, type ApiClient, type LiveCooldown, type LiveGate, type LiveLimits, type ParseResult, type PresetsTable, type WalletInfo, type WalletConnectStatus, type TradingLimits, type TradingLimitsResponse } from "./types";
+import { ApiError, type ActivateManualBody, type ApiClient, type LiveCooldown, type LiveGate, type LiveLimits, type ParseResult, type PresetsTable, type WalletInfo, type WalletConnectStatus, type TradingLimits, type TradingLimitsResponse, type Narrative, type AutoPickResult, type AutoPick, type AutoPickSkip, type WatchlistFields, type WatchlistInfo } from "./types";
+import { cleanWatchlist, narrativeOf, NARRATIVES, underlyingOf } from "../lib/watchlist";
 
 /** Mock-only demo scenario: "LIVE" pretends to be a LIVE (mainnet) backend with an Agentic Wallet so the LIVE UI can be
  * shown without funds. Nothing leaves the browser; tx hashes are random and labelled as demo. Persisted; switching reloads. */
@@ -27,15 +28,20 @@ const hex = (n: number) => Array.from({ length: n }, () => "0123456789abcdef"[Ma
 /** SIM routing from Bot 4: Ondo + xStock -> RFQ, bStock -> SWAP (the UI never assumes this for a real backend). */
 const pathFor = (symbol: string) => (/B$/.test(symbol) ? "SWAP" : "RFQ") as "SWAP" | "RFQ";
 
-const TOKENS: TokenInfo[] = [
-  { symbol: "NVDAB", name: "NVIDIA BStock", token_type: "BSTOCK", chain: "BSC", underlying: "NVDA", decimals: 18 },
-  { symbol: "NVDAon", name: "NVIDIA (Ondo tokenized)", token_type: "ONDO", chain: "BSC", underlying: "NVDA", decimals: 18 },
-  { symbol: "TSLAx", name: "Tesla xStock", token_type: "XSTOCK", chain: "BSC", underlying: "TSLA", decimals: 8 },
-  { symbol: "AAPLB", name: "Apple BStock", token_type: "BSTOCK", chain: "BSC", underlying: "AAPL", decimals: 18 },
+const T = (symbol: string, name: string, token_type: "BSTOCK" | "ONDO" | "XSTOCK", start: number): TokenInfo & { start: number } =>
+  ({ symbol, name, token_type, chain: "BSC", underlying: underlyingOf(symbol), decimals: token_type === "XSTOCK" ? 8 : 18, start });
+// Example token list (Bot 4's real list comes from the Binance RWA search): bStocks, Ondo and xStocks on BSC.
+const TOKEN_LIST = [
+  T("NVDAB", "NVIDIA BStock", "BSTOCK", 140), T("NVDAon", "NVIDIA (Ondo tokenized)", "ONDO", 140), T("TSLAx", "Tesla xStock", "XSTOCK", 200), T("AAPLB", "Apple BStock", "BSTOCK", 170),
+  T("TSLAB", "Tesla BStock", "BSTOCK", 210), T("MSFTB", "Microsoft BStock", "BSTOCK", 420), T("GOOGLB", "Alphabet BStock", "BSTOCK", 165), T("AMZNB", "Amazon BStock", "BSTOCK", 185),
+  T("METAB", "Meta BStock", "BSTOCK", 560), T("COINB", "Coinbase BStock", "BSTOCK", 230), T("TSLAon", "Tesla (Ondo tokenized)", "ONDO", 210), T("AAPLon", "Apple (Ondo tokenized)", "ONDO", 170),
+  T("SPYon", "S&P 500 ETF (Ondo tokenized)", "ONDO", 560), T("QQQon", "Nasdaq 100 ETF (Ondo tokenized)", "ONDO", 480), T("MSTRon", "MicroStrategy (Ondo tokenized)", "ONDO", 340),
+  T("NVDAx", "NVIDIA xStock", "XSTOCK", 140),
 ];
+const TOKENS: TokenInfo[] = TOKEN_LIST.map(({ start: _s, ...t }) => t);
 const LIMIT_DEFAULTS: TradingLimits = { order_mode: "fixed", order_usdt: 25, order_pct: 2, max_order_usdt: 25, max_total_usdt: 100, max_per_token_usdt: 50, daily_loss_usdt: 10 };
 const WALLET_DAILY_LIMIT = 500;
-const START: Record<string, number> = { NVDAB: 140, NVDAon: 140, TSLAx: 200, AAPLB: 170 };
+const START: Record<string, number> = Object.fromEntries(TOKEN_LIST.map((t) => [t.symbol, t.start]));
 const LIVE_REGIMES: Regime[] = ["MILD_UPTREND", "SIDEWAYS", "OVERSOLD_PULLBACK", "STRONG_UPTREND", "HIGH_VOLATILITY", "DOWNTREND"];
 const FEE = 0.001;
 const uid = () => Math.random().toString(16).slice(2, 10) + Date.now().toString(16);
@@ -166,7 +172,47 @@ export class MockApi implements ApiClient {
   getTokens(q = "") {
     const ql = q.toLowerCase();
     return ok(TOKENS.filter((t) => !ql || t.symbol.toLowerCase().includes(ql) || t.name.toLowerCase().includes(ql))
-      .map((t) => ({ ...t, token_status: tokenStatus(t.symbol), price: this.last(t.symbol), volume_24h: this.candles[t.symbol].slice(-24).reduce((a, c) => a + c.volume * c.close, 0) })));
+      .map((t) => { const st = tokenStatus(t.symbol), vol = this.candles[t.symbol].slice(-24).reduce((a, c) => a + c.volume * c.close, 0);
+        return { ...t, type: t.token_type, token_status: st, status: st.trading_status, tradable: st.tradable, min_order_usdt: st.min_order_usdt ?? 10, max_order_usdt: null,
+          price: this.last(t.symbol), volume_24h: vol, liquidity: st.trading_status === "NO_LIQUIDITY" ? 0 : Math.round(vol * 0.6) }; }));
+  }
+  /** Example Auto-pick ranking (the real one is Bot 2's engine.autopick.rank_tokens): narrative filter, then momentum/trend/liquidity. */
+  private rank(narrative: Narrative, max: number): AutoPickResult {
+    const picks: (AutoPick & { score: number })[] = [], skipped: AutoPickSkip[] = [];
+    const label = (n: Narrative | null) => NARRATIVES.find((x) => x.value === n)?.label ?? null;
+    for (const t of TOKENS) {
+      const n = narrativeOf(t.symbol);
+      if (narrative !== "ANY" && n !== narrative) continue;
+      const st = tokenStatus(t.symbol);
+      if (st.trading_status === "NO_LIQUIDITY") { skipped.push({ symbol: t.symbol, reason: "No liquidity on BNB Chain" }); continue; }
+      if (st.trading_status === "OFFHOURS") { skipped.push({ symbol: t.symbol, reason: "Market closed right now" }); continue; }
+      const c = this.candles[t.symbol], px = c[c.length - 1].close, ch = (px / c[Math.max(0, c.length - 21)].close - 1) * 100;
+      const r = this.analyse(t.symbol).regime;
+      const trend = r === "STRONG_UPTREND" ? 1 : r === "MILD_UPTREND" ? 0.75 : r === "OVERSOLD_PULLBACK" ? 0.55 : r === "SIDEWAYS" ? 0.4 : 0.1;
+      const score = Math.round(Math.max(0, Math.min(100, 45 * trend + 35 * Math.max(0, Math.min(1, (ch + 5) / 15)) + 20 * (t.token_type === "BSTOCK" ? 1 : 0.7))));
+      const rl = r.toLowerCase().replace(/_/g, " ");
+      picks.push({ symbol: t.symbol, narrative: label(n), score,
+        reason: `${ch >= 0 ? "Up" : "Down"} ${Math.abs(ch).toFixed(1)}% over 20 bars, in a ${rl}${t.token_type === "BSTOCK" ? ", trades 24/7" : ""}` });
+    }
+    picks.sort((a, b) => b.score - a.score);
+    for (const p of picks.slice(max)) skipped.push({ symbol: p.symbol, reason: `Ranked lower (score ${p.score})` });
+    return { picks: picks.slice(0, max), skipped, example: true };
+  }
+  getAutoPick(narrative: Narrative, max_tokens: number) { return ok<AutoPickResult | null>(this.rank(narrative, Math.max(1, Math.min(5, max_tokens))), 200); }
+  private watch: WatchlistFields = {};
+  private watchSyms(): string[] {
+    const ap = this.watch.auto_pick;
+    return ap?.enabled ? this.rank(ap.narrative, ap.max_tokens).picks.map((p) => p.symbol) : cleanWatchlist(this.watch.watchlist, this.symbol);
+  }
+  getWatchlist() { return ok<WatchlistInfo | null>(this.watchInfo()); }
+  private watchInfo(): WatchlistInfo {
+    const ap = this.watch.auto_pick, ranked = ap?.enabled ? this.rank(ap.narrative, ap.max_tokens) : null;
+    const syms = this.agentMode ? this.watchSyms() : [];
+    return { watchlist: syms.map((sym) => {
+      const r = this.analyse(sym).regime, held = (this.portfolio.positions ?? []).filter((p) => p.symbol === sym);
+      const last = this.decisions.find((d) => d.symbol === sym);
+      return { symbol: sym, regime: r, action: last?.action ?? null, held: held.length > 0, position_usdt: held.reduce((a, p) => a + p.quantity * (p.current_price ?? p.avg_entry_price), 0) || null };
+    }), picks: ranked?.picks ?? [], skipped: ranked?.skipped ?? [], auto_pick: ap ?? null, updated_at: now() };
   }
   getCandles(symbol: string, timeframe: Timeframe = "1h", limit = 200, opts?: { history?: boolean }) {
     if (!this.candles[symbol]) return fail(404, `unknown symbol ${symbol}`);
@@ -228,6 +274,7 @@ export class MockApi implements ApiClient {
     else src = body.strategy;
     const v = this.validate(src); if (typeof v === "string") return fail(422, v);
     this.manual = fillStrategy(v); this.auto = null; this.agentMode = "MANUAL"; this.symbol = this.manual.symbol;
+    this.watch = { watchlist: (src as WatchlistFields).watchlist, auto_pick: (src as WatchlistFields).auto_pick };
     this.activeStrategy = `MANUAL:${this.manual.name}`;
     this.setControl({ confirmation_mode: this.manual.activation === "CONFIRMATION" });
     this.rejectAllPending("agent switched");
@@ -239,6 +286,7 @@ export class MockApi implements ApiClient {
     if (!(c.capital > 0)) return fail(422, "capital: must be greater than 0");
     if (c.enabled_presets && !c.enabled_presets.length) return fail(422, "enabled_presets: at least 1 item required");
     this.auto = { ...c }; this.manual = null; this.agentMode = "AUTO"; this.symbol = c.symbol;
+    this.watch = { watchlist: (c as WatchlistFields).watchlist, auto_pick: (c as WatchlistFields).auto_pick };
     this.regime = this.analyse(c.symbol);
     this.activeStrategy = this.select(this.regime, c.style ?? "BALANCED", c.enabled_presets ?? [...PresetNameValues]).preset ?? "NONE";
     this.setControl({ confirmation_mode: c.activation === "CONFIRMATION" });
@@ -438,7 +486,8 @@ export class MockApi implements ApiClient {
   private snapshot(): StatusSnapshot {
     return { control: this.control, portfolio: this.portfolio, agent_mode: this.agentMode, active_symbol: this.symbol,
       current_regime: this.regime?.regime ?? null, active_strategy: this.activeStrategy, last_decision: this.decisions[0] ?? null,
-      recent_decisions: this.decisions.slice(0, 50), timestamp: now() };
+      recent_decisions: this.decisions.slice(0, 50), timestamp: now(),
+      ...(this.agentMode && this.watchSyms().length > 1 ? { watchlist: this.watchSyms() } : {}) } as StatusSnapshot;
   }
   private markToMarket() {
     let mv = 0;

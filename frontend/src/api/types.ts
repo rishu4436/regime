@@ -122,6 +122,24 @@ export interface TradingLimitsResponse extends TradingLimits {
   defaults?: TradingLimits | null;
   updated_at?: string | null;
 }
+// ---------------------------------------------------------------- Watchlist + Auto-pick (proposed contract)
+export type Narrative = "AI_CHIPS" | "EV_ENERGY" | "BIG_TECH" | "CRYPTO" | "ANY";
+export interface AutoPickConfig { enabled: boolean; max_tokens: number; narrative: Narrative }
+/** Extra fields sent with ManualStrategy / AutoConfig. `symbol` stays = watchlist[0] for older backends. */
+export interface WatchlistFields { watchlist?: string[]; auto_pick?: AutoPickConfig }
+export interface AutoPick { symbol: string; narrative?: string | null; score?: number | null; reason?: string | null }
+export interface AutoPickSkip { symbol: string; reason?: string | null }
+/** GET /api/autopick?narrative=&max_tokens= */
+export interface AutoPickResult { picks: AutoPick[]; skipped?: AutoPickSkip[]; example?: boolean }
+
+/** One watched token as GET /api/watchlist (or status.watchlist) may report it; a plain symbol string is also accepted. */
+export interface WatchlistEntry {
+  symbol: string; narrative?: string | null; regime?: string | null; action?: string | null; signal?: string | null;
+  reason?: string | null; score?: number | null; position_usdt?: number | null; held?: boolean | null;
+}
+/** GET /api/watchlist (Bot 6): the current watchlist plus the latest Auto-pick picks/skipped. */
+export interface WatchlistInfo { watchlist?: (string | WatchlistEntry)[] | null; picks?: AutoPick[] | null; skipped?: AutoPickSkip[] | null; auto_pick?: AutoPickConfig | null; updated_at?: string | null }
+
 /** Error from the API: 404 unknown id/symbol, 409 invalid state, 422 validation. */
 export class ApiError extends Error {
   constructor(public status: number, public detail: string) {
@@ -136,6 +154,10 @@ export interface ApiClient {
   system(): Promise<SystemInfo>;
   // market data
   getTokens(q?: string): Promise<TokenInfo[]>;
+  /** GET /api/autopick?narrative=&max_tokens= (null = not available on this backend). */
+  getAutoPick(narrative: Narrative, max_tokens: number): Promise<AutoPickResult | null>;
+  /** GET /api/watchlist (null = not available: single-token backend). */
+  getWatchlist(): Promise<WatchlistInfo | null>;
   /** Default: SIM candles pinned to the loop's current bar. `history: true` = the full seeded series /api/backtest runs on. */
   getCandles(symbol: string, timeframe?: Timeframe, limit?: number, opts?: { history?: boolean }): Promise<Candle[]>;
   getPrice(symbol: string): Promise<{ symbol: string; price: number }>;
