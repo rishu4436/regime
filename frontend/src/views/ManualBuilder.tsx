@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { TokenPicker } from "../components/TokenPicker";
 import { DEFAULT_INITIAL_CAPITAL, TimeframeValues, type AutoConfig, type ManualStrategy, type Timeframe } from "../contracts";
 import { api } from "../api";
+import { ApiError } from "../api/types";
 import { Card, NumberInput, RuleRow, Segmented, Toggle, useToast } from "../components/ui";
 import { defaultStrategy, fillStrategy, type FullStrategy } from "../lib/strategy";
 import { BacktestResults, type BacktestRun } from "./BacktestResults";
@@ -40,7 +41,10 @@ export function ManualBuilder({ strategy: s, setStrategy, capital, setCapital, r
   const save = async () => {
     setBusy("save");
     try {
-      const out = s.id ? await api.updateStrategy(s.id, toContract(s, true)) : await api.saveStrategy(toContract(s));
+      // a stale id (saved on another backend, or before a restart) gets a 404 on PUT: save it as a new strategy instead
+      const out = s.id
+        ? await api.updateStrategy(s.id, toContract(s, true)).catch((e) => { if (e instanceof ApiError && e.status === 404) return api.saveStrategy(toContract(s)); throw e; })
+        : await api.saveStrategy(toContract(s));
       setStrategy({ ...fillStrategy(out), id: out.id, created_at: out.created_at });
       // show it in the dropdown right away, then re-sync with the backend
       setSaved((cur) => [...cur.filter((x) => x.id !== out.id), out]);
@@ -139,7 +143,7 @@ export function ManualBuilder({ strategy: s, setStrategy, capital, setCapital, r
                     {s.id && !saved.some((x) => x.id === s.id) && <option value={s.id}>{s.name} · not on this backend, save again</option>}
                     {saved.map((x) => <option key={x.id} value={x.id}>{x.name} · {x.symbol}{x.version && x.version > 1 ? ` · v${x.version}` : ""}</option>)}
                   </select>
-                  <button className="btn ghost" disabled={busy != null} onClick={save}>{busy === "save" ? <span className="spin" /> : s.id ? "Update" : "Save"}</button>
+                  <button className="btn ghost" disabled={busy != null} onClick={save}>{busy === "save" ? <span className="spin" /> : s.id && saved.some((x) => x.id === s.id) ? "Update" : "Save"}</button>
                   {s.id && <button className="btn ghost" title="Delete saved strategy" onClick={remove}>🗑</button>}
                 </div>
               </div>
