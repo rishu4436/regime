@@ -7,7 +7,7 @@ import { Card, NumberInput, Toggle, useToast } from "../components/ui";
 
 interface Props { status: StatusSnapshot | null; onChange: () => void; tick: number }
 
-/** Confirmation mode and the decision loop (start/stop/interval/tick once). Pause/resume/e-stop live in the Dashboard header (AutonomyMonitor). */
+/** Confirmation mode and the decision loop (start/stop/interval/tick once). Pause/resume/e-stop live in the global StatusBar. */
 export function Controls({ status, onChange, tick }: Props) {
   const c = status?.control;
   const toast = useToast();
@@ -25,7 +25,7 @@ export function Controls({ status, onChange, tick }: Props) {
   };
   return (
     <Card title="Decision loop & confirmation" extra={<ModeBadge mode={c?.trading_mode} />}>
-      <div className="small muted" style={{ marginBottom: 10 }}>Pause, Resume and Emergency stop are in the status header at the top of the Dashboard.</div>
+      <div className="small muted" style={{ marginBottom: 10 }}>Pause, Resume and Emergency stop are in the status bar at the top of every page.</div>
       <div className="rule on">
         <Toggle checked={!!c?.confirmation_mode} disabled={busy} label="Confirmation mode"
           onChange={(v) => run(() => api.setConfirmationMode(v), v ? "Confirmation mode on: entries wait for you" : "Auto-execute on")} />

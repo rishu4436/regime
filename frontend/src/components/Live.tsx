@@ -2,6 +2,7 @@
 // activity feed with BscScan links.
 import { useEffect, useState } from "react";
 import { RegisterOnChain } from "./AgentStudio";
+import { agentState } from "./StatusBar";
 import type { Decision, ExecutionResult, StatusSnapshot } from "../contracts";
 import { api } from "../api";
 import type { ChainPending, LiveCooldown, LiveExecutionFields } from "../api/types";
@@ -9,8 +10,7 @@ import { cls, time, usd } from "../lib/format";
 import { ago, allowedTokensText, balAmount, balAsset, balValue, bscAddr, bscTx, dur, limitsOf, shortHex, stricter, useLive } from "../lib/live";
 import { conditionLabel, controlReason, exchangeCodeLabels, isExitQueued, strategyLabel, humanReason } from "../lib/strategy";
 import { ActionBadge } from "./Badges";
-import { ConfirmDialog } from "./ConfirmDialog";
-import { Card, Skeleton, Toggle, useToast } from "./ui";
+import { Card, Skeleton } from "./ui";
 
 const NA = <span className="faint">not available</span>;
 /** token_status on /api/tokens items (requested from Bot 6); hidden when absent. */
@@ -36,7 +36,7 @@ export function TokenStatusBadge({ symbol }: { symbol: string }) {
 /** Token family from the symbol suffix: …B = bStock, …on = Ondo, …x = xStock. */
 export const tokenFamily = (sym: string) => (/on$/.test(sym) ? "Ondo" : /x$/.test(sym) ? "xStock" : /B$/.test(sym) ? "bStock" : null);
 export const FamilyBadge = ({ symbol }: { symbol: string }) => { const f = tokenFamily(symbol); return f ? <span className={`pill fam-${f}`} title={`${f} token`}>{f}</span> : null; };
-const AUTO_STOP = /daily loss|automatic|auto-stop|stopped automatically/i;
+export const AUTO_STOP = /daily loss|automatic|auto-stop|stopped automatically/i;
 
 /** Red, non-dismissible LIVE / MAINNET banner shown (sticky) on every tab whenever the backend runs LIVE. */
 const SESSION = /session|qr|re-?sign|sign ?in|re-?auth|expired/i;
@@ -48,7 +48,7 @@ export function SessionBanner() {
   if (!wallet?.session_expired && !why) return null;
   return (
     <div className="banner red" role="alert">
-      <span className="grow"><b>Agentic Wallet session expired.</b> The agent can't trade until the wallet is signed in again Click <b>Reconnect wallet</b> at the top and scan the QR in the Binance App (or run <code>baw auth signin</code> on the host PC).{why ? <><br /><span className="small">{why}</span></> : null}</span>
+      <span className="grow"><b>Agentic Wallet session expired.</b> The agent can't trade until the wallet is signed in again. Click <b>Reconnect wallet</b> in the bar at the top and scan the QR in the Binance App (or run <code>baw auth signin</code> on the host PC).{why ? <><br /><span className="small">{why.replace(/^\s*(session_expired|wallet_not_ready)\s*:\s*/i, "")}</span></> : null}</span>
     </div>
   );
 }
@@ -125,27 +125,12 @@ export function TxLink({ exec }: { exec?: (ExecutionResult & LiveExecutionFields
 }
 
 /** 24/7 monitor: is the agent running on its own, since when, heartbeat, and the kill switches. */
-export function AutonomyMonitor({ status, refresh }: { status: StatusSnapshot | null; refresh: () => void }) {
-  const toast = useToast();
-  const { loop, hb, now, isLive, gate, refresh: refreshLive } = useLive();
-  const [ask, setAsk] = useState<null | "stop" | "reset">(null);
-  const [busy, setBusy] = useState(false);
-  const [flatten, setFlatten] = useState(false);
+export function AutonomyMonitor({ status }: { status: StatusSnapshot | null; refresh?: () => void }) {
+  const { loop, hb, now, isLive, gate } = useLive();
   if (!status || !loop) return <Card><Skeleton h={70} /></Card>;
   const c = status.control;
   const auto = c.emergency_stopped && AUTO_STOP.test(c.reason ?? "");
-  const [label, tone, icon] = c.emergency_stopped ? [auto ? "Auto-stopped: daily loss cap hit" : "Emergency stopped", "bad", "■"]
-    : c.paused ? ["Paused by kill switch", "warn", "❚❚"]
-    : !status.agent_mode ? ["Idle: no agent active", "", "○"]
-    : !loop.running ? ["Agent active, loop stopped", "warn", "○"]
-    : hb.stale ? ["Heartbeat lost: loop not ticking", "bad", "!"]
-    : c.confirmation_mode ? ["Running (confirmation mode on)", "ok", "●"]
-    : ["Agent running autonomously", "ok", "●"];
-  const run = async (fn: () => Promise<unknown>, msg: string) => {
-    setBusy(true);
-    try { await fn(); toast(msg, "success"); refresh(); refreshLive(); } catch (e) { toast(e instanceof Error ? e.message : String(e), "error"); }
-    finally { setBusy(false); setAsk(null); }
-  };
+  const { label, tone, icon } = agentState(status, loop.running, hb.stale);
   const nextIn = hb.nextTick != null ? Math.max(0, Math.round((hb.nextTick - now) / 1000)) : null;
   return (
     <section className={`card autonomy ${tone}`}>
@@ -158,14 +143,6 @@ export function AutonomyMonitor({ status, refresh }: { status: StatusSnapshot | 
             {c.emergency_stopped || c.paused ? <> · {controlReason(c.reason) || "no reason given"}</> : null}
           </div>
         </div>
-        <div className="btn-row">
-          {c.paused
-            ? <button className="btn green" disabled={busy} onClick={() => run(() => api.resume(), "Agent resumed")}>▶ Resume</button>
-            : <button className="btn amber" disabled={busy || c.emergency_stopped} onClick={() => run(() => api.pause("Paused by user (kill switch)"), "Agent paused")}>❚❚ Pause</button>}
-          {c.emergency_stopped
-            ? <button className="btn ghost" disabled={busy} onClick={() => setAsk("reset")}>↺ Reset e-stop</button>
-            : <button className="btn red" disabled={busy} onClick={() => setAsk("stop")}>■ Emergency stop</button>}
-        </div>
       </div>
       <div className="autonomy-stats">
         <div><span className="lbl">Running since</span><b>{loop.running ? dur(hb.runningSince, now) : "stopped"}</b>{hb.runningSince && loop.running ? <span className="faint small">{hb.observed ? "seen by this page" : new Date(hb.runningSince).toLocaleString()}{loop.heartbeat?.autostart ? " · autostart" : ""}</span> : null}</div>
@@ -177,24 +154,6 @@ export function AutonomyMonitor({ status, refresh }: { status: StatusSnapshot | 
       {loop.heartbeat?.last_error && <div className="banner amber" style={{ margin: "12px 0 0" }}><span className="grow small"><b>Last loop error:</b> {loop.heartbeat.last_error}</span></div>}
       {hb.stale && <div className="banner red" style={{ margin: "12px 0 0" }}><span className="grow"><b>No tick for {ago(hb.lastTick, now).replace(" ago", "")}.</b> The loop says it is running but hasn't produced a cycle; check the backend logs.</span></div>}
       {auto && <div className="banner red" style={{ margin: "12px 0 0" }}><span className="grow"><b>Automatic emergency stop:</b> {controlReason(c.reason)}. No new entries until you reset it.</span></div>}
-      {ask === "stop" && (
-        <ConfirmDialog title="Emergency stop?" danger confirmLabel="Stop the agent" busy={busy} onCancel={() => setAsk(null)}
-          onConfirm={() => run(() => api.emergencyStop("Emergency stop by user", flatten), "Emergency stop engaged")}>
-          The agent stops opening trades immediately and pending confirmations are rejected ({c.trading_mode} mode).{" "}
-          {flatten ? "All open positions are closed right away at the last price." : "Open positions are closed on the next bar at that bar's close, logged as an emergency stop."}{" "}
-          Clear it later with “Reset e-stop” (Resume does not clear it).
-          <div className="rule on" style={{ marginTop: 12 }}>
-            <Toggle checked={flatten} onChange={setFlatten} label="Close all positions now" />
-            <div className="rule-text"><div className="rule-title">Close all positions now</div><div className="rule-hint">{flatten ? "Right away, at the last price" : "Off: positions close on the next bar at the bar close"}</div></div>
-          </div>
-        </ConfirmDialog>
-      )}
-      {ask === "reset" && (
-        <ConfirmDialog title="Reset the emergency stop?" confirmLabel="Reset and resume trading" busy={busy} onCancel={() => setAsk(null)}
-          onConfirm={() => run(() => api.resetEmergencyStop(), "Emergency stop reset")}>
-          {auto ? "It was triggered by the daily loss cap. " : ""}The agent goes back to trading on its own{isLive ? " with real funds" : ""}.
-        </ConfirmDialog>
-      )}
     </section>
   );
 }
@@ -210,7 +169,7 @@ const Meter = ({ label, used, cap, hint, warnAt = 0.8, children }: { label: Reac
   );
 };
 
-const WARNING_TEXT: Record<string, string> = {
+export const WARNING_TEXT: Record<string, string> = {
   wallet_too_small: "Wallet too small to trade live: top up USDT to at least the minimum wallet size.",
   token_min_above_cap: "This token's minimum order is above the per-order cap, so it can't be bought live.",
   exit_quota_shortfall: "Today's remaining quota can't cover selling every open position.",

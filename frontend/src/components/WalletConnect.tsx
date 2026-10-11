@@ -135,7 +135,7 @@ export function WalletChangedBanner() {
 }
 
 /** Topbar: "Connect wallet" / "Reconnect wallet" (session expired); once connected only the address (no button). LIVE only. */
-export function WalletButton() {
+export function WalletButton({ addressOnly = false }: { addressOnly?: boolean }) {
   const { wallet, isLive } = useLive();
   const { open } = useWalletConnect();
   if (!isLive) return null;
@@ -144,5 +144,6 @@ export function WalletButton() {
     // no sign-in button while connected: a new baw sign-in could end the active session
     return <a className="pill ok" href={bscAddr(wallet.address)} target="_blank" rel="noreferrer" title="Agentic Wallet connected. View on BscScan">
       <span className="live-dot" style={{ marginRight: 6 }} /><span className="mono small">{shortHex(wallet.address, 4)}</span></a>;
+  if (addressOnly) return null; // the status bar shows "Reconnect wallet"
   return <button className={expired ? "btn danger" : "btn"} style={{ padding: "5px 12px" }} onClick={open}>{expired ? "Reconnect wallet" : "Connect wallet"}</button>;
 }

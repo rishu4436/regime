@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { CONTRACTS_VERSION, DEFAULT_INITIAL_CAPITAL, PresetNameValues, type AutoConfig } from "./contracts";
 import { API_MODE } from "./api";
-import { MOCK_SCENARIO, setMockScenario } from "./api/mock";
+import { MOCK_SCENARIO, MOCK_WARNINGS, setMockScenario, setMockWarnings } from "./api/mock";
 import { LiveBanner, SessionBanner } from "./components/Live";
 import { LiveContext, useLiveState } from "./lib/live";
 import { WalletButton, WalletChangedBanner, WalletConnectProvider } from "./components/WalletConnect";
 import { ModeBadge, RegimeBadge } from "./components/Badges";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { StatusBar } from "./components/StatusBar";
 import { Toggle, ToastProvider } from "./components/ui";
 import { useStatus } from "./lib/useStatus";
 import type { WatchlistFields } from "./api/types";
@@ -85,6 +86,12 @@ function Shell() {
               <Toggle checked={MOCK_SCENARIO === "LIVE"} onChange={(v) => setMockScenario(v ? "LIVE" : "SIM")} label="Demo LIVE scenario" />
             </div>
           )}
+          {API_MODE === "mock" && MOCK_SCENARIO === "LIVE" && (
+            <div className="scenario" title="Mock only: show every risk warning and an expired wallet session. Nothing is sent anywhere.">
+              <span className="small">Demo warnings</span>
+              <Toggle checked={MOCK_WARNINGS} onChange={setMockWarnings} label="Demo warnings" />
+            </div>
+          )}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>API <span className="pill">{API_MODE === "mock" ? "mock" : "backend"}</span></div>
           <div className="faint">contracts v{CONTRACTS_VERSION}</div>
         </div>
@@ -93,13 +100,8 @@ function Shell() {
         <div className="topbar">
           <div className="grow"><h1>{meta.title}</h1><div className="sub">{meta.sub}</div></div>
           {status?.current_regime && <RegimeBadge regime={status.current_regime} />}
-          {status && (status.control.emergency_stopped ? <span className="pill bad"><span className="dot" />Stopped</span>
-            : status.control.paused ? <span className="pill warn"><span className="dot" />Paused</span>
-            : status.agent_mode && !status.control.confirmation_mode ? <span className="pill ok"><span className="live-dot" />Autonomous</span>
-            : <span className="pill ok"><span className="live-dot" />Live loop</span>)}
           {live.isLive && <span className="live-tag" title="Real funds on BNB Smart Chain mainnet"><span className="live-dot" />LIVE · MAINNET</span>}
-          <ModeBadge mode={mode} />
-          <WalletButton />
+          <WalletButton addressOnly />
         </div>
         {API_MODE === "mock" && <div className="banner amber" style={{ marginBottom: 12 }}><span className="grow small">
           <b>Mock data:</b> this dashboard isn't connected to the Regime backend, so nothing here is real. Start it with <code>VITE_API_MODE=http</code> to see the live agent.</span></div>}
@@ -108,6 +110,7 @@ function Shell() {
           <SessionBanner />
           <WalletChangedBanner />
         </ErrorBoundary>
+        <ErrorBoundary label="status bar"><StatusBar status={status} refresh={refresh} /></ErrorBoundary>
         {error && <div className="banner amber"><span className="grow">Backend unreachable: {error}</span><span className="small muted">Start the API or run with VITE_API_MODE=mock</span></div>}
         <ErrorBoundary key={tab} label={meta.title}>
         {tab === "dashboard" && <Dashboard status={status} refresh={refresh} tick={tick} go={go} />}
