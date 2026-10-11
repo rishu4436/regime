@@ -129,19 +129,20 @@ export function WalletChangedBanner() {
     } finally { setBusy(false); }
   };
   return (
-    <div className="banner amber" role="alert"><span className="grow small"><b>Different wallet connected.</b> Regime places no orders, exits included, until its saved positions are checked against this wallet.</span>
+    <div className="banner amber" role="alert"><span className="grow small"><b>Different wallet connected.</b> Regime places no orders, exits included, until its saved positions are checked against this wallet. <b>Stop-loss and take-profit are paused until you check positions.</b></span>
       <button className="btn" style={{ padding: "5px 12px" }} disabled={busy} onClick={run}>{busy ? <span className="spin" /> : null}Check positions</button></div>
   );
 }
 
-/** Topbar button: "Connect wallet" / "Reconnect wallet" (session expired) / connected address. Shown in LIVE only. */
+/** Topbar: "Connect wallet" / "Reconnect wallet" (session expired); once connected only the address (no button). LIVE only. */
 export function WalletButton() {
   const { wallet, isLive } = useLive();
   const { open } = useWalletConnect();
   if (!isLive) return null;
   const expired = !!wallet?.session_expired;
   if (wallet?.connected && !expired && wallet.address)
-    return <button className="btn ghost" style={{ padding: "5px 10px" }} title="Agentic Wallet connected. Click to sign in again." onClick={open}>
-      <span className="live-dot" style={{ marginRight: 6 }} /><span className="mono small">{shortHex(wallet.address, 4)}</span></button>;
+    // no sign-in button while connected: a new baw sign-in could end the active session
+    return <a className="pill ok" href={bscAddr(wallet.address)} target="_blank" rel="noreferrer" title="Agentic Wallet connected. View on BscScan">
+      <span className="live-dot" style={{ marginRight: 6 }} /><span className="mono small">{shortHex(wallet.address, 4)}</span></a>;
   return <button className={expired ? "btn danger" : "btn"} style={{ padding: "5px 12px" }} onClick={open}>{expired ? "Reconnect wallet" : "Connect wallet"}</button>;
 }
