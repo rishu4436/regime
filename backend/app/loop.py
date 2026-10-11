@@ -98,6 +98,7 @@ class TradingLoop:
         self.ticks = 0
         self.finished = False
         self._bar: Optional[Candle] = None
+        self.wallet_block: Optional[dict] = None  # {address, expected, since}: a different wallet signed in (v0.8)
         self.perf.record_equity(utc_now() if not self.sim else self.book.now, self.book.starting_capital)
         for k, v in comps.names().items():
             if v.startswith("fallback:"):
@@ -219,6 +220,14 @@ class TradingLoop:
             self.book.on_bar(sym, bar, now)
             self.bus.publish(EventType.PRICE, {"symbol": sym, "price": bar.close, "candle": bar.model_dump(mode="json")})
             out: list[Decision] = []
+            if self.wallet_block:  # a different wallet signed in: no orders at all (not even exits) until reconciled
+                b = self.wallet_block
+                out.append(self._finalize(Decision(
+                    mode=self.s.trading_mode, agent_mode=self.agent_mode, symbol=sym, regime=self.current_regime, timestamp=now,
+                    strategy=self.active_strategy or "NONE", action=Action.STAY_OUT,
+                    reason=(f"Blocked: different wallet connected ({b.get('address')}, saved {b.get('expected')}); no orders "
+                            "until the saved positions are checked against the new wallet (POST /api/wallet/reconcile)"))))
+                return self._end_tick(out)
 
             # 0) in-flight LIVE buys: reconcile first, so a fill confirmed now is a real lot for the exits below
             if not self.sim:
@@ -750,7 +759,7 @@ class TradingLoop:
                     address, bal, _src = livemod.read_exchange_wallet(self.c.exchange)
                 except Exception:
                     bal = None
-            address = address or self.s.wallet_address
+            address = address or self.state.get("wallet_address") or self.s.wallet_address
             connected = bal is not None
             if bal is None and not self.live:
                 bal = {livemod.GAS_ASSET: self.s.sim_bnb_balance, livemod.QUOTE_ASSET: round(pf.cash, 8)}
@@ -892,17 +901,92 @@ class TradingLoop:
             reasons.append("risk allow_live is off (RISK_ALLOW_LIVE=true)")
         if self.live and not connected:
             reasons.append("wallet not connected (no balances from the exchange client)")
+        if self.wallet_block:
+            reasons.append("different wallet connected")
         ctrl = self.control()
         if ctrl.emergency_stopped:
             reasons.append(one_prefix("Emergency stop", ctrl.reason, "active"))
         if ctrl.paused:
             reasons.append(one_prefix("Paused", ctrl.reason, "by user"))
-        return {"live_trading_enabled": self.s.live_trading_enabled, "binance_live_enabled": self.s.binance_live_enabled,
+        return {"wallet_block": self.wallet_block, "live_trading_enabled": self.s.live_trading_enabled, "binance_live_enabled": self.s.binance_live_enabled,
                 "risk_allow_live": allow, "wallet_connected": connected, "can_trade": not reasons, "blocked_reasons": reasons,
                 "cooldowns": self.active_cooldowns(),
                 "chain_pending": [{"order_id": v["res"].order_id, "client_order_id": k, "symbol": v["symbol"],
                                    "notional": v["notional"], "tx_hash": v["res"].tx_hash, "since": v["since"].isoformat(),
                                    "held_exit": v.get("held_exit")} for k, v in self.chain_pending.items()]}
+
+    # ------------------------------------------------------------------ dashboard wallet sign-in (v0.8)
+    def expected_wallet_address(self) -> Optional[str]:
+        """The wallet the saved state belongs to: agent_state.<mode>.json wallet_address, else BINANCE_WALLET_ADDRESS."""
+        return self.state.get("wallet_address") or self.s.wallet_address or None
+
+    def refresh_wallet(self) -> None:
+        """Drop every cached wallet read (balances, wallet settings/limits, token statuses) and re-read them now."""
+        ex = self.c.exchange
+        for obj in (ex, getattr(ex, "executor", None), getattr(ex, "_executor", None)):
+            if obj is not None and hasattr(obj, "_wallet_cache"):
+                obj._wallet_cache = None
+        self._token_status_cache.clear()
+        self.wallet_settings.invalidate()
+        if self.live:
+            self.wallet_settings.get(force=True)
+        self._warning_codes = set()
+
+    def on_wallet_connected(self, address: Optional[str], changed: bool) -> None:
+        """After a dashboard sign-in: re-read the wallet + limits; a different wallet blocks all orders until reconciled."""
+        with self.lock:
+            self.refresh_wallet()
+            if changed:
+                self.wallet_block = {"address": address, "expected": self.expected_wallet_address(), "since": utc_now().isoformat()}
+                self.state.update(wallet_block=self.wallet_block)
+                self._alert(AlertLevel.CRITICAL, "WALLET_CHANGED", f"different wallet connected ({address}); no orders until the "
+                            "saved positions are checked against it (POST /api/wallet/reconcile)")
+            elif address:
+                self.state.update(wallet_address=address)
+                self._alert(AlertLevel.INFO, "WALLET_CONNECTED", f"wallet {address} connected; balances and limits re-read")
+            self.bus.publish(EventType.STATUS, self.status())
+
+    def reconcile_wallet(self) -> dict:
+        """POST /api/wallet/reconcile: check saved open lots against the connected wallet's balances (oldest lot first).
+        Lots the wallet doesn't (fully) hold are dropped from the book (no trade); then the wallet becomes the saved
+        wallet and the 'different wallet connected' block is cleared. SIM: the wallet is the book, so nothing drops."""
+        with self.lock:
+            if self.chain_pending:
+                raise AgentStateError("orders are still settling on chain; reconcile after they confirm")
+            self.refresh_wallet()
+            address, bal = None, None
+            if not self.sim:
+                try:
+                    address, bal, _ = livemod.read_exchange_wallet(self.c.exchange)
+                except Exception as e:
+                    raise AgentStateError(f"wallet balances unavailable ({type(e).__name__}: {e}); cannot reconcile")
+                if bal is None:
+                    raise AgentStateError("wallet balances unavailable; cannot reconcile")
+            else:
+                bal = {}
+                for l in self.book.lots:
+                    bal[l.position.symbol] = bal.get(l.position.symbol, 0.0) + l.position.quantity
+            address = address or (self.wallet_block or {}).get("address") or self.expected_wallet_address()
+            kept, dropped, left = [], [], dict(bal)
+            for lot in sorted(self.book.lots, key=lambda l: l.position.opened_at):
+                p = lot.position
+                row = {"position_id": p.id, "symbol": p.symbol, "quantity": p.quantity, "held": round(bal.get(p.symbol, 0.0), 10)}
+                have = left.get(p.symbol, 0.0)
+                if have + 1e-9 + 1e-6 * p.quantity >= p.quantity:
+                    left[p.symbol] = have - p.quantity
+                    kept.append(row)
+                else:
+                    self.book.lots.remove(lot)
+                    dropped.append({**row, "reason": "not held by the connected wallet"})
+            was = self.wallet_block
+            self.wallet_block = None
+            self.state.update(wallet_block=None, **({"wallet_address": address} if address else {}))
+            self._persist()
+            self._alert(AlertLevel.WARNING if dropped else AlertLevel.INFO, "WALLET_RECONCILED",
+                        f"wallet {address}: {len(kept)} saved position(s) kept, {len(dropped)} dropped (not in the wallet)"
+                        + ("; live trading unblocked" if was else ""))
+            self.bus.publish(EventType.STATUS, self.status())
+            return {"address": address, "was_blocked": bool(was), "kept": kept, "dropped": dropped, "wallet_blocked": False}
 
     def enrich_payload(self, payload: Any) -> Any:
         out = livemod.enrich_payload(payload, self.exec_meta.get)
@@ -938,6 +1022,7 @@ class TradingLoop:
                 self.activate_auto(AutoConfig.model_validate(agent["config"]))
         except Exception as e:
             self._alert(AlertLevel.WARNING, "STATE_RESTORE", f"could not resume the saved agent: {e}")
+        self.wallet_block = st.get("wallet_block") or None  # survives restarts until reconciled
         ctrl = st.get("control") or {}
         if "confirmation_mode" in ctrl:
             self.c.risk.set_confirmation_mode(bool(ctrl["confirmation_mode"]))

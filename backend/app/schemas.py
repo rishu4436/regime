@@ -112,6 +112,30 @@ class LiveStatus(_M):
     blocked_reasons: list[str] = Field(default_factory=list)
     cooldowns: list[dict] = Field(default_factory=list, description="[{symbol, until, code, reason}] after 40367/40369/40374")
     chain_pending: list[dict] = Field(default_factory=list, description="BUYs submitted and waiting on chain")
+    wallet_block: Optional[dict] = Field(default=None, description="v0.8 {address, expected, since}: a different wallet signed "
+                                         "in; no orders until POST /api/wallet/reconcile")
+
+
+class WalletConnectStart(_M):
+    session_id: str
+    qr_url: str
+    pairing_code: Optional[str] = None
+    expires_at: Optional[str] = None
+
+
+class WalletConnectStatus(_M):
+    status: str = Field(description="pending | connected | expired | failed")
+    address: Optional[str] = None
+    wallet_changed: bool = False
+    error: Optional[str] = None
+
+
+class WalletReconcileResult(_M):
+    address: Optional[str] = None
+    was_blocked: bool
+    kept: list[dict] = Field(default_factory=list)
+    dropped: list[dict] = Field(default_factory=list)
+    wallet_blocked: bool = False
 
 
 class SystemInfoView(SystemInfo):

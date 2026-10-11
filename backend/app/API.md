@@ -221,7 +221,36 @@ explainer receives, so LIVE explanations carry the BscScan link.
 Alert codes added: `WALLET_SESSION_EXPIRED`, `WALLET_SETTINGS`, `LIVE_LIMIT_<CODE>`, `CHAIN_PENDING` (unconfirmed after 30 min),
 `LOOP_RESTARTED`, `LOOP_STALLED` (no tick for 3 intervals), `STATE_RESTORED`, `STATE_RESTORE`, `AUTOSTART`.
 
+## Wallet sign-in from the dashboard (v0.8, localhost only)
+All three endpoints answer **403** ("Wallet sign-in only works on the PC running the Regime backend ...") unless the
+request comes from `127.0.0.1` / `::1` / `localhost` (an `X-Forwarded-For` with a non-local address is also refused).
+The Vite dev proxy connects from localhost, so the dashboard on `http://localhost:5173` works.
+
+| Method | Path | Body / query | Returns |
+|---|---|---|---|
+| POST | `/api/wallet/connect` | - | `{session_id, qr_url, pairing_code, expires_at}` (`expires_at` ISO UTC, ~5 min). 502 if `baw auth signin` fails |
+| GET | `/api/wallet/connect` | `?session_id=` | `{status: pending\|connected\|expired\|failed, address, wallet_changed, error}`; unknown id = `failed` |
+| POST | `/api/wallet/reconcile` | - | `{address, was_blocked, kept[], dropped[], wallet_blocked: false}`; 409 while orders settle or balances are unavailable |
+
+- One process-wide `backend.exchange.wallet_connect.WalletConnect` (Bot 4): `start()` runs `baw auth signin` and a
+  background `baw auth verify`; starting a new sign-in cancels the previous one.
+- **LIVE** uses the real `baw` (BAW_CMD / PATH). **SIM/PAPER** use the bundled fake `backend/app/dev_baw.py`
+  (connects after `FAKE_BAW_VERIFY_S`, default 6 s; `FAKE_BAW_OUTCOME=ok|expired|failed`; `FAKE_BAW_ADDRESS`), so the
+  dashboard flow can be demoed without Binance.
+- `wallet_changed` compares the signed-in BSC address with the saved one: `wallet_address` in
+  `agent_state.<mode>.json`, else `BINANCE_WALLET_ADDRESS`. The first successful sign-in (or a reconcile) saves it.
+- On the first `connected` poll the backend drops its cached wallet reads (balances, `baw wallet settings` limits,
+  token statuses) and re-reads them, so the next `/api/wallet` has a newer `updated_at` and fresh `limits`.
+- `wallet_changed: true` blocks every order (BUYs **and** exits, since the saved positions may not be in the new
+  wallet): `/api/live/status` (and `/api/system.live`) gets `can_trade: false`, `"different wallet connected"` in
+  `blocked_reasons` and `wallet_block: {address, expected, since}`; each tick is a STAY_OUT "Blocked: different wallet
+  connected ...". The block is saved in the state file and survives restarts.
+- `POST /api/wallet/reconcile` checks the saved open positions against the connected wallet's balances (oldest
+  first). Positions the wallet doesn't fully hold are dropped from the book (no trade; listed in `dropped`), the
+  wallet becomes the saved wallet and the block clears. In SIM the wallet is the book, so nothing is dropped.
+
 ## Changelog
+- v0.8: dashboard wallet sign-in (`POST/GET /api/wallet/connect`, `POST /api/wallet/reconcile`, localhost only), `wallet_block` in `/api/live/status`, "different wallet connected" LIVE block, fake baw for SIM/PAPER; app title "Regime".
 - v0.7: LIVE section (wallet, live status, cooldowns, in-flight buys with synthetic `pending` positions and `pending_exit` held exits, `order_in_flight`, executor extras on executions, `agent_identity` pass-through, `allowed_tokens` 'ALL'/'LIMITED' pass-through + `tradable_tokens`); `/api/portfolio` positions gain `pending`, `client_order_id`, `held_exit`; an unavailable quote is a STAY_OUT decision in every mode; `/api/tokens` adds `token_status`; activation defaults to `AUTO_EXECUTE` unless the request sets `activation`; `record_execution(res, quote_notional=)` at submission + after reconcile; slippage cap passed per order.
 - v0.6: LIVE needs both `LIVE_TRADING_ENABLED=true` and `BINANCE_LIVE_ENABLED=true` (+ keys); no per-token path assumptions.
 - v0.5: `GET /api/candles/{symbol}?history=true`; `/api/backtest` always uses the cached full history (no longer drifts with the replay).
