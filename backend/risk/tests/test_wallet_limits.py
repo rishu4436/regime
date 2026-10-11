@@ -343,3 +343,11 @@ def test_live_limits_warning_wallet_limits_stale(clock):
     w = rm.live_limits(None, old)["warnings"]
     assert [x["code"] for x in w] == ["wallet_limits_stale"] and "20 min ago" in w[0]["message"]
     assert rm.live_limits(None, fresh)["warnings"] == []
+
+
+def test_from_baw_reads_fetched_at_from_payload():
+    from datetime import datetime, timezone
+    w = WalletLimits.from_baw({"success": True, "data": {"dailyLimit": "100"}, "fetched_at": "2026-10-11T02:00:00Z"})
+    assert w.fetched_at == datetime(2026, 10, 11, 2, 0, tzinfo=timezone.utc) and w.daily_limit_usdt == 100
+    w2 = WalletLimits.from_baw({"dailyLimit": 50, "fetched_at": datetime(2026, 10, 11, tzinfo=timezone.utc)})
+    assert w2.fetched_at.day == 11

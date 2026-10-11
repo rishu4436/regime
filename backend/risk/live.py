@@ -138,6 +138,15 @@ class WalletLimits(BaseModel):
         ``_BAW_KEYS``) or passed explicitly via ``allowed_tokens`` (e.g. from config). Unknown keys are ignored; numbers
         given as strings are parsed; unparsable numbers become None."""
         data: Mapping[str, Any] = payload or {}
+        if fetched_at is None:  # Bot 4's get_wallet_settings() adds fetched_at next to the raw baw JSON
+            raw_t = data.get("fetched_at") or (data.get("data") or {}).get("fetched_at") if isinstance(data.get("data"), Mapping) else data.get("fetched_at")
+            if isinstance(raw_t, datetime):
+                fetched_at = raw_t
+            elif isinstance(raw_t, str):
+                try:
+                    fetched_at = datetime.fromisoformat(raw_t.replace("Z", "+00:00"))
+                except ValueError:
+                    fetched_at = None
         if isinstance(data.get("data"), Mapping):
             data = data["data"]
 
