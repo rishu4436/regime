@@ -221,6 +221,16 @@ export const CONDITION_LABEL: Record<string, string> = {
   dca_schedule: "DCA schedule bar", near_sma20: "Near SMA20", drop_from_high: "Drop from high", rsi_recovered: "RSI recovered",
   trend_broken: "Trend broken", trend_lost: "Trend lost", warmup: "Indicators warmed up", range: "Range wide enough",
   in_range: "Inside range", bottom_cell: "Bottom grid cell", top_cell: "Top grid cell",
+  // LIVE safety (Bot 2 engine, bot2/live) and LIVE hard caps (Bot 3 risk, bot3/live)
+  insufficient_data: "Not enough history yet (needs 61 bars)",
+  live_stale_data: "Stale data", live_future_data: "Data timestamp in the future", live_no_data: "No market data",
+  live_no_volume: "No volume on the last bar", live_thin_liquidity: "Thin liquidity, size reduced or skipped",
+  live_market_hours: "Outside market hours", live_market_hours_now: "Outside market hours (now)",
+  live_allowed: "LIVE allowed (allow_live)", live_daily_loss_cap: "Daily loss cap (auto e-stop)", live_gas_reserve: "BNB gas reserve",
+  live_quote: "Valid quote", live_quote_notional: "Quote amount matches", live_slippage: "Slippage within limit",
+  live_wallet_quote: "Wallet can cover quote", live_daily_notional: "Daily traded cap", live_max_exposure: "Max open exposure",
+  live_order_cap: "Per-order cap", live_wallet_balance: "Wallet balance",
+  live_below_min_order: "Below minimum order", live_illiquid_family: "xStock excluded (no liquidity on BNB Chain)", live_token_paused: "Token paused",
 };
 /** Friendly label for a Signal.conditions_met/failed id (rule field, risk check, preset condition or ExitReason). */
 export const conditionLabel = (id: string) =>

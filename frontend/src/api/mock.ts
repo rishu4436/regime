@@ -10,11 +10,26 @@ import { detectRegime, presetWantsBuy, STYLE_MAP } from "../lib/auto";
 import { appendCandle, generateMixedCandles, rng } from "../lib/candles";
 import { parseStrategyText } from "../lib/parseText";
 import { backtest, conditionLabel, evaluateLast, fillStrategy, type FullStrategy } from "../lib/strategy";
-import { ApiError, type ActivateManualBody, type ApiClient, type ParseResult, type PresetsTable } from "./types";
+import { ApiError, type ActivateManualBody, type ApiClient, type LiveGate, type LiveLimits, type ParseResult, type PresetsTable, type WalletInfo } from "./types";
+
+/** Mock-only demo scenario: "LIVE" pretends to be a LIVE (mainnet) backend with an Agentic Wallet so the LIVE UI can be
+ * shown without funds. Nothing leaves the browser; tx hashes are random and labelled as demo. Persisted; switching reloads. */
+export type MockScenario = "SIM" | "LIVE";
+export const MOCK_SCENARIO: MockScenario = (() => { try { return localStorage.getItem("mock.scenario") === "LIVE" ? "LIVE" : "SIM"; } catch { return "SIM"; } })();
+export function setMockScenario(s: MockScenario) { try { localStorage.setItem("mock.scenario", s); } catch { /* private mode */ } window.location.reload(); }
+const LIVE = MOCK_SCENARIO === "LIVE";
+const MODE = LIVE ? "LIVE" : "SIM";
+// Bot 3 LiveRiskProfile defaults (bot3/live): 25/order, 25 daily loss (auto e-stop), 100/day, 50 open, 1% slippage, 900 s, 0.002 BNB
+const LIVE_CAP = 25, LIVE_DAILY_LOSS = 25, LIVE_DAILY_NOTIONAL = 100, LIVE_EXPOSURE = 50, LIVE_GAS_RESERVE = 0.002;
+const LIVE_CAPITAL = 60;        // "a few dollars is enough to prove the flow works"
+const DEMO_WALLET = "0x7a3fD3b1c0E5aB9e2D41f6C8b0aF2e39C4d1B7e2";
+const hex = (n: number) => Array.from({ length: n }, () => "0123456789abcdef"[Math.floor(Math.random() * 16)]).join("");
+/** SIM routing from Bot 4: Ondo + xStock -> RFQ, bStock -> SWAP (the UI never assumes this for a real backend). */
+const pathFor = (symbol: string) => (/B$/.test(symbol) ? "SWAP" : "RFQ") as "SWAP" | "RFQ";
 
 const TOKENS: TokenInfo[] = [
-  { symbol: "NVDAon", name: "NVIDIA (Ondo tokenized)", token_type: "ONDO", chain: "Ethereum", underlying: "NVDA", decimals: 18 },
-  { symbol: "TSLAx", name: "Tesla xStock", token_type: "XSTOCK", chain: "Solana", underlying: "TSLA", decimals: 8 },
+  { symbol: "NVDAon", name: "NVIDIA (Ondo tokenized)", token_type: "ONDO", chain: "BSC", underlying: "NVDA", decimals: 18 },
+  { symbol: "TSLAx", name: "Tesla xStock", token_type: "XSTOCK", chain: "BSC", underlying: "TSLA", decimals: 8 },
   { symbol: "AAPLB", name: "Apple BStock", token_type: "BSTOCK", chain: "BSC", underlying: "AAPL", decimals: 18 },
 ];
 const START: Record<string, number> = { NVDAon: 140, TSLAx: 200, AAPLB: 170 };
@@ -32,8 +47,8 @@ export class MockApi implements ApiClient {
   private listeners = new Set<(e: Event) => void>();
   private timer: number | undefined;
   private loop: LoopState = { running: false, interval_seconds: 3, ticks: 0, agent_mode: null, active_symbol: null, active_strategy: null, replay_finished: false };
-  private control: ControlState = { paused: false, emergency_stopped: false, confirmation_mode: true, trading_mode: "SIM", reason: null, updated_at: now() };
-  private portfolio: Portfolio = { starting_capital: DEFAULT_INITIAL_CAPITAL, cash: DEFAULT_INITIAL_CAPITAL, positions: [], realized_pnl: 0, equity: DEFAULT_INITIAL_CAPITAL, bars_since_exit: {}, trades_today: 0, daily_pnl: 0, mode: "SIM", updated_at: now() };
+  private control: ControlState = { paused: false, emergency_stopped: false, confirmation_mode: true, trading_mode: MODE, reason: null, updated_at: now() };
+  private portfolio: Portfolio = { starting_capital: LIVE ? LIVE_CAPITAL : DEFAULT_INITIAL_CAPITAL, cash: LIVE ? LIVE_CAPITAL : DEFAULT_INITIAL_CAPITAL, positions: [], realized_pnl: 0, equity: LIVE ? LIVE_CAPITAL : DEFAULT_INITIAL_CAPITAL, bars_since_exit: {}, trades_today: 0, daily_pnl: 0, mode: MODE, updated_at: now() };
   private agentMode: "MANUAL" | "AUTO" | null = null;
   private manual: FullStrategy | null = null;
   private auto: AutoConfig | null = null;
@@ -55,13 +70,56 @@ export class MockApi implements ApiClient {
     this.regime = this.analyse(this.symbol);
     this.markToMarket();
     try { for (const s of JSON.parse(localStorage.getItem("mock.strategies") ?? "[]")) this.strategies.set(s.id, s); } catch { /* ignore */ }
+    if (LIVE) { // the LIVE demo starts like the real thing: an autonomous auto agent (AUTO_EXECUTE), loop running 24/7
+      this.auto = { symbol: "AAPLB", style: "ACTIVE", capital: LIVE_CAPITAL, activation: "AUTO_EXECUTE", timeframe: "1h", enabled_presets: [...PresetNameValues] };
+      this.symbol = "AAPLB"; this.regime = this.analyse(this.symbol);
+      this.agentMode = "AUTO"; this.activeStrategy = this.select(this.regime, "ACTIVE", [...PresetNameValues]).preset ?? "NONE";
+      this.control = { ...this.control, confirmation_mode: false };
+      this.loop = { ...this.loop, running: true };
+      this.syncLoop();
+    }
   }
 
   // ------------------------------------------------------------------ system & market data
-  health() { return ok({ status: "ok", contracts_version: CONTRACTS_VERSION, trading_mode: "SIM" }); }
+  health() { return ok({ status: "ok", contracts_version: CONTRACTS_VERSION, trading_mode: MODE }); }
   system() {
-    return ok<SystemInfo>({ trading_mode: "SIM", live_enabled: false, contracts_version: CONTRACTS_VERSION, sim_seed: 42,
-      components: { engine: "mock:browser", risk: "mock:browser", exchange: "mock:browser", explainer: "mock:template" } });
+    return ok<SystemInfo>({ trading_mode: MODE, live_enabled: LIVE, contracts_version: CONTRACTS_VERSION, sim_seed: LIVE ? null : 42,
+      components: { engine: "mock:browser", risk: "mock:browser", exchange: LIVE ? "mock:LiveBinanceClient(agentic_wallet, demo)" : "mock:browser", explainer: "mock:template" } });
+  }
+  // ------------------------------------------------------------------ live / wallet (requested endpoints, mocked)
+  private bnb = 0.0046;          // demo gas balance; each fill burns a little so the low-gas warning shows up
+  private dailyNotional = 0;
+  private hb = { started_at: now() as string | null, last_tick_at: null as string | null };
+  private liveLimits(): LiveLimits {
+    const exposure = (this.portfolio.positions ?? []).reduce((a, p) => a + p.quantity * (p.current_price ?? p.avg_entry_price), 0);
+    const loss = Math.max(0, -(this.portfolio.daily_pnl ?? 0) - (this.portfolio.positions ?? []).reduce((a, p) => a + (p.unrealized_pnl ?? 0), 0));
+    return { live_allowed: true, per_order_cap_usdt: LIVE_CAP, daily_loss_cap_usdt: LIVE_DAILY_LOSS, daily_notional_cap_usdt: LIVE_DAILY_NOTIONAL,
+      daily_limit_usdt: LIVE_DAILY_NOTIONAL, max_exposure_usdt: LIVE_EXPOSURE, max_slippage_pct: 1, stale_after_s: 900, bnb_gas_reserve: LIVE_GAS_RESERVE,
+      fee_buffer_usdt: 1, market_hours_utc: null, daily_used_usdt: this.dailyNotional, daily_loss_usdt: loss, open_exposure_usdt: exposure,
+      daily_remaining_usdt: Math.max(0, LIVE_DAILY_NOTIONAL - this.dailyNotional), limit_source: { per_order_cap_usdt: "risk", daily_limit_usdt: "risk" },
+      allowed_tokens: TOKENS.map((t) => t.symbol), wallet: { daily_limit_usdt: 200, per_order_cap_usdt: 50, allowed_tokens: null } };
+  }
+  private gate(): LiveGate {
+    const reasons: string[] = [];
+    if (this.control.emergency_stopped) reasons.push(onePrefix("Emergency stop", this.control.reason || "active"));
+    else if (this.control.paused) reasons.push(onePrefix("Paused", this.control.reason));
+    if (this.bnb < LIVE_GAS_RESERVE) reasons.push(`BNB ${this.bnb.toFixed(4)} below the gas reserve ${LIVE_GAS_RESERVE}`);
+    if (this.dailyNotional >= LIVE_DAILY_NOTIONAL) reasons.push(`Daily LIVE notional ${this.dailyNotional.toFixed(2)} of ${LIVE_DAILY_NOTIONAL} USDT used`);
+    return { live_trading_enabled: true, binance_live_enabled: true, risk_allow_live: true, wallet_connected: true, can_trade: reasons.length === 0, blocked_reasons: reasons };
+  }
+  getLiveGate() { return ok<LiveGate | null>(LIVE ? this.gate() : null); }
+  getWallet() {
+    if (!LIVE) return ok<WalletInfo | null>(null);
+    this.markToMarket();
+    const held = new Map<string, { q: number; px: number }>();
+    for (const p of this.portfolio.positions ?? []) { const h = held.get(p.symbol) ?? { q: 0, px: p.current_price ?? p.avg_entry_price }; h.q += p.quantity; held.set(p.symbol, h); }
+    return ok<WalletInfo | null>({ provider: "baw", address: DEMO_WALLET, chain: "BSC", chain_id: 56, connected: true,
+      balances: [
+        { asset: "USDT", amount: this.portfolio.cash, value_usdt: this.portfolio.cash, contract_address: "0x55d398326f99059fF775485246999027B3197955" },
+        { asset: "BNB", amount: this.bnb, value_usdt: this.bnb * 590 },
+        ...[...held].map(([sym, h]) => ({ asset: sym, amount: h.q, value_usdt: h.q * h.px, contract_address: TOKENS.find((t) => t.symbol === sym)?.contract_address ?? null })),
+      ],
+      bnb_gas_reserve: LIVE_GAS_RESERVE, limits: this.liveLimits(), updated_at: now(), live_gate: this.gate() });
   }
   getTokens(q = "") {
     const ql = q.toLowerCase();
@@ -152,7 +210,7 @@ export class MockApi implements ApiClient {
     this.syncLoop(); this.emitStatus();
     return ok(this.snapshot());
   }
-  getLoop() { return ok(this.loop); }
+  getLoop() { return ok({ ...this.loop, ...this.hb, next_tick_at: this.loop.running && this.hb.last_tick_at ? new Date(Date.parse(this.hb.last_tick_at) + this.loop.interval_seconds * 1000).toISOString() : null }); }
   startLoop(interval_seconds?: number) {
     if (interval_seconds != null && !(interval_seconds > 0)) return fail(422, "interval_seconds: must be > 0");
     if (!this.agentMode) return fail(409, "no active agent: activate a manual strategy or auto config first"); // same as backend
@@ -344,15 +402,24 @@ export class MockApi implements ApiClient {
   }
 
   private exec(symbol: string, side: "BUY" | "SELL"): ExecutionResult {
-    return { order_id: uid(), client_order_id: uid(), symbol, side, status: "FILLED", path: "SWAP", mode: "SIM", timestamp: now() };
+    return { order_id: uid(), client_order_id: uid(), symbol, side, status: "FILLED", path: LIVE ? pathFor(symbol) : "SWAP", mode: MODE, timestamp: now() };
   }
-  private done(r: ExecutionResult, decisionId?: string) { this.emit("EXECUTION", { ...r, decision_id: decisionId ?? null }); return r; }
+  private done(r: ExecutionResult, decisionId?: string) {
+    if (LIVE && r.status === "FILLED") { // demo hash: not on chain
+      const tx = "0x" + hex(64);
+      r = { ...r, tx_hash: tx, explorer_url: `https://bscscan.com/tx/${tx}`, route: r.path, quote_expires_at: new Date(Date.now() + 30_000).toISOString(), real_funds: true } as ExecutionResult;
+      this.bnb = Math.max(0, this.bnb - 0.00025);
+      if (r.side === "BUY") this.dailyNotional += r.notional ?? 0;
+    }
+    this.emit("EXECUTION", { ...r, decision_id: decisionId ?? null }); return r;
+  }
 
   /** Open a new lot (several lots per symbol are allowed; each has a stable Position.id). */
   private buy(symbol: string, notional: number, strategy: string, decisionId?: string): ExecutionResult {
     const px = this.last(symbol), pf = this.portfolio, ps = pf.positions ?? (pf.positions = []), base = this.exec(symbol, "BUY");
     notional = Math.min(notional, pf.cash);
     if (notional <= 1) return this.done({ ...base, status: "REJECTED", error: "insufficient cash" }, decisionId);
+    if (LIVE && notional > LIVE_CAP + 1e-9) return this.done({ ...base, status: "REJECTED", error: `notional ${notional.toFixed(2)} exceeds BINANCE_LIVE_MAX_NOTIONAL=${LIVE_CAP.toFixed(2)}` }, decisionId);
     const q = (notional * (1 - FEE)) / px, x = this.manual?.exit;
     const pos: Position = { id: uid(), symbol, quantity: q, avg_entry_price: px, opened_at: now(), strategy, current_price: px, highest_price: px,
       stop_loss_price: px * (1 - (x?.stop_loss_pct ?? 6) / 100), take_profit_price: px * (1 + (x?.take_profit_pct ?? 12) / 100) };
@@ -389,7 +456,7 @@ export class MockApi implements ApiClient {
   }
 
   private log(d: Omit<Decision, "mode" | "agent_mode"> & { agent_mode?: Decision["agent_mode"] }): Decision {
-    const full: Decision = { id: uid(), timestamp: this.simNow(), mode: "SIM", agent_mode: d.agent_mode ?? this.agentMode ?? "MANUAL", regime: this.regime?.regime ?? null, ...d };
+    const full: Decision = { id: uid(), timestamp: this.simNow(), mode: MODE, agent_mode: d.agent_mode ?? this.agentMode ?? "MANUAL", regime: this.regime?.regime ?? null, ...d };
     full.explanation ??= full.reason;
     this.decisions.unshift(full);
     this.decisions = this.decisions.slice(0, 200);
@@ -400,7 +467,7 @@ export class MockApi implements ApiClient {
   /** One loop cycle: (advance a bar) -> exits -> entry. Emits PRICE, DECISION, EXECUTION, ALERT, STATUS. */
   private cycle(advance = false): Decision[] {
     const out: Decision[] = [];
-    this.loop = { ...this.loop, ticks: this.loop.ticks + 1 };
+    this.loop = { ...this.loop, ticks: this.loop.ticks + 1 }; this.hb.last_tick_at = now();
     if (advance) for (const t of TOKENS) {
       const c = this.candles[t.symbol];
       const live = LIVE_REGIMES[Math.floor(this.loop.ticks / 40 + TOKENS.indexOf(t)) % LIVE_REGIMES.length];
@@ -417,6 +484,10 @@ export class MockApi implements ApiClient {
     this.emit("PRICE", { symbol: this.symbol, price: px, candle: c[c.length - 1] });
     const finish = () => { this.syncLoop(); this.emitStatus(); return out; };
     if (!this.agentMode) return finish();
+    if (LIVE && !this.control.emergency_stopped && (this.liveLimits().daily_loss_usdt ?? 0) >= LIVE_DAILY_LOSS) {
+      const c = this.setControl({ emergency_stopped: true, reason: `Daily loss cap hit (${LIVE_DAILY_LOSS} USDT), stopped automatically` });
+      this.alert("CRITICAL", "EMERGENCY_STOP", onePrefix("Emergency stop", c.reason));
+    }
 
     // 1. protective exits: no confirmation needed, run even while emergency stopped
     for (const p of [...(this.portfolio.positions ?? [])]) {
@@ -472,7 +543,24 @@ export class MockApi implements ApiClient {
     if (!buy) { out.push(this.log({ symbol: this.symbol, action: "STAY_OUT", strategy, reason, signal })); return finish(); }
 
     // 3. risk + execution
-    const notional = signal.proposed_notional!;
+    let notional = signal.proposed_notional!;
+    const liveChecks: { name: string; passed: boolean; detail?: string }[] = [];
+    if (LIVE) { // Bot 3 LIVE hard caps (names as in backend/risk on bot3/live)
+      const L = this.liveLimits();
+      if (notional > LIVE_CAP) { liveChecks.push({ name: "live_order_cap", passed: true, detail: `Order reduced from ${notional.toFixed(2)} to ${LIVE_CAP.toFixed(2)} USDT (per-order cap)` }); notional = LIVE_CAP; }
+      else liveChecks.push({ name: "live_order_cap", passed: true, detail: `${notional.toFixed(2)} USDT within the ${LIVE_CAP} USDT per-order cap` });
+      liveChecks.push({ name: "live_daily_notional", passed: (L.daily_used_usdt ?? 0) + notional <= LIVE_DAILY_NOTIONAL, detail: `Traded today ${(L.daily_used_usdt ?? 0).toFixed(2)} + ${notional.toFixed(2)} vs cap ${LIVE_DAILY_NOTIONAL} USDT` });
+      liveChecks.push({ name: "live_max_exposure", passed: (L.open_exposure_usdt ?? 0) + notional <= LIVE_EXPOSURE, detail: `Open ${(L.open_exposure_usdt ?? 0).toFixed(2)} + ${notional.toFixed(2)} vs cap ${LIVE_EXPOSURE} USDT` });
+      liveChecks.push({ name: "live_gas_reserve", passed: this.bnb >= LIVE_GAS_RESERVE, detail: `BNB ${this.bnb.toFixed(4)}, reserve ${LIVE_GAS_RESERVE}` });
+      const failed = liveChecks.filter((c) => !c.passed);
+      if (failed.length) {
+        const why = failed.map((c) => `Blocked (${c.name}): ${c.detail}`).join("; ");
+        out.push(this.log({ symbol: this.symbol, action: "STAY_OUT", strategy, reason: `BUY not executed: ${why}`, signal,
+          risk_verdict: { signal_id: signal.id!, approved: false, reasons: failed.map((c) => c.detail ?? c.name), checks: liveChecks } }));
+        this.alert("INFO", "RISK_BLOCKED", `BUY ${this.symbol} not executed: ${why}`, this.symbol);
+        return finish();
+      }
+    }
     if (notional > this.portfolio.cash) {
       out.push(this.log({ symbol: this.symbol, action: "STAY_OUT", strategy, reason: `Risk blocked: insufficient cash for ${notional.toFixed(0)} USDT`, signal,
         risk_verdict: { signal_id: signal.id!, approved: false, reasons: ["insufficient cash"], checks: [{ name: "cash", passed: false }] } }));
@@ -480,10 +568,10 @@ export class MockApi implements ApiClient {
       return finish();
     }
     const verdict = { signal_id: signal.id!, approved: true, reasons: [], adjusted_size_pct: sizePct, adjusted_notional: notional, requires_confirmation: !!this.control.confirmation_mode,
-      checks: [{ name: "paused", passed: true }, { name: "max_exposure", passed: true }, { name: "cash", passed: true }] };
+      checks: [{ name: "paused", passed: true }, { name: "max_exposure", passed: true }, { name: "cash", passed: true }, ...liveChecks] };
     if (this.control.confirmation_mode) {
       out.push(this.log({ symbol: this.symbol, action: "BUY", strategy, reason: `${reason}. Waiting for your confirmation`, signal, risk_verdict: verdict,
-        execution: { client_order_id: uid(), symbol: this.symbol, side: "BUY", status: "PENDING_CONFIRMATION", path: "SWAP", mode: "SIM", notional, avg_price: px } }));
+        execution: { client_order_id: uid(), symbol: this.symbol, side: "BUY", status: "PENDING_CONFIRMATION", path: LIVE ? pathFor(this.symbol) : "SWAP", mode: MODE, notional, avg_price: px } }));
       return finish();
     }
     const id = uid();

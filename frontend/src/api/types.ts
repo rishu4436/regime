@@ -13,6 +13,58 @@ export type { Alert, AlertLevel, BacktestRequest, LoopState, PerformanceSummary,
 /** GET /api/auto/presets-table (app type). source = "engine:<Class>" or "fallback:<Class>"; preset null = stay out. */
 export interface PresetsTableEntry { regime: Regime; style: TraderStyle; preset: PresetName | null; size_multiplier: number; reason: string }
 export interface PresetsTable { source: string; entries: PresetsTableEntry[] }
+// ---------------------------------------------------------------- LIVE (app types; shapes Rishu posted to Bot 6)
+/** Active LIVE caps + usage. Keys = Bot 3 RiskManager.live_limits() (bot3/live 6aa8882) plus the /api/wallet fields. */
+export interface LiveLimits {
+  live_allowed?: boolean | null;
+  per_order_cap_usdt?: number | null;        // 25
+  daily_loss_cap_usdt?: number | null;       // 25 (hitting it triggers the emergency stop)
+  daily_notional_cap_usdt?: number | null;   // 100 traded per UTC day
+  max_exposure_usdt?: number | null;         // 50 open at once
+  max_slippage_pct?: number | null;          // 1
+  stale_after_s?: number | null;             // 900
+  bnb_gas_reserve?: number | null;           // 0.002 BNB
+  fee_buffer_usdt?: number | null;
+  market_hours_utc?: string | null;
+  daily_used_usdt?: number | null;           // LIVE BUY notional filled today
+  daily_loss_usdt?: number | null;           // today's realized + unrealized loss
+  open_exposure_usdt?: number | null;
+  daily_limit_usdt?: number | null;          // effective daily limit (stricter of agent and wallet)
+  daily_remaining_usdt?: number | null;
+  /** Which side set each effective cap (bot3/live 53907b5): "risk" (agent) or "wallet". */
+  limit_source?: { per_order_cap_usdt?: "risk" | "wallet" | string; daily_limit_usdt?: "risk" | "wallet" | string } | null;
+  allowed_tokens?: string[] | null;
+  /** The wallet's own limits (Agentic Wallet / Binance App), if it exposes them: the stricter one applies. */
+  wallet?: { per_order_cap_usdt?: number | null; daily_limit_usdt?: number | null; allowed_tokens?: string[] | null } | null;
+}
+export interface WalletBalance { asset?: string; symbol?: string; amount?: number; quantity?: number; value_usdt?: number | null; contract_address?: string | null }
+/** GET /api/wallet: the connected wallet (Agentic Wallet `baw`) on BNB Smart Chain. */
+export interface WalletInfo {
+  provider?: string | null;                  // "baw"
+  address?: string | null;
+  chain?: string | null;                     // "BSC"
+  chain_id?: string | number | null;         // 56
+  connected?: boolean | null;
+  balances: WalletBalance[];
+  bnb_gas_reserve?: number | null;
+  limits?: LiveLimits | null;
+  updated_at?: string | null;
+  live_gate?: LiveGate | null;               // accepted here too
+}
+/** The live gate: every switch that must be on before a LIVE BUY, and why trading is blocked right now. */
+export interface LiveGate {
+  live_trading_enabled?: boolean | null;     // env LIVE_TRADING_ENABLED (Bot 6)
+  binance_live_enabled?: boolean | null;     // env BINANCE_LIVE_ENABLED (Bot 4)
+  risk_allow_live?: boolean | null;          // RiskConfig.allow_live (Bot 3)
+  wallet_connected?: boolean | null;         // baw wallet status CONNECTED
+  can_trade: boolean;
+  blocked_reasons: string[];
+}
+/** ExecutionResult as the LIVE backend sends it (extra optional fields until they are in the contract). */
+export interface LiveExecutionFields { tx_hash?: string | null; explorer_url?: string | null; route?: string | null; quote_expires_at?: string | null; real_funds?: boolean | null }
+/** LoopState extras requested for the 24/7 monitor (optional; the UI falls back to what it observes). */
+export interface LoopHeartbeat { started_at?: string | null; last_tick_at?: string | null; next_tick_at?: string | null }
+
 export type ParseResult = { kind: "MANUAL"; strategy: ManualStrategy } | { kind: "AUTO"; config: AutoConfig };
 export type ActivateManualBody = { strategy_id: string } | { strategy: ManualStrategy };
 
@@ -62,6 +114,9 @@ export interface ApiClient {
   getDecisions(limit?: number, symbol?: string): Promise<Decision[]>;
   getDecision(id: string): Promise<Decision>;
   getConfirmations(): Promise<Decision[]>;
+  // live / wallet (null = endpoint not available on this backend yet)
+  getLiveGate(): Promise<LiveGate | null>;
+  getWallet(): Promise<WalletInfo | null>;
   approve(decisionId: string): Promise<Decision>;
   reject(decisionId: string, reason?: string): Promise<Decision>;
   /** Manual override: close ONE lot by Position.id at the last price (signal.exit_reason MANUAL). 404 if not open. */

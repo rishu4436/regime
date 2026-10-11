@@ -10,6 +10,8 @@ import { Controls } from "./Controls";
 import { AlertsPanel, AskAgent } from "./Insights";
 import { ApiError, type PerformanceSummary } from "../api/types";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { ActivityFeed, AutonomyMonitor, CapsPanel, LiveGateCard, TxLink, WalletPanel } from "../components/Live";
+import { useLive } from "../lib/live";
 
 interface Props { status: StatusSnapshot | null; refresh: () => void; tick: number; alertsVersion: number; go: (tab: "manual" | "auto") => void }
 
@@ -40,7 +42,11 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
   const [pendingList, setPendingList] = useState<Decision[] | null>(null);
   const [gone, setGone] = useState<Set<string>>(() => new Set());
   useEffect(() => { api.getConfirmations().then(setPendingList).catch(() => setPendingList(null)); }, [status, tick]);
-  const pending = (pendingList ?? decisions.filter((d) => d.execution?.status === "PENDING_CONFIRMATION")).filter((d) => !gone.has(d.id!));
+  // approval cards only exist when confirmation mode is deliberately on (the agent is autonomous otherwise)
+  const pending = status?.control.confirmation_mode ? (pendingList ?? decisions.filter((d) => d.execution?.status === "PENDING_CONFIRMATION")).filter((d) => !gone.has(d.id!)) : [];
+  const { isLive } = useLive();
+  const [feed, setFeed] = useState<Decision[]>([]);
+  useEffect(() => { api.getDecisions(60).then(setFeed).catch(() => {}); }, [status, tick]);
   const shown = filter === "ALL" ? decisions : decisions.filter((d) => d.action !== "STAY_OUT");
   const last = status?.last_decision;
   const lastPx = candles?.[candles.length - 1]?.close, firstPx = candles?.[0]?.close;
@@ -71,7 +77,8 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
 
   return (
     <>
-      {status?.control.emergency_stopped && (
+      <AutonomyMonitor status={status} refresh={refresh} />
+      {status?.control.emergency_stopped && !isLive && (
         <div className="banner red" role="alert">
           <span style={{ fontSize: "1.4rem" }}>■</span>
           <span className="grow">
@@ -86,7 +93,7 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
         <div className="banner blue">
           <span className="grow">No strategy is running. Build rules in <b>Manual Builder</b> or let the agent choose in <b>Auto Mode</b>.</span>
           <button className="btn ghost" onClick={() => go("manual")}>Open builder</button>
-          <button className="btn" onClick={() => api.activateAuto({ symbol: "NVDAon", style: "BALANCED", capital: 10000, activation: "CONFIRMATION" }).then(ensureLoop).then(() => { toast("Auto mode started (Balanced, NVDAon)", "success"); refresh(); }).catch((e) => toast(e instanceof Error ? e.message : String(e), "error"))}>⚡ Quick start Auto</button>
+          <button className="btn" onClick={() => isLive ? go("auto") : api.activateAuto({ symbol: "NVDAon", style: "BALANCED", capital: 10000, activation: "CONFIRMATION" }).then(ensureLoop).then(() => { toast("Auto mode started (Balanced, NVDAon)", "success"); refresh(); }).catch((e) => toast(e instanceof Error ? e.message : String(e), "error"))}>⚡ Quick start Auto</button>
         </div>
       )}
 
@@ -166,6 +173,7 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
               </div>
             )}
           </Card>
+          {isLive && <><CapsPanel status={status} decisions={feed} /><WalletPanel /><LiveGateCard /></>}
           <Controls status={status} onChange={refresh} tick={tick} />
           <AskAgent tick={tick} />
           <AlertsPanel version={alertsVersion} />
@@ -173,7 +181,7 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
       </div>
 
       <div style={{ height: 16 }} />
-      <Card title={<>Decision log <span className="muted small" style={{ fontWeight: 400 }}>{shown.length}</span></>}
+      {isLive ? <ActivityFeed decisions={feed} /> : <Card title={<>Decision log <span className="muted small" style={{ fontWeight: 400 }}>{shown.length}</span></>}
         extra={<Segmented size="sm" value={filter} onChange={setFilter} options={[{ value: "ALL", label: "All" }, { value: "TRADES", label: "Trades only" }]} />} pad={false}>
         <div className="table-wrap" style={{ padding: "4px 8px 8px" }}>
           <table>
@@ -183,7 +191,7 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
                 <tr key={d.id}>
                   <td className="small muted">{time(d.timestamp)}</td><td><ActionBadge action={d.action} /></td><td>{d.symbol}</td>
                   <td><RegimeBadge regime={d.regime} /></td><td className="small trunc" title={d.strategy}>{strategyLabel(d.strategy)}</td>
-                  <td className="small">{d.execution ? humanize(d.execution.status) : "—"}</td>
+                  <td className="small">{d.execution ? humanize(d.execution.status) : "—"} <TxLink exec={d.execution} /></td>
                   <td className="wrap small">{d.signal?.exit_reason && <><ExitPill d={d} />{" "}</>}{d.reason}</td>
                 </tr>
               ))}
@@ -191,7 +199,7 @@ export function Dashboard({ status, refresh, tick, alertsVersion, go }: Props) {
           </table>
           {!shown.length && <div className="empty">Nothing logged yet</div>}
         </div>
-      </Card>
+      </Card>}
       {closeTarget && (
         <ConfirmDialog title={closeTarget.kind === "lot" ? `Close ${closeTarget.symbol} lot ${closeTarget.id.slice(0, 6)}?` : `Close all ${closeTarget.symbol}?`}
           confirmLabel={closeTarget.kind === "lot" ? "Close lot" : `Close all ${closeTarget.symbol}`} danger busy={busy === "close"} onCancel={() => setCloseTarget(null)}
@@ -233,7 +241,7 @@ function DecisionDetail({ d }: { d: Decision }) {
         <span className="k">Reason</span><span>{d.reason}</span>
         {d.signal?.exit_reason && <><span className="k">Exit</span><span><ExitPill d={d} />{d.signal.position_id && <span className="faint small"> · lot {d.signal.position_id.slice(0, 6)}</span>}</span></>}
         {v && <><span className="k">Risk check</span><span>{v.approved ? <span className="pill ok">approved</span> : <span className="pill bad">blocked</span>} <span className="small muted">{v.reasons?.join("; ")}{v.adjusted_notional ? ` ${usd(v.adjusted_notional)}` : ""}</span></span></>}
-        {d.execution && <><span className="k">Execution</span><span className="small">{humanize(d.execution.status)} {d.execution.avg_price ? `@ ${usd(d.execution.avg_price)}` : ""} {d.execution.error ?? ""}</span></>}
+        {d.execution && <><span className="k">Execution</span><span className="small">{humanize(d.execution.status)} {d.execution.avg_price ? `@ ${usd(d.execution.avg_price)}` : ""} {d.execution.error ?? ""} <TxLink exec={d.execution} /></span></>}
       </div>
       {(d.signal?.conditions_met?.length || d.signal?.conditions_failed?.length) ? (
         <div className="chips">
