@@ -88,8 +88,8 @@ def test_summary_with_performance_and_alerts(status, perf, alerts):
     assert "Performance: equity $10,452.50 (+4.53% vs start $10,000.00)" in s
     assert "max drawdown 3.21%" in s and "win rate 62.5% over 8 closed trade(s) (5 won, 3 lost)" in s
     assert "2 loss(es) in a row" in s
-    assert "Recent alerts (+1 more): [CRITICAL] daily loss limit: daily loss limit reached; trading paused;" in s
-    assert s.index("[CRITICAL] daily loss limit") < s.index("losses in a row:") < s.index("quote expired (TSLAx)")
+    assert "Recent alerts (+1 more): Critical: daily loss limit: daily loss limit reached; trading paused;" in s
+    assert s.index("Critical: daily loss limit") < s.index("losses in a row:") < s.index("quote expired (TSLAx)")
     assert "old info" not in s  # only the 3 most recent
 
 
