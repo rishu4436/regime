@@ -32,6 +32,8 @@ History is separate: in SIM the full seeded series per symbol/timeframe is built
 | GET | `/api/auto/selection?symbol=&style=BALANCED&timeframe=1h` | – | `StrategySelection` (preview of map(regime, style)) |
 | GET | `/api/auto/presets-table` | – | `PresetsTable` *(app)*: `{source, entries: [{regime, style, preset \| null, size_multiplier, reason}]}` — all 6 × 3 combinations with every preset enabled, from the wired engine's `select_strategy`. `source` = `"engine:<Class>"` (Bot 2's engine) or `"fallback:<Class>"` (app stand-in until the engine lands). `preset: null` = stay out / pause |
 
+Candles, `/api/regime` and `/api/backtest`: an exchange error while loading candles (PAPER/LIVE, e.g. Binance rejecting a large `limit`) is **502** `{"detail": "Couldn't load NVDAB 1h candles from the exchange (<error>). Try again, or ask for fewer bars."}`, never an uncaught 500; an unknown symbol stays 404. `/api/performance` in PAPER/LIVE measures the equity curve, return and drawdown from the same `starting_capital` as `/api/portfolio` (restored state or wallet USDT).
+
 ## Manual strategies (Manual Builder)
 | Method | Path | Body | Response |
 |---|---|---|---|

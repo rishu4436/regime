@@ -119,6 +119,18 @@ def create_app(settings: Optional[Settings] = None, components: Optional[Compone
         except KeyError as e:
             raise HTTPException(404, f"not found: {e.args[0] if e.args else ''}")
 
+    def candles_guard(fn, symbol: str, timeframe: Timeframe, *a):
+        """Candle reads from the exchange (PAPER/LIVE): an exchange error (e.g. Binance rejecting a large `limit`,
+        Web3ApiError) is a plain 502 JSON message, never an uncaught 500. Unknown symbol stays 404."""
+        try:
+            return guard(fn, symbol, timeframe, *a)
+        except HTTPException:
+            raise
+        except Exception as e:  # noqa: BLE001 - any exchange/client failure
+            log.warning("candles %s %s failed: %s: %s", symbol, getattr(timeframe, "value", timeframe), type(e).__name__, e)
+            raise HTTPException(502, f"Couldn't load {symbol} {getattr(timeframe, 'value', timeframe)} candles from the "
+                                     f"exchange ({type(e).__name__}: {str(e)[:200]}). Try again, or ask for fewer bars.")
+
     # ---------------------------------------------------------------- system
     @app.get("/health")
     def health() -> dict:
@@ -191,8 +203,8 @@ def create_app(settings: Optional[Settings] = None, components: Optional[Compone
         (SIM: the cached seeded series, same bars /api/backtest uses; PAPER/LIVE: the exchange's candles), last
         `limit` if given."""
         if history:
-            return guard(L.history_candles, symbol, timeframe, limit)
-        return guard(L.view_candles, symbol, timeframe, 200 if limit is None else limit)
+            return candles_guard(L.history_candles, symbol, timeframe, limit)
+        return candles_guard(L.view_candles, symbol, timeframe, 200 if limit is None else limit)
 
     @app.get("/api/price/{symbol}")
     def price(symbol: str) -> dict:
@@ -200,7 +212,7 @@ def create_app(settings: Optional[Settings] = None, components: Optional[Compone
 
     @app.get("/api/regime/{symbol}", response_model=RegimeAnalysis)
     def regime(symbol: str, timeframe: Timeframe = Timeframe.H1) -> RegimeAnalysis:
-        return comps.engine.detect_regime(guard(L.view_candles, symbol, timeframe, settings.window_bars))
+        return comps.engine.detect_regime(candles_guard(L.view_candles, symbol, timeframe, settings.window_bars))
 
     @app.get("/api/auto/selection", response_model=StrategySelection)
     def selection(symbol: str, style: TraderStyle = TraderStyle.BALANCED, timeframe: Timeframe = Timeframe.H1) -> StrategySelection:
@@ -241,7 +253,7 @@ def create_app(settings: Optional[Settings] = None, components: Optional[Compone
 
     @app.post("/api/backtest", response_model=BacktestResult)
     def backtest(req: BacktestRequest) -> BacktestResult:
-        c = guard(L.history_candles, req.strategy.symbol, req.strategy.timeframe, req.limit)  # never replay-pinned
+        c = candles_guard(L.history_candles, req.strategy.symbol, req.strategy.timeframe, req.limit)  # never replay-pinned
         return (comps.backtest_engine or comps.engine).backtest_manual(req.strategy, c, req.initial_capital)
 
     # ---------------------------------------------------------------- agent & loop
